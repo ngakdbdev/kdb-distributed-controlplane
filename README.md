@@ -6,6 +6,15 @@ symbol-range shards). Built as a two-week demo to show prospective clients a wor
 observable, sharded tick architecture - **not** a production multi-tenant platform. See the plan
 document (`kdb-control-plane-mvp-plan.md`, shared alongside this project) for full scope notes.
 
+## Licensing note - the kdb+/KDB-X engine is never bundled here
+
+The `q` binary and license file are proprietary (even the free KDB-X Community Edition requires
+its own license terms and is not redistributable). This repo never contains them - `.gitignore`
+excludes `data-plane/docker/kdbx/q` and `k4.lic` on purpose. Download KDB-X yourself from the KX
+Developer Center and place both files at `data-plane/docker/kdbx/` before building the data-plane
+images. `reference/` contains KX's own public *scripts* (not the engine) as read-only reference
+material - see `reference/README.md` for exactly what that is and isn't.
+
 ## What's real vs. simulated
 
 - **Real**: the q/kdb+ tick architecture, the control API, the watchdog's self-healing runbooks, the
@@ -23,6 +32,7 @@ control-api/          FastAPI control plane: auth, topology, metrics, connectors
 watchdog/              Self-healing service - deterministic runbooks, independent of the control API
 web-ui/                React dashboard (Vite + recharts)
 deploy/gcp/            GCP provisioning, networking, docker install, deploy, and teardown scripts
+reference/              KX's own public tick.q reference (submodule, read-only, not a build dependency - see reference/README.md)
 docker-compose.yml     Ties the whole stack together
 .env.example           Copy to .env and fill in before deploying anywhere but your laptop
 ```

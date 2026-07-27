@@ -1,0 +1,3 @@
+[submodule "reference/kx-official-kdb-tick"]
+	path = reference/kx-official-kdb-tick
+	url = https://github.com/KxSystems/kdb-tick.git
