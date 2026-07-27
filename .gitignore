@@ -1,0 +1,10 @@
+node_modules/
+dist/
+__pycache__/
+*.pyc
+*.db
+.env
+control-api/control_plane*.db
+data-plane/docker/kdbx/q
+data-plane/docker/kdbx/k4.lic
+*.log

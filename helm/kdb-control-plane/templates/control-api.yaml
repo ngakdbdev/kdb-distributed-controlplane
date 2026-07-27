@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-api
+  namespace: {{ .Values.global.namespace }}
+  labels: { app: control-api }
+spec:
+  replicas: {{ .Values.controlApi.replicas }}
+  selector:
+    matchLabels: { app: control-api }
+  template:
+    metadata:
+      labels: { app: control-api }
+    spec:
+      serviceAccountName: control-api
+      containers:
+        - name: control-api
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.controlApi.image }}:{{ .Values.global.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.controlApi.port }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.existingSecret | default "kdb-control-plane-secrets" }}
+          env:
+            - name: ORCHESTRATOR_BACKEND
+              value: kubernetes
+            - name: KUBE_NAMESPACE
+              value: {{ .Values.global.namespace }}
+            - name: DATABASE_URL
+              value: {{ .Values.database.url | quote }}
+            - name: GATEWAY_HOST
+              value: gateway
+            - name: GATEWAY_PORT
+              value: "5050"
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { memory: "512Mi" }
+          readinessProbe:
+            httpGet: { path: /health, port: {{ .Values.controlApi.port }} }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: {{ .Values.controlApi.port }} }
+            initialDelaySeconds: 15
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: control-api-data }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: control-api-data
+  namespace: {{ .Values.global.namespace }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.global.storageClassName }}
+  storageClassName: {{ .Values.global.storageClassName }}
+  {{- end }}
+  resources:
+    requests: { storage: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: control-api
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector: { app: control-api }
+  ports:
+    - port: {{ .Values.controlApi.port }}
+      targetPort: {{ .Values.controlApi.port }}

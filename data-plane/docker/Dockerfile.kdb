@@ -1,0 +1,32 @@
+# Dockerfile.kdb - runs any q process in the tick chain (tp/wdb/rdb/idb/gateway)
+# KDB-X Community Edition binaries are NOT bundled here - Anthropic's sandbox
+# and generic base images cannot reach kx.com to download them, and KX's
+# license terms require you to fetch the binary from KX directly.
+#
+# Before building this image:
+#   1. Sign up and download KDB-X Community Edition (free, no expiry) from
+#      https://kx.com/products/kdb-x/ or the KX Developer Center
+#   2. Place the linux binary + license (k4.lic) at data-plane/docker/kdbx/
+#      so the COPY below can find them
+#
+# See deploy/gcp/README.md for the exact steps.
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates rlwrap procps && \
+    rm -rf /var/lib/apt/lists/*
+
+# KDB-X / kdb+ binary and license - fetched by you per the note above
+COPY docker/kdbx/q /usr/local/kdbx/q
+COPY docker/kdbx/k4.lic /usr/local/kdbx/k4.lic
+ENV QHOME=/usr/local/kdbx
+ENV QLIC=/usr/local/kdbx/k4.lic
+ENV PATH="/usr/local/kdbx:${PATH}"
+
+WORKDIR /app
+COPY q/ /app/
+
+# each service overrides CMD with its own script + flags via docker-compose
+ENTRYPOINT ["q"]
+CMD ["tick.q"]

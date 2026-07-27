@@ -1,0 +1,35 @@
+{{- range $name := list "db-a-m" "db-n-z" }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.global.namespace }}
+  labels: { app: {{ $name }} }
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if $.Values.global.storageClassName }}
+  storageClassName: {{ $.Values.global.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $.Values.dataPlane.dbVolumeSize }}
+{{- end }}
+
+{{- range $name := list "tp-log-a-m" "tp-log-n-z" }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.global.namespace }}
+  labels: { app: {{ $name }} }
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if $.Values.global.storageClassName }}
+  storageClassName: {{ $.Values.global.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $.Values.dataPlane.tpLogVolumeSize }}
+{{- end }}

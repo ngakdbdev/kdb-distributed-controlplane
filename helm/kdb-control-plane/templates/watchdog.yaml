@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: watchdog
+  namespace: {{ .Values.global.namespace }}
+  labels: { app: watchdog }
+spec:
+  replicas: {{ .Values.watchdog.replicas }}
+  selector:
+    matchLabels: { app: watchdog }
+  template:
+    metadata:
+      labels: { app: watchdog }
+    spec:
+      serviceAccountName: watchdog
+      containers:
+        - name: watchdog
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.watchdog.image }}:{{ .Values.global.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - name: ORCHESTRATOR_BACKEND
+              value: kubernetes
+            - name: KUBE_NAMESPACE
+              value: {{ .Values.global.namespace }}
+            - name: CONTROL_API_URL
+              value: "http://control-api:{{ .Values.controlApi.port }}"
+            - name: WATCHDOG_POLL_SEC
+              value: "{{ .Values.watchdog.pollSeconds }}"
+            - name: WATCHDOG_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default "kdb-control-plane-secrets" }}
+                  key: WATCHDOG_SHARED_SECRET
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits: { memory: "256Mi" }

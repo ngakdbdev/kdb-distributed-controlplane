@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-ui
+  namespace: {{ .Values.global.namespace }}
+  labels: { app: web-ui }
+spec:
+  replicas: {{ .Values.webUi.replicas }}
+  selector:
+    matchLabels: { app: web-ui }
+  template:
+    metadata:
+      labels: { app: web-ui }
+    spec:
+      containers:
+        - name: web-ui
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.webUi.image }}:{{ .Values.global.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.webUi.port }}
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits: { memory: "128Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-ui
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector: { app: web-ui }
+  ports:
+    - port: 80
+      targetPort: {{ .Values.webUi.port }}

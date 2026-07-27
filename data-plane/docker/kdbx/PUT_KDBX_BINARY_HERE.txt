@@ -1,0 +1,7 @@
+Place your KDB-X Community Edition Linux binary here, named `q`, plus your
+license file named `k4.lic`.
+
+Download from the KX Developer Center (free, no expiry, commercial use
+allowed): https://kx.com/products/kdb-x/
+
+This directory is git-ignored on purpose - never commit a license file.

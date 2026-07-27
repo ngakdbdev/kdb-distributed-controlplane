@@ -1,0 +1,135 @@
+# Default values for the kdb-control-plane chart. Override per-environment
+# with -f values-<env>.yaml or --set, e.g.:
+#   helm install demo . -f values-aws.yaml --set secrets.jwtSecret=$(openssl rand -hex 32)
+
+global:
+  namespace: kdb-control-plane
+  imageRegistry: ""            # e.g. "123456789.dkr.ecr.us-east-1.amazonaws.com/" - trailing slash, blank for local/dev
+  imageTag: "0.1.0"
+  imagePullPolicy: IfNotPresent
+  storageClassName: ""         # blank = cluster default ("gp3" on EKS, "managed-csi" on AKS, "standard-rwo" on GKE, "local-path" on k3s)
+
+# ---------------------------------------------------------------- secrets
+# NEVER commit real values here. Override at install time:
+#   --set secrets.jwtSecret=... --set secrets.watchdogSharedSecret=... --set secrets.adminPasswordHash=...
+# or point secrets.existingSecret at a Secret you created out-of-band (recommended
+# for anything beyond a local demo - see templates/secrets.yaml).
+secrets:
+  existingSecret: ""           # if set, the values below are ignored and this Secret name is used directly
+  adminUser: admin
+  adminPasswordHash: ""        # bcrypt hash - blank falls back to the chart's dev default (password: changeme)
+  jwtSecret: "dev-secret-change-in-deploy"
+  watchdogSharedSecret: "dev-watchdog-secret-change-in-deploy"
+
+# ------------------------------------------------------------- kdb-x license
+# KDB-X binary + license are NOT bundled in the image for licensing reasons -
+# mount them from a Secret you create yourself:
+#   kubectl create secret generic kdbx-license -n kdb-control-plane \
+#     --from-file=q=./q --from-file=k4.lic=./k4.lic
+# --------------------------------------------------------------- database
+# See control-api/README-database.md for dialect-specific connection string
+# formats (postgres/mysql/mssql) and driver notes. SQLite (the default) is
+# fine for a demo install and nothing else - point this at a real managed
+# database (RDS/Cloud SQL/Azure Database/Azure SQL, or the bank's own
+# on-prem instance) for anything customer-facing.
+database:
+  url: "sqlite:///./data/control_plane.db"
+
+kdbx:
+  licenseSecretName: kdbx-license
+
+# --------------------------------------------------------- data-plane sizing
+dataPlane:
+  flushMinutes: 2
+  idbPollSeconds: 15
+  dbVolumeSize: 20Gi
+  tpLogVolumeSize: 5Gi
+
+feeds:
+  bpipeRateHz: 20
+  crimsRateHz: 2
+  # feed sims start disabled - the control API's Connectors screen scales
+  # their Deployment to 1 replica when a customer enables them
+  startEnabled: false
+
+controlApi:
+  image: kdb-control-plane/control-api
+  replicas: 1
+  port: 8000
+
+watchdog:
+  image: kdb-control-plane/watchdog
+  replicas: 1
+  pollSeconds: 5
+
+webUi:
+  image: kdb-control-plane/web-ui
+  replicas: 1
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""                # "alb" on EKS, "azure-application-gateway" on AKS, "gce" on GKE, "nginx" on-prem
+  host: ""                      # e.g. demo.yourcompany.com
+  tls: false
+
+# --------------------------------------------------------- the tick chain
+# One entry per q process. `role` selects the command template in
+# templates/_helpers.tpl. `volumes` are logical names resolved to actual
+# PVCs in templates/kdb-services.yaml - "db-a-m" and "db-n-z" are shared
+# between a shard's wdb and idb so flushed data is visible to both.
+kdbServices:
+  - name: tp-a-m
+    role: tickerplant
+    shard: A_M
+    port: 5010
+    volumes: { tpLog: tp-log-a-m }
+  - name: wdb-a-m
+    role: wdb
+    shard: A_M
+    port: 5041
+    tpHost: tp-a-m
+    tpPort: 5010
+    volumes: { db: db-a-m }
+  - name: rdb-a-m
+    role: rdb
+    shard: A_M
+    port: 5021
+    tpHost: tp-a-m
+    tpPort: 5010
+    volumes: {}
+  - name: idb-a-m
+    role: idb
+    shard: A_M
+    port: 5031
+    volumes: { db: db-a-m }
+
+  - name: tp-n-z
+    role: tickerplant
+    shard: N_Z
+    port: 5010
+    volumes: { tpLog: tp-log-n-z }
+  - name: wdb-n-z
+    role: wdb
+    shard: N_Z
+    port: 5042
+    tpHost: tp-n-z
+    tpPort: 5010
+    volumes: { db: db-n-z }
+  - name: rdb-n-z
+    role: rdb
+    shard: N_Z
+    port: 5022
+    tpHost: tp-n-z
+    tpPort: 5010
+    volumes: {}
+  - name: idb-n-z
+    role: idb
+    shard: N_Z
+    port: 5032
+    volumes: { db: db-n-z }
+
+  - name: gateway
+    role: gateway
+    port: 5050
+    volumes: {}

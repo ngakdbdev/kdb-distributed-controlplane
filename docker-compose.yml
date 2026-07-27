@@ -1,0 +1,168 @@
+name: kdb-control-plane
+
+x-kdb-build: &kdb-build
+  context: ./data-plane
+  dockerfile: docker/Dockerfile.kdb
+
+x-feed-build: &feed-build
+  context: ./data-plane
+  dockerfile: docker/Dockerfile.feed
+
+services:
+  # ---------------------------------------------------------------- shard A-M
+  tp-a-m:
+    build: *kdb-build
+    command: ["tick.q", "A_M", "-p", "5010"]
+    restart: unless-stopped
+    volumes:
+      - tp-log-a-m:/app/log
+
+  wdb-a-m:
+    build: *kdb-build
+    command: ["wdb.q", "-shard", "A_M", "-tphost", "tp-a-m", "-tpport", "5010",
+              "-flushmin", "2", "-dbdir", "/data/db", "-p", "5041"]
+    restart: unless-stopped
+    depends_on: [tp-a-m]
+    volumes:
+      - db-a-m:/data/db
+
+  rdb-a-m:
+    build: *kdb-build
+    command: ["rdb.q", "-shard", "A_M", "-tphost", "tp-a-m", "-tpport", "5010", "-p", "5021"]
+    restart: unless-stopped
+    depends_on: [tp-a-m]
+
+  idb-a-m:
+    build: *kdb-build
+    command: ["idb.q", "-shard", "A_M", "-dbdir", "/data/db", "-pollsec", "15", "-p", "5031"]
+    restart: unless-stopped
+    depends_on: [wdb-a-m]
+    volumes:
+      - db-a-m:/data/db
+
+  # ---------------------------------------------------------------- shard N-Z
+  tp-n-z:
+    build: *kdb-build
+    command: ["tick.q", "N_Z", "-p", "5010"]
+    restart: unless-stopped
+    volumes:
+      - tp-log-n-z:/app/log
+
+  wdb-n-z:
+    build: *kdb-build
+    command: ["wdb.q", "-shard", "N_Z", "-tphost", "tp-n-z", "-tpport", "5010",
+              "-flushmin", "2", "-dbdir", "/data/db", "-p", "5042"]
+    restart: unless-stopped
+    depends_on: [tp-n-z]
+    volumes:
+      - db-n-z:/data/db
+
+  rdb-n-z:
+    build: *kdb-build
+    command: ["rdb.q", "-shard", "N_Z", "-tphost", "tp-n-z", "-tpport", "5010", "-p", "5022"]
+    restart: unless-stopped
+    depends_on: [tp-n-z]
+
+  idb-n-z:
+    build: *kdb-build
+    command: ["idb.q", "-shard", "N_Z", "-dbdir", "/data/db", "-pollsec", "15", "-p", "5032"]
+    restart: unless-stopped
+    depends_on: [wdb-n-z]
+    volumes:
+      - db-n-z:/data/db
+
+  # -------------------------------------------------------------------- gateway
+  gateway:
+    build: *kdb-build
+    command: ["gateway.q", "-p", "5050"]
+    restart: unless-stopped
+    depends_on: [rdb-a-m, rdb-n-z, idb-a-m, idb-n-z, wdb-a-m, wdb-n-z]
+
+  # ---------------------------------------------------------------- feed sims
+  bpipe-sim:
+    build: *feed-build
+    command: ["bpipe_sim.py"]
+    environment:
+      TP_A_M_HOST: tp-a-m
+      TP_A_M_PORT: "5010"
+      TP_N_Z_HOST: tp-n-z
+      TP_N_Z_PORT: "5010"
+      BPIPE_RATE_HZ: "${BPIPE_RATE_HZ:-20}"
+    depends_on: [tp-a-m, tp-n-z]
+    # NOT restart:always on purpose - this is toggled on/off by the control
+    # API via the Connectors screen, which starts/stops the container directly
+
+  crims-sim:
+    build: *feed-build
+    command: ["crims_sim.py"]
+    environment:
+      TP_A_M_HOST: tp-a-m
+      TP_A_M_PORT: "5010"
+      TP_N_Z_HOST: tp-n-z
+      TP_N_Z_PORT: "5010"
+      CRIMS_RATE_HZ: "${CRIMS_RATE_HZ:-2}"
+    depends_on: [tp-a-m, tp-n-z]
+
+  # ------------------------------------------------------------------ control
+  # Optional local Postgres for testing the real-database path (see
+  # control-api/README-database.md). Not started by default - opt in with:
+  #   docker compose --profile postgres up -d postgres
+  # then set DATABASE_URL in .env to:
+  #   postgresql+psycopg2://postgres:postgres@postgres:5432/kdb_control_plane
+  postgres:
+    image: postgres:16
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: kdb_control_plane
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  control-api:
+    build: ./control-api
+    restart: unless-stopped
+    environment:
+      ADMIN_USER: "${ADMIN_USER:-admin}"
+      ADMIN_PASSWORD_HASH: "${ADMIN_PASSWORD_HASH:-}"
+      JWT_SECRET: "${JWT_SECRET:-dev-secret-change-in-deploy}"
+      WATCHDOG_SHARED_SECRET: "${WATCHDOG_SHARED_SECRET:-dev-watchdog-secret-change-in-deploy}"
+      DATABASE_URL: "${DATABASE_URL:-sqlite:///./data/control_plane.db}"
+      COMPOSE_PROJECT_NAME: "kdb-control-plane"
+      GATEWAY_HOST: gateway
+      GATEWAY_PORT: "5050"
+    volumes:
+      - control-api-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8000:8000"
+    depends_on: [gateway]
+
+  watchdog:
+    build: ./watchdog
+    restart: unless-stopped
+    environment:
+      COMPOSE_PROJECT_NAME: "kdb-control-plane"
+      CONTROL_API_URL: "http://control-api:8000"
+      WATCHDOG_SHARED_SECRET: "${WATCHDOG_SHARED_SECRET:-dev-watchdog-secret-change-in-deploy}"
+      WATCHDOG_POLL_SEC: "5"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on: [control-api]
+
+  web-ui:
+    build: ./web-ui
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on: [control-api]
+
+volumes:
+  tp-log-a-m:
+  tp-log-n-z:
+  db-a-m:
+  db-n-z:
+  control-api-data:
+  postgres-data:

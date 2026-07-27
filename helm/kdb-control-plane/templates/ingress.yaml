@@ -1,0 +1,32 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kdb-control-plane
+  namespace: {{ .Values.global.namespace }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: control-api
+                port: { number: {{ .Values.controlApi.port }} }
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web-ui
+                port: { number: 80 }
+  {{- if .Values.ingress.tls }}
+  tls:
+    - hosts: [{{ .Values.ingress.host | quote }}]
+      secretName: kdb-control-plane-tls
+  {{- end }}
+{{- end }}

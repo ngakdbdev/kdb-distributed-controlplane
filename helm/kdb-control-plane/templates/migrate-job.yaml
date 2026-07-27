@@ -1,0 +1,29 @@
+# Runs `alembic upgrade head` as a pre-install/pre-upgrade hook, so schema
+# migrations always apply before the control API's new pods start serving
+# traffic - never rely on the app itself to silently create/alter tables in
+# a real deployment.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: control-api-migrate
+  namespace: {{ .Values.global.namespace }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.controlApi.image }}:{{ .Values.global.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.existingSecret | default "kdb-control-plane-secrets" }}
+          env:
+            - name: DATABASE_URL
+              value: {{ .Values.database.url | quote }}

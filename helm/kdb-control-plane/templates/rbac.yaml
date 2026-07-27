@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: control-api
+  namespace: {{ .Values.global.namespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: watchdog
+  namespace: {{ .Values.global.namespace }}
+---
+# scoped to exactly what the orchestrator backends need: read/patch/scale
+# Deployments and read Pod logs, all within this one namespace - never
+# cluster-wide, and never Secrets/ConfigMaps beyond what's already mounted.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kdb-control-plane-operator
+  namespace: {{ .Values.global.namespace }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: control-api-operator
+  namespace: {{ .Values.global.namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: control-api
+    namespace: {{ .Values.global.namespace }}
+roleRef:
+  kind: Role
+  name: kdb-control-plane-operator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: watchdog-operator
+  namespace: {{ .Values.global.namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: watchdog
+    namespace: {{ .Values.global.namespace }}
+roleRef:
+  kind: Role
+  name: kdb-control-plane-operator
+  apiGroup: rbac.authorization.k8s.io

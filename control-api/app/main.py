@@ -1,0 +1,44 @@
+import logging
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from .db import init_db
+from .routers import audit, auth, connectors, fleet, metrics, subscribers, tenants, topology
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+app = FastAPI(
+    title="kdb+ tick control plane API",
+    version="0.2.0",
+    description="Multi-tenant SaaS control plane. Each tenant's data plane runs in their own "
+                 "AWS/Azure/GCP/on-prem environment via an agent that pulls commands from here - "
+                 "see /fleet for the agent protocol and /tenants for tenant management.",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # tighten before anything beyond a local demo
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth.router)
+app.include_router(tenants.router)
+app.include_router(fleet.router)
+app.include_router(topology.router)
+app.include_router(metrics.router)
+app.include_router(connectors.router)
+app.include_router(subscribers.router)
+app.include_router(audit.router)
+
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
+
+@app.get("/health")
+def health():
+    return {"status": "up"}

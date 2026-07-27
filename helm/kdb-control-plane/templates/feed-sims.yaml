@@ -1,0 +1,41 @@
+{{- range $name, $cmd := (dict "bpipe-sim" "bpipe_sim.py" "crims-sim" "crims_sim.py") }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Values.global.namespace }}
+  labels: { app: {{ $name }} }
+spec:
+  # start at 0 or 1 replicas per values.feeds.startEnabled - the control
+  # API's Connectors screen scales this Deployment directly thereafter, so
+  # this initial value only matters on first install
+  replicas: {{ if $.Values.feeds.startEnabled }}1{{ else }}0{{ end }}
+  selector:
+    matchLabels: { app: {{ $name }} }
+  template:
+    metadata:
+      labels: { app: {{ $name }} }
+    spec:
+      containers:
+        - name: {{ $name }}
+          image: "{{ $.Values.global.imageRegistry }}kdb-control-plane/feed-sim:{{ $.Values.global.imageTag }}"
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          command: ["python3", "{{ $cmd }}"]
+          env:
+            - name: TP_A_M_HOST
+              value: tp-a-m
+            - name: TP_A_M_PORT
+              value: "5010"
+            - name: TP_N_Z_HOST
+              value: tp-n-z
+            - name: TP_N_Z_PORT
+              value: "5010"
+            - name: BPIPE_RATE_HZ
+              value: "{{ $.Values.feeds.bpipeRateHz }}"
+            - name: CRIMS_RATE_HZ
+              value: "{{ $.Values.feeds.crimsRateHz }}"
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits: { memory: "256Mi" }
+{{- end }}

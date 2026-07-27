@@ -1,0 +1,22 @@
+kdb+ tick control plane deployed to namespace "{{ .Values.global.namespace }}".
+
+Check status:
+  kubectl get pods -n {{ .Values.global.namespace }}
+
+{{- if .Values.ingress.enabled }}
+Web UI: http://{{ .Values.ingress.host }}/
+{{- else }}
+No ingress configured. Port-forward to reach the UI locally:
+  kubectl port-forward -n {{ .Values.global.namespace }} svc/web-ui 8080:80
+  kubectl port-forward -n {{ .Values.global.namespace }} svc/control-api 8000:8000
+{{- end }}
+
+If this is a first install, remember to:
+  1. Create the KDB-X license secret (required - pods will crash-loop without it):
+       kubectl create secret generic {{ .Values.kdbx.licenseSecretName }} -n {{ .Values.global.namespace }} \
+         --from-file=q=./q --from-file=k4.lic=./k4.lic
+  2. Set real secrets instead of the chart's dev defaults:
+       helm upgrade kdb-control-plane . -n {{ .Values.global.namespace }} \
+         --set secrets.jwtSecret=$(openssl rand -hex 32) \
+         --set secrets.watchdogSharedSecret=$(openssl rand -hex 32) \
+         --set secrets.adminPasswordHash='<bcrypt hash>'

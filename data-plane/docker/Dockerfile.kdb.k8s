@@ -1,0 +1,22 @@
+# Dockerfile.kdb.k8s - used by the Helm chart. Unlike Dockerfile.kdb (used by
+# docker-compose for local dev), this does NOT bake the KDB-X binary/license
+# into the image - the Helm chart mounts both from a Kubernetes Secret at
+# runtime instead (see helm/kdb-control-plane/templates/kdb-services.yaml).
+# This means the image itself is safe to push to a registry - it contains no
+# licensed binary and no license key.
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates rlwrap procps && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /usr/local/kdbx
+
+ENV QHOME=/usr/local/kdbx
+ENV QLIC=/usr/local/kdbx/k4.lic
+ENV PATH="/usr/local/kdbx:${PATH}"
+
+WORKDIR /app
+COPY q/ /app/
+
+ENTRYPOINT ["q"]
+CMD ["tick.q"]
