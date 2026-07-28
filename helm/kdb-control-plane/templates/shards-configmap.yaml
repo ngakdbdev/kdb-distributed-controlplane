@@ -1,0 +1,12 @@
+# The gateway's routing table, generated from shardCount by
+# templates/_helpers.tpl and mounted into the gateway pod at
+# /app/shards.json. Rescaling is: change shardCount, `helm upgrade`, and the
+# gateway rereads its topology on restart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-shards
+  namespace: {{ .Values.global.namespace }}
+data:
+  shards.json: |
+    {{ include "kdb-control-plane.shardsJson" . | nindent 4 }}

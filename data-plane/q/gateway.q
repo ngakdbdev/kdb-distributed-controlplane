@@ -3,16 +3,57 @@
 / across shards for un-scoped queries, and aggregates health + the
 / batch_sent/batch_arrived transit-lag metric for the dashboard.
 /
-/ Shard routing follows the same first-letter split used in KX's own
-/ scalable ingestion blueprint: A-M -> shard 0, N-Z -> shard 1.
+/ SHARD TOPOLOGY IS NO LONGER HARDCODED. At startup the gateway reads a
+/ shards.json document (generated from the single shard-count knob by
+/ app.topology / scripts/gen_topology.py, mounted here as a ConfigMap on
+/ k8s or a bind mount under compose) and builds its routing table and host
+/ map from it. This is what makes N-way sharding real: change the shard
+/ count, regenerate shards.json, and the gateway routes across N shards
+/ with no code change. If the file is missing or unparseable it falls back
+/ to the built-in 2-shard A-M / N-Z topology so it always comes up.
 
-.gw.shardOf:{[sym] $[(upper first string sym) in .Q.A til 13; `A_M; `N_Z]}
+/ ---------------------------------------------------------------- topology load
+.gw.shardsFile:$[count getenv `SHARDS_JSON; getenv `SHARDS_JSON; "/app/shards.json"]
 
-/ registry: shard -> (rdb handle;idb handle;wdb handle), lazily opened
-.gw.hosts:`A_M`N_Z!(
-  `rdb`idb`wdb!(`$":rdb-a-m:5021";`$":idb-a-m:5031";`$":wdb-a-m:5041");
-  `rdb`idb`wdb!(`$":rdb-n-z:5022";`$":idb-n-z:5032";`$":wdb-n-z:5042"))
+/ built-in fallback (2 shards, uniform ports) - matches app.topology at N=2
+.gw.fallback:(
+  `id`label`lo`hi`rdb`idb`wdb!("s0";"A-M";"A";"M";"rdb-s0:5020";"idb-s0:5030";"wdb-s0:5040");
+  `id`label`lo`hi`rdb`idb`wdb!("s1";"N-Z";"N";"Z";"rdb-s1:5020";"idb-s1:5030";"wdb-s1:5040"))
 
+.gw.loadTopology:{
+  parsed:@[
+    {[f] .j.k raze read0 hsym `$f};
+    .gw.shardsFile;
+    {[e] -1 "[gateway] could not read/parse ",.gw.shardsFile,": ",e,
+            " - falling back to built-in 2-shard topology"; (::)}
+    ];
+  shards:$[(::)~parsed; .gw.fallback; parsed`shards];
+  / normalise: each element is a dict with string values
+  shards
+  }
+
+.gw.shards:.gw.loadTopology[]
+
+/ id (symbol) -> `rdb`idb`wdb!(address syms), lazily hopened via .gw.h
+.gw.hosts:(!) . flip {[s]
+  addr:{[hp] `$":",hp};
+  (`$s`id; `rdb`idb`wdb!(addr s`rdb; addr s`idb; addr s`wdb))
+  } each .gw.shards
+
+/ routing table: first-letter range -> shard id, for symbol-scoped queries
+.gw.routes:{[s] `lo`hi`id!(first s`lo; first s`hi; `$s`id)} each .gw.shards
+.gw.routes:$[0=count .gw.routes; ([] lo:"A"; hi:"Z"; id:`s0); (uj/) enlist each .gw.routes]
+
+/ first A-Z letter of a symbol (skipping digits/punctuation); ' ' if none,
+/ which falls through to the first shard - mirrors app.topology.shard_of
+.gw.firstAlpha:{[sym] a:(upper string sym) inter .Q.A; $[count a; first a; " "]}
+
+.gw.shardOf:{[sym]
+  c:.gw.firstAlpha sym;
+  hit:select from .gw.routes where lo<=c, c<=hi;
+  $[count hit; first hit`id; first .gw.routes`id]}
+
+/ ---------------------------------------------------------------- connections
 .gw.conn:()!()
 
 .gw.h:{[shard;tier]
@@ -32,7 +73,7 @@
   idbRows:$[null idbH; 0#([] time:`timestamp$()); idbH ({[t;s] select from t where sym=s}; tbl; sym)];
   `time xasc idbRows,rdbRows}
 
-/ fan out across both shards for un-scoped queries (dashboards, demos)
+/ fan out across all shards for un-scoped queries (dashboards, demos)
 .gw.all:{[tbl]
   raze {[tbl;shard]
     rdbH:.gw.h[shard;`rdb]; idbH:.gw.h[shard;`idb];
@@ -59,8 +100,13 @@
     update shard:shard from m
     }[] each key .gw.hosts}
 
+/ topology, exposed so the control API / UI can show which shard owns what
+.gw.topology:{
+  ([] id:`$.gw.shards@\:`id; label:.gw.shards@\:`label;
+      lo:.gw.shards@\:`lo; hi:.gw.shards@\:`hi)}
+
 .gw.query:{[tbl;sym]
   $[null sym; .gw.all tbl; .gw.bySym[tbl;sym]]
   }
 
--1 "[gateway] up, routing across shards: ",", " sv string key .gw.hosts;
+-1 "[gateway] up, routing across ",string[count .gw.hosts]," shards: ",", " sv string key .gw.hosts;

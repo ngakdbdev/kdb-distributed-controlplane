@@ -1,11 +1,16 @@
-{{- range $name := list "db-a-m" "db-n-z" }}
+{{/*
+One db PVC and one tp-log PVC per shard, generated from the shard count.
+db-s{i} is shared between shard i's wdb (writer) and idb (reader).
+*/}}
+{{- range $i := until (int .Values.shardCount) }}
+{{- $sid := printf "s%d" $i }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ $name }}
+  name: db-{{ $sid }}
   namespace: {{ $.Values.global.namespace }}
-  labels: { app: {{ $name }} }
+  labels: { app: db-{{ $sid }}, shard: {{ $sid | quote }} }
 spec:
   accessModes: ["ReadWriteOnce"]
   {{- if $.Values.global.storageClassName }}
@@ -14,16 +19,13 @@ spec:
   resources:
     requests:
       storage: {{ $.Values.dataPlane.dbVolumeSize }}
-{{- end }}
-
-{{- range $name := list "tp-log-a-m" "tp-log-n-z" }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ $name }}
+  name: tp-log-{{ $sid }}
   namespace: {{ $.Values.global.namespace }}
-  labels: { app: {{ $name }} }
+  labels: { app: tp-log-{{ $sid }}, shard: {{ $sid | quote }} }
 spec:
   accessModes: ["ReadWriteOnce"]
   {{- if $.Values.global.storageClassName }}

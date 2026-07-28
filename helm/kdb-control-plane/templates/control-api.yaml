@@ -1,3 +1,12 @@
+{{/*
+  Guard: SQLite cannot back more than one control-api replica (no
+  concurrent-writer safety), so autoscaling the API on a sqlite URL is a
+  foot-gun. Fail the install early with an actionable message rather than
+  letting a scaled deployment corrupt its own database.
+*/}}
+{{- if and .Values.controlApi.autoscaling.enabled (hasPrefix "sqlite" .Values.database.url) }}
+{{- fail "controlApi.autoscaling.enabled=true requires a non-sqlite database.url (sqlite has no cross-replica writer safety). Point database.url at postgres/mysql/mssql - see control-api/README-database.md." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,7 +14,9 @@ metadata:
   namespace: {{ .Values.global.namespace }}
   labels: { app: control-api }
 spec:
+  {{- if not .Values.controlApi.autoscaling.enabled }}
   replicas: {{ .Values.controlApi.replicas }}
+  {{- end }}
   selector:
     matchLabels: { app: control-api }
   template:
@@ -27,6 +38,8 @@ spec:
               value: kubernetes
             - name: KUBE_NAMESPACE
               value: {{ .Values.global.namespace }}
+            - name: SHARD_COUNT
+              value: {{ .Values.shardCount | quote }}
             - name: DATABASE_URL
               value: {{ .Values.database.url | quote }}
             - name: GATEWAY_HOST
@@ -72,3 +85,25 @@ spec:
   ports:
     - port: {{ .Values.controlApi.port }}
       targetPort: {{ .Values.controlApi.port }}
+{{- if .Values.controlApi.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: control-api
+  namespace: {{ .Values.global.namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: control-api
+  minReplicas: {{ .Values.controlApi.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.controlApi.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.controlApi.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

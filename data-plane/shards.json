@@ -1,0 +1,24 @@
+{
+  "shardCount": 2,
+  "gatewayPort": 5050,
+  "shards": [
+    {
+      "id": "s0",
+      "label": "A-M",
+      "lo": "A",
+      "hi": "M",
+      "rdb": "rdb-s0:5020",
+      "idb": "idb-s0:5030",
+      "wdb": "wdb-s0:5040"
+    },
+    {
+      "id": "s1",
+      "label": "N-Z",
+      "lo": "N",
+      "hi": "Z",
+      "rdb": "rdb-s1:5020",
+      "idb": "idb-s1:5030",
+      "wdb": "wdb-s1:5040"
+    }
+  ]
+}

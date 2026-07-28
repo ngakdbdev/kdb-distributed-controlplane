@@ -4,5 +4,5 @@ description: >
   Control plane and sharded kdb+ tick data plane, deployable identically on
   EKS, AKS, GKE, or any on-premises Kubernetes cluster (k3s, RKE, kubeadm).
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
