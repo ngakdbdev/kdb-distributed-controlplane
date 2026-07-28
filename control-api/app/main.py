@@ -4,7 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import init_db
-from .routers import audit, auth, connectors, fleet, metrics, subscribers, tenants, topology
+from .routers import (audit, auth, auth_ldap, auth_sso, connectors, fleet,
+                      metrics, subscribers, tenants, topology)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -25,6 +26,8 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(auth_sso.router)
+app.include_router(auth_ldap.router)
 app.include_router(tenants.router)
 app.include_router(fleet.router)
 app.include_router(topology.router)

@@ -9,10 +9,13 @@ are typically deployed in production: written in Java/Python/C++, not q.
 import logging
 import os
 import time
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from qpython import qconnection
 from qpython.qtype import QException
+
+import topology
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -58,6 +61,53 @@ class TickerplantConnection:
     def close(self):
         if self.q is not None:
             self.q.close()
+
+
+class ShardedPublisher:
+    """Fans a feed's rows across the N per-shard tickerplants.
+
+    Replaces the old hardcoded two-connection (A_M / N_Z) setup: it opens one
+    TickerplantConnection per shard (`tp-s0`, `tp-s1`, ...), and for each
+    batch groups rows by the shard tag the generator already stamped on them
+    (via topology.shard_of), publishing each group to the matching TP. Change
+    SHARD_COUNT and the feed fans out to that many tickerplants with no code
+    change - the feed side of "N-way sharding is real".
+    """
+
+    def __init__(self, feed_name: str, shard_count: int | None = None,
+                 host_pattern: str | None = None, port: int | None = None,
+                 shard_index: int = -1):
+        self.n = shard_count if shard_count is not None else int(os.environ.get("SHARD_COUNT", "2"))
+        host_pattern = host_pattern or os.environ.get("TP_HOST_PATTERN", "tp-{shard}")
+        port = port if port is not None else int(os.environ.get("TP_PORT", str(topology.TIER_PORTS["tickerplant"])))
+        self.shard_index = shard_index
+        self.log = logging.getLogger(feed_name)
+        self.conns = {
+            s.id: TickerplantConnection(host_pattern.format(shard=s.id), port, f"{feed_name}.{s.id}")
+            for s in topology.shards(self.n)
+        }
+        self.log.info("sharded publisher: %d shards -> %s",
+                      self.n, ", ".join(host_pattern.format(shard=s.id) for s in topology.shards(self.n)))
+
+    def connect(self):
+        for c in self.conns.values():
+            c.connect()
+
+    def publish_rows(self, table: str, rows: list):
+        """Group rows by their shard tag and publish each group to its TP."""
+        batches: dict[str, list] = defaultdict(list)
+        for r in rows:
+            batches[r[self.shard_index]].append(r)
+        for shard_id, batch in batches.items():
+            conn = self.conns.get(shard_id)
+            if conn is None:  # shard tag not in this topology - shouldn't happen
+                self.log.warning("no connection for shard %s, dropping %d rows", shard_id, len(batch))
+                continue
+            conn.publish(table, batch)
+
+    def close(self):
+        for c in self.conns.values():
+            c.close()
 
 
 def now_ns() -> int:

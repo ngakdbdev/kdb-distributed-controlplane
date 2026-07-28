@@ -22,6 +22,8 @@ spec:
               value: kubernetes
             - name: KUBE_NAMESPACE
               value: {{ .Values.global.namespace }}
+            - name: SHARD_COUNT
+              value: {{ .Values.shardCount | quote }}
             - name: CONTROL_API_URL
               value: "http://control-api:{{ .Values.controlApi.port }}"
             - name: WATCHDOG_POLL_SEC

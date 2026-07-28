@@ -5,9 +5,22 @@
 global:
   namespace: kdb-control-plane
   imageRegistry: ""            # e.g. "123456789.dkr.ecr.us-east-1.amazonaws.com/" - trailing slash, blank for local/dev
-  imageTag: "0.1.0"
+  imageTag: "0.2.0"
   imagePullPolicy: IfNotPresent
   storageClassName: ""         # blank = cluster default ("gp3" on EKS, "managed-csi" on AKS, "standard-rwo" on GKE, "local-path" on k3s)
+
+# ==================================================================== SHARD TOPOLOGY
+# Shard count is the single scaling dimension - the product's USP. Every
+# per-shard q process (tickerplant/wdb/rdb/idb), its PVCs, the gateway's
+# routing table (rendered into a ConfigMap from templates/_helpers.tpl), the
+# feed fan-out, and the set of services the watchdog heals are ALL derived
+# from this one number. There is no hand-maintained per-shard list anymore:
+# set shardCount, run `helm upgrade`, and the data plane scales to N shards.
+#
+# Range 1-26 (the symbol space is partitioned into N contiguous first-letter
+# ranges - A-M/N-Z at 2, A-G/H-N/O-T/U-Z at 4, and so on). Beyond 26 you'd
+# switch to hash routing, which is out of scope for this chart.
+shardCount: 2
 
 # ---------------------------------------------------------------- secrets
 # NEVER commit real values here. Override at install time:
@@ -26,17 +39,16 @@ secrets:
 # mount them from a Secret you create yourself:
 #   kubectl create secret generic kdbx-license -n kdb-control-plane \
 #     --from-file=q=./q --from-file=k4.lic=./k4.lic
-# --------------------------------------------------------------- database
-# See control-api/README-database.md for dialect-specific connection string
-# formats (postgres/mysql/mssql) and driver notes. SQLite (the default) is
-# fine for a demo install and nothing else - point this at a real managed
-# database (RDS/Cloud SQL/Azure Database/Azure SQL, or the bank's own
-# on-prem instance) for anything customer-facing.
-database:
-  url: "sqlite:///./data/control_plane.db"
-
 kdbx:
   licenseSecretName: kdbx-license
+
+# --------------------------------------------------------------- database
+# See control-api/README-database.md for dialect-specific connection string
+# formats (postgres/mysql/mssql). SQLite (the default) is fine for a demo but
+# CANNOT back more than one control-api replica (no concurrent-writer safety) -
+# the chart hard-fails if you enable control-api autoscaling on a sqlite URL.
+database:
+  url: "sqlite:///./data/control_plane.db"
 
 # --------------------------------------------------------- data-plane sizing
 dataPlane:
@@ -44,18 +56,29 @@ dataPlane:
   idbPollSeconds: 15
   dbVolumeSize: 20Gi
   tpLogVolumeSize: 5Gi
+  # per-shard pod resource requests/limits (each shard runs 4 q processes)
+  resources:
+    requests: { cpu: "250m", memory: "256Mi" }
+    limits: { memory: "1Gi" }
 
 feeds:
   bpipeRateHz: 20
   crimsRateHz: 2
-  # feed sims start disabled - the control API's Connectors screen scales
-  # their Deployment to 1 replica when a customer enables them
   startEnabled: false
 
 controlApi:
   image: kdb-control-plane/control-api
   replicas: 1
   port: 8000
+  # Horizontal Pod Autoscaler for the stateless control API. The kdb data
+  # plane does NOT autoscale on replicas - it scales on shardCount (stateful,
+  # sharded) - so this HPA covers only the API tier. Requires a real
+  # (non-sqlite) database.url; the chart fails the install otherwise.
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
 
 watchdog:
   image: kdb-control-plane/watchdog
@@ -72,64 +95,3 @@ ingress:
   className: ""                # "alb" on EKS, "azure-application-gateway" on AKS, "gce" on GKE, "nginx" on-prem
   host: ""                      # e.g. demo.yourcompany.com
   tls: false
-
-# --------------------------------------------------------- the tick chain
-# One entry per q process. `role` selects the command template in
-# templates/_helpers.tpl. `volumes` are logical names resolved to actual
-# PVCs in templates/kdb-services.yaml - "db-a-m" and "db-n-z" are shared
-# between a shard's wdb and idb so flushed data is visible to both.
-kdbServices:
-  - name: tp-a-m
-    role: tickerplant
-    shard: A_M
-    port: 5010
-    volumes: { tpLog: tp-log-a-m }
-  - name: wdb-a-m
-    role: wdb
-    shard: A_M
-    port: 5041
-    tpHost: tp-a-m
-    tpPort: 5010
-    volumes: { db: db-a-m }
-  - name: rdb-a-m
-    role: rdb
-    shard: A_M
-    port: 5021
-    tpHost: tp-a-m
-    tpPort: 5010
-    volumes: {}
-  - name: idb-a-m
-    role: idb
-    shard: A_M
-    port: 5031
-    volumes: { db: db-a-m }
-
-  - name: tp-n-z
-    role: tickerplant
-    shard: N_Z
-    port: 5010
-    volumes: { tpLog: tp-log-n-z }
-  - name: wdb-n-z
-    role: wdb
-    shard: N_Z
-    port: 5042
-    tpHost: tp-n-z
-    tpPort: 5010
-    volumes: { db: db-n-z }
-  - name: rdb-n-z
-    role: rdb
-    shard: N_Z
-    port: 5022
-    tpHost: tp-n-z
-    tpPort: 5010
-    volumes: {}
-  - name: idb-n-z
-    role: idb
-    shard: N_Z
-    port: 5032
-    volumes: { db: db-n-z }
-
-  - name: gateway
-    role: gateway
-    port: 5050
-    volumes: {}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Nav from "./components/Nav.jsx";
 import AuditLog from "./pages/AuditLog.jsx";
 import Connectors from "./pages/Connectors.jsx";
@@ -15,9 +15,25 @@ const PAGES = {
   audit: AuditLog,
 };
 
+// The SSO callback redirects to <ui>/#access_token=...&token_type=bearer.
+// Capture it once on load, persist it, and scrub it from the URL.
+function captureSsoToken() {
+  if (!window.location.hash) return false;
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const token = params.get("access_token");
+  if (!token) return false;
+  localStorage.setItem("kcp_token", token);
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+  return true;
+}
+
 export default function App() {
-  const [loggedIn, setLoggedIn] = useState(!!localStorage.getItem("kcp_token"));
+  const [loggedIn, setLoggedIn] = useState(() => captureSsoToken() || !!localStorage.getItem("kcp_token"));
   const [active, setActive] = useState("topology");
+
+  useEffect(() => {
+    if (!loggedIn && captureSsoToken()) setLoggedIn(true);
+  }, [loggedIn]);
 
   function logout() {
     localStorage.removeItem("kcp_token");

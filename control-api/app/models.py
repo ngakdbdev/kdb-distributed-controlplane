@@ -31,10 +31,80 @@ class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     tenant_id: Optional[int] = Field(default=None, foreign_key="tenant.id", index=True)
     email: str = Field(index=True, unique=True)
-    password_hash: str
+    # empty for SSO-provisioned users - they have no local password, so
+    # password login is refused (verify_password("") is always False)
+    password_hash: str = ""
     role: UserRole = UserRole.tenant_admin
     active: bool = True
+    auth_provider: str = "local"                 # "local" / "entra"
+    external_id: Optional[str] = None            # Entra object id (oid), for SSO users
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class TenantIdP(SQLModel, table=True):
+    """Per-tenant SSO / identity-provider config.
+
+    Each customer (bank) federates against THEIR OWN Microsoft Entra tenant, so
+    the config is per-tenant, not global. Users are provisioned just-in-time on
+    first successful login, and their role is derived from their Entra group /
+    app-role membership via group_role_map. Local password login remains for
+    the platform admin and for break-glass tenant admins.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenant.id", index=True, unique=True)
+    provider: str = "entra"                       # "entra" / generic "oidc"
+    # OIDC issuer/authority. For Entra: https://login.microsoftonline.com/<aad-tenant-guid>/v2.0
+    authority: str = ""
+    client_id: str = ""
+    # NOTE: stored here for the MVP, but NEVER returned by the API (write-only).
+    # For production move this to a secret store (or use Entra certificate /
+    # workload-identity-federation credentials, which need no stored secret).
+    client_secret: str = ""
+    allowed_domains: str = ""                     # comma-separated email domains, "" = any
+    group_role_map: str = "{}"                    # JSON {entra_group_or_role_id: "tenant_admin"}
+    default_role: UserRole = UserRole.tenant_admin
+    enabled: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class TenantLDAP(SQLModel, table=True):
+    """Per-tenant LDAP / on-prem Active Directory config.
+
+    For customers who authenticate against their own AD/LDAP rather than Entra.
+    Two bind modes:
+      * "search" (recommended for AD): bind with a read-only service account,
+        search for the user by user_filter, then re-bind as the found DN with
+        the user's password to verify it, reading group membership from the
+        entry.
+      * "direct": bind straight as bind_dn_template.format(username=...) with
+        the user's password (works when the DN/UPN is derivable, e.g.
+        "{username}@bank.com").
+    Group membership (group_attr, default memberOf) maps to roles via
+    group_role_map, matched by full group DN or by CN.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenant.id", index=True, unique=True)
+    server_uri: str = ""                          # ldaps://dc.bank.com:636 (ldaps strongly preferred)
+    use_start_tls: bool = False                   # for ldap:// endpoints that upgrade via StartTLS
+    bind_mode: str = "search"                     # "search" / "direct"
+    # search mode
+    bind_dn: str = ""                             # service-account DN
+    bind_password: str = ""                       # write-only in the API
+    user_search_base: str = ""                    # e.g. OU=People,DC=bank,DC=com
+    user_filter: str = "(sAMAccountName={username})"
+    # direct mode
+    bind_dn_template: str = "{username}"          # e.g. "{username}@bank.com" or "uid={username},ou=people,dc=bank,dc=com"
+    # attribute mapping
+    attr_email: str = "mail"
+    attr_name: str = "displayName"
+    group_attr: str = "memberOf"
+    group_role_map: str = "{}"                    # JSON {group_dn_or_cn: "tenant_admin"}
+    default_role: UserRole = UserRole.tenant_admin
+    allowed_domains: str = ""
+    enabled: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 # --------------------------------------------------------------------------- fleet (agents)

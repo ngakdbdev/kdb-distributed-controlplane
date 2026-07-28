@@ -23,8 +23,18 @@ async function request(path, options = {}) {
 }
 
 export const api = {
-  login: (username, password) =>
-    request("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+  login: (email, password) =>
+    request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+
+  // Direct LDAP / Active Directory bind against a tenant's directory.
+  ldapLogin: (slug, username, password) =>
+    request(`/auth/ldap/${encodeURIComponent(slug)}/login`,
+      { method: "POST", body: JSON.stringify({ username, password }) }),
+
+  // Full-page navigation target that kicks off the Entra redirect flow for a
+  // tenant. The API 302s to Entra, then Entra 302s back to the callback, which
+  // finally redirects here with the session token in the URL fragment.
+  ssoLoginUrl: (slug) => `${BASE}/auth/sso/${encodeURIComponent(slug)}/login`,
 
   topologyStatus: () => request("/topology/status"),
   startService: (service) => request(`/topology/service/${service}/start`, { method: "POST" }),

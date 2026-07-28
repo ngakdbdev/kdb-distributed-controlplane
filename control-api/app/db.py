@@ -4,7 +4,8 @@ from urllib.parse import urlparse
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from .config import settings
-from .models import AuditEvent, Connector, Subscriber, Tenant, User, UserRole
+from .models import (AuditEvent, Connector, Subscriber, Tenant, TenantIdP,
+                     TenantLDAP, User, UserRole)
 from .security import hash_password
 
 log = logging.getLogger("db")
