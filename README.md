@@ -43,23 +43,64 @@ docker-compose.yml     Ties the whole stack together
    `k4.lic` license at `data-plane/docker/kdbx/`.
 2. `cp .env.example .env` and fill in real secrets.
 3. `docker compose build && docker compose up -d`
-4. Open `http://localhost/` - log in with `admin` / the password behind whatever `ADMIN_PASSWORD_HASH`
-   you set (or `changeme` if you left it blank, local-only).
+4. Open `http://localhost/` and log in. Two accounts are seeded on first boot:
+   the platform admin (`PLATFORM_ADMIN_EMAIL`, default `admin@platform.local`) for
+   fleet/tenant management, and a demo tenant admin (`DEMO_TENANT_ADMIN_EMAIL`,
+   default `admin@demo-bank.local`) for the tenant-scoped screens. Passwords come
+   from the matching `*_PASSWORD_HASH` env vars (`changeme` if left blank, local-only).
+   Microsoft Entra (OIDC) SSO and on-prem LDAP/AD are also wired per tenant — see
+   the auth routers.
 5. Enable the `bpipe-sim` and `crims-sim` connectors from the Connectors tab.
 6. Watch the Metrics tab fill in, and try killing a process from the Topology tab to see the watchdog
    heal it - check the Audit log tab afterward.
+
+## Demo & load-test
+
+`demokit/` is the sales toolkit. `python -m demokit.demo` runs the whole
+walkthrough for you — log in, enable feeds, kill a tickerplant, watch the
+watchdog heal it, read the audit trail — and doubles as a stack smoke test.
+`python -m demokit.load_test` measures throughput (offered vs achieved ingest,
+and where it starts shedding) and demonstrates slow-subscriber auto-discard
+with real numbers. See `demokit/README.md` for flags and `DEMO.md` for the
+presenter script. The measurement core is unit-tested (`pytest demokit`) so the
+numbers are honest even though they can only be produced on a live deployment.
 
 ## Deploying to GCP
 
 See `deploy/gcp/README.md` for the full walkthrough, including the honest explanation of why this uses
 Tier_1 networking + compact placement + C3 machines instead of FPGA (GCP has no FPGA instance family).
 
-## Known limitations (say these out loud to a prospect, don't let them assume otherwise)
+## What's built (and what's still honest to caveat)
 
-- Single-VM deployment - no real horizontal auto-scaling demoed yet.
-- Basic single-admin auth, not multi-tenant IAM.
+Delivered since the first cut:
+
+- **N-way sharding is real**, not a hardcoded A-M/N-Z split. `SHARD_COUNT` is a
+  single knob; the q processes, gateway routing, feed fan-out, watchdog targets,
+  and Helm PVCs all derive from it (`scripts/gen_topology.py`, `topology.py`,
+  guarded against drift by `scripts/check_topology_sync.py`).
+- **Multi-runbook, signature-based self-healing.** The watchdog classifies each
+  failure (container down / unhealthy / dependency-down / flapping) and dispatches
+  the right runbook — restart-and-verify, defer-to-dependency (heal a tickerplant
+  before its dependent RDB/IDB), or escalate-and-back-off when a service is
+  flapping. Not one blind restart loop.
+- **Multi-tenant auth.** Per-tenant Microsoft Entra (OIDC/PKCE) SSO, on-prem
+  LDAP/AD bind, and local accounts; `platform_admin` is never grantable via tenant
+  federation.
+- **Slow-subscriber auto-discard** in `tick.q` (strike-based, over a byte
+  threshold), surfaced in the Audit tab and demonstrable via `demokit`.
+- **A real load-test harness** (`demokit/`) with a unit-tested measurement core.
+
+Still caveat these to a prospect — don't let them assume otherwise:
+
 - Feed simulators are synthetic, not live vendor connections.
-- The watchdog has exactly one runbook (restart + verify). A production system would have several,
-  matched to specific failure signatures.
-- No load testing performed yet - don't quote a throughput number you haven't personally measured
-  with this exact deployment.
+- Throughput is hardware/shard/version dependent. Quote only numbers you
+  measured with `demokit.load_test` on the target spec — never a figure carried
+  between demos.
+- The `/topology` router drives the orchestrator directly, which is correct for a
+  single-tenant dedicated deployment (one bank, in their own cluster). The hosted
+  multi-tenant path uses `/fleet` agents instead — see the note in
+  `routers/topology.py`.
+- `gateway.q` and the Helm chart render need a real KDB-X and a `helm` binary to
+  verify end-to-end; they're covered by tests where the logic is Python, but run
+  the stack and `helm template` on a real box before trusting them in front of a
+  client.
