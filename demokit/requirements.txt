@@ -1,0 +1,7 @@
+# demokit reuses the data-plane feed stack for load generation and speaks
+# kdb+ IPC to the gateway/tickerplant. qpython3 + numpy<2 match
+# data-plane/feeds/requirements.txt so the load generator is the SAME code
+# path a real feed uses. The demo runner itself is stdlib-only (urllib), so
+# it runs on a bare box with nothing but these installed.
+qpython3==1.0.1
+numpy<2
