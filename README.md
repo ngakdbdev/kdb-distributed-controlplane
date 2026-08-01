@@ -31,7 +31,7 @@ data-plane/           q/kdb+ processes (tickerplant, wdb, rdb, idb, gateway) + f
 control-api/          FastAPI control plane: auth, topology, metrics, connectors, subscribers, audit
 watchdog/              Self-healing service - deterministic runbooks, independent of the control API
 web-ui/                React dashboard (Vite + recharts)
-deploy/gcp/            GCP provisioning, networking, docker install, deploy, and teardown scripts
+deploy/gcp|aws|azure/ per-cloud provisioning, networking, docker install, deploy, and teardown scripts
 reference/              KX's own public tick.q reference (submodule, read-only, not a build dependency - see reference/README.md)
 docker-compose.yml     Ties the whole stack together
 .env.example           Copy to .env and fill in before deploying anywhere but your laptop
@@ -65,10 +65,23 @@ with real numbers. See `demokit/README.md` for flags and `DEMO.md` for the
 presenter script. The measurement core is unit-tested (`pytest demokit`) so the
 numbers are honest even though they can only be produced on a live deployment.
 
-## Deploying to GCP
+## Deploying to the cloud (GCP / AWS / Azure)
 
-See `deploy/gcp/README.md` for the full walkthrough, including the honest explanation of why this uses
-Tier_1 networking + compact placement + C3 machines instead of FPGA (GCP has no FPGA instance family).
+Each cloud has a parallel module under `deploy/` with the same five steps
+(provision → networking → docker → deploy → teardown) and its own README:
+
+- `deploy/gcp/` — C3 + Tier_1 networking + compact placement.
+- `deploy/aws/` — C7i + cluster placement + ENA, with an **opt-in, off-by-default
+  F2 FPGA** path (`ENABLE_FPGA=1`) that only provisions the FPGA-capable box.
+- `deploy/azure/` — accelerated networking + proximity placement; **no FPGA
+  path**, because Azure's NP FPGA family is being retired (May 2027).
+
+On FPGA generally: no cloud FPGA instance accelerates kdb+ out of the box. The
+FPGA is inert until you build and load a custom bitstream (AWS AFI / Azure
+attested Vitis image) and wire a feed handler to it — kdb+ never runs on the
+FPGA. Each README says this plainly so you can too. Real FPGA feed-handling in
+finance is overwhelmingly on-prem with kernel-bypass NICs; treat cloud FPGA as
+"we can host your accelerator design," not "kdb+ is now FPGA-accelerated."
 
 ## What's built (and what's still honest to caveat)
 

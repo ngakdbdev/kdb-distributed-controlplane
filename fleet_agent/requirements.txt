@@ -1,0 +1,4 @@
+# The agent is stdlib-only at runtime (urllib for the control-plane calls,
+# subprocess for helm/docker). Nothing to install for the agent process itself.
+# Tests need pytest.
+pytest

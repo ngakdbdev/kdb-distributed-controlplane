@@ -52,6 +52,20 @@ export const api = {
   removeSubscriber: (id) => request(`/subscribers/${id}`, { method: "DELETE" }),
 
   listAudit: (limit = 100) => request(`/audit?limit=${limit}`),
+
+  // Fleet / provisioning: each agent is a tenant-controlled environment
+  // (AWS/Azure/GCP/on-prem). Registering one returns a one-time enrollment
+  // token; provisioning queues a command the agent reconciles in its cluster.
+  listAgents: () => request("/fleet/agents"),
+  createAgent: (name, environment) =>
+    request("/fleet/agents", { method: "POST", body: JSON.stringify({ name, environment }) }),
+  provision: (agentId, shardCount, note = "") =>
+    request(`/fleet/agents/${agentId}/provision`,
+      { method: "POST", body: JSON.stringify({ shard_count: shardCount, note }) }),
+  deprovision: (agentId) =>
+    request(`/fleet/agents/${agentId}/deprovision`, { method: "POST" }),
+  listAgentCommands: (agentId, limit = 50) =>
+    request(`/fleet/agents/${agentId}/commands?limit=${limit}`),
 };
 
 export function metricsSocket(onMessage) {
