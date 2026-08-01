@@ -4,6 +4,7 @@ import StatusBadge from "../components/StatusBadge.jsx";
 
 export default function Connectors() {
   const [connectors, setConnectors] = useState([]);
+  const [providers, setProviders] = useState([]);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState(null);
 
@@ -18,6 +19,7 @@ export default function Connectors() {
   useEffect(() => {
     refresh();
     const id = setInterval(refresh, 4000);
+    api.listProviders().then(setProviders).catch((err) => setError(String(err)));
     return () => clearInterval(id);
   }, []);
 
@@ -58,6 +60,26 @@ export default function Connectors() {
             >
               {c.enabled ? "Disable" : "Enable"}
             </button>
+          </div>
+        ))}
+      </div>
+
+      <h2 style={{ marginTop: "2rem" }}>Market data providers</h2>
+      <p className="muted">
+        Pluggable feed adapters that stream a real (or licensed) source into the sharded tickerplants,
+        behind the same on/off model as the sims above. <strong>Live</strong> providers run today with an
+        API key; <strong>licensed</strong> feeds connect once you plug in your data agreement and
+        connectivity &mdash; that&rsquo;s the seam your own exchange feed lands on.
+      </p>
+      <div className="provider-grid">
+        {providers.map((p) => (
+          <div className="card provider-card" key={p.name}>
+            <div className="provider-header">
+              <h3>{p.display_name}</h3>
+              <span className={`tier-badge tier-${p.tier}`}>{p.tier}</span>
+            </div>
+            <div className="provider-meta">{p.coverage}</div>
+            <p className="muted">Needs: {p.requires}</p>
           </div>
         ))}
       </div>

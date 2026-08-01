@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Nav from "./components/Nav.jsx";
 import AuditLog from "./pages/AuditLog.jsx";
 import Connectors from "./pages/Connectors.jsx";
+import Export from "./pages/Export.jsx";
 import Fleet from "./pages/Fleet.jsx";
 import Login from "./pages/Login.jsx";
 import Metrics from "./pages/Metrics.jsx";
@@ -14,6 +15,7 @@ const PAGES = {
   connectors: Connectors,
   subscribers: Subscribers,
   fleet: Fleet,
+  export: Export,
   audit: AuditLog,
 };
 

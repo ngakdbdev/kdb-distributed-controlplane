@@ -4,6 +4,7 @@ const TABS = [
   { id: "connectors", label: "Connectors" },
   { id: "subscribers", label: "Subscribers" },
   { id: "fleet", label: "Fleet" },
+  { id: "export", label: "Data export" },
   { id: "audit", label: "Audit log" },
 ];
 

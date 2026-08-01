@@ -159,3 +159,14 @@ button.danger {
   font-family: monospace; font-size: 0.8rem; color: var(--text);
   min-width: 6rem;
 }
+
+/* ---- Market data providers catalog ---- */
+.provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+.provider-card .provider-header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.provider-meta { color: var(--text); font-size: 0.85rem; margin: 0.3rem 0; }
+.tier-badge {
+  text-transform: uppercase; font-size: 0.65rem; letter-spacing: 0.05em;
+  padding: 0.15rem 0.5rem; border-radius: 999px; border: 1px solid var(--border);
+}
+.tier-live { color: var(--success); border-color: var(--success); }
+.tier-licensed { color: var(--muted); border-color: var(--border); }
