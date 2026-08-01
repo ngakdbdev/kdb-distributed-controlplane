@@ -130,3 +130,32 @@ button.danger {
 .sso-divider span { padding: 0 0.75rem; font-size: 0.85rem; }
 .sso-button { background: #2f2f2f; border: 1px solid #3a3f4a; }
 .sso-button:hover { background: #383838; }
+
+/* ---- Fleet / provisioning page ---- */
+.form-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0.5rem 0; }
+.form-row input, .form-row select {
+  background: #1f2530; color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.4rem 0.6rem;
+}
+.token-box {
+  background: #0b0f14; border: 1px solid var(--border); border-radius: 6px;
+  padding: 0.6rem; overflow-x: auto; font-family: monospace; color: var(--success);
+  white-space: pre-wrap; word-break: break-all;
+}
+.agent-list { display: grid; gap: 1rem; margin-top: 1rem; }
+.agent-card .agent-header { display: flex; align-items: center; gap: 0.6rem; }
+.env-badge {
+  text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.05em;
+  padding: 0.15rem 0.5rem; border-radius: 999px; border: 1px solid var(--border);
+  background: #1f2530; color: var(--muted);
+}
+.env-aws { color: #ff9900; border-color: #ff990055; }
+.env-azure { color: #4f8cff; border-color: #4f8cff55; }
+.env-gcp { color: #34a853; border-color: #34a85355; }
+.env-onprem { color: var(--muted); }
+.command-log { margin-top: 0.75rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
+.command-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0; }
+.command-action {
+  font-family: monospace; font-size: 0.8rem; color: var(--text);
+  min-width: 6rem;
+}

@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 from ..db import get_session, log_event
 from ..models import Agent, AgentEnvironment, AgentStatus, Command, CommandStatus
 from ..security import hash_password, verify_password
+from .. import topology
 from .auth import CurrentUser, require_tenant_scope
 
 router = APIRouter(prefix="/fleet", tags=["fleet"])
@@ -82,6 +83,91 @@ def enqueue_command(agent_id: int, action: str, service: str,
     log_event(session, user.email, "enqueue_command", f"{agent.name}/{service}",
               detail=action, tenant_id=user.tenant_id)
     return result
+
+
+# ---- provisioning: the tenant-admin picks an environment (= agent) + shard
+# count from the UI, and we queue a `provision` command carrying the desired
+# topology. The agent living in that environment realizes it (helm upgrade /
+# compose regen) and reports back. This is the "create ticker plant
+# components in AWS/Azure/GCP from the UI" path.
+class ProvisionRequest(BaseModel):
+    shard_count: int
+    note: str = ""
+
+
+def _desired_topology(shard_count: int) -> dict:
+    """Canonical desired-state spec the agent reconciles to. Reuses the same
+    topology module the whole system derives from, so the agent, the gateway,
+    and the control plane can never disagree about what N shards means."""
+    return {
+        "shardCount": shard_count,
+        "topology": topology.shards_json(shard_count),
+        "services": sorted(topology.managed_services(shard_count).keys()),
+    }
+
+
+def _load_agent_for_tenant(agent_id: int, user: CurrentUser, session: Session) -> Agent:
+    agent = session.get(Agent, agent_id)
+    if agent is None or agent.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=404, detail="agent not found")
+    return agent
+
+
+@router.post("/agents/{agent_id}/provision")
+def provision(agent_id: int, body: ProvisionRequest,
+              user: CurrentUser = Depends(require_tenant_scope),
+              session: Session = Depends(get_session)):
+    if not (1 <= body.shard_count <= topology.MAX_SHARDS):
+        raise HTTPException(status_code=400,
+                            detail=f"shard_count must be between 1 and {topology.MAX_SHARDS}")
+    agent = _load_agent_for_tenant(agent_id, user, session)
+
+    payload = {"desired": _desired_topology(body.shard_count), "note": body.note}
+    cmd = Command(tenant_id=user.tenant_id, agent_id=agent_id,
+                  action="provision", service="data-plane",
+                  payload=json.dumps(payload))
+    session.add(cmd)
+    session.commit()
+    session.refresh(cmd)
+    result = cmd.model_dump()
+    log_event(session, user.email, "provision_requested",
+              f"{agent.name} ({agent.environment.value})",
+              detail=f"shards={body.shard_count}", tenant_id=user.tenant_id)
+    return result
+
+
+@router.post("/agents/{agent_id}/deprovision")
+def deprovision(agent_id: int,
+                user: CurrentUser = Depends(require_tenant_scope),
+                session: Session = Depends(get_session)):
+    """Tear the data plane down in this environment (agent uninstalls the
+    release / brings the compose stack down). Symmetric with provision."""
+    agent = _load_agent_for_tenant(agent_id, user, session)
+    cmd = Command(tenant_id=user.tenant_id, agent_id=agent_id,
+                  action="deprovision", service="data-plane", payload="{}")
+    session.add(cmd)
+    session.commit()
+    session.refresh(cmd)
+    result = cmd.model_dump()
+    log_event(session, user.email, "deprovision_requested",
+              f"{agent.name} ({agent.environment.value})", tenant_id=user.tenant_id)
+    return result
+
+
+@router.get("/agents/{agent_id}/commands")
+def list_agent_commands(agent_id: int, limit: int = 50,
+                        user: CurrentUser = Depends(require_tenant_scope),
+                        session: Session = Depends(get_session)):
+    """Recent commands for one agent, newest first - the UI polls this to show
+    provisioning job status (queued -> dispatched -> success/failure)."""
+    _load_agent_for_tenant(agent_id, user, session)
+    cmds = session.exec(
+        select(Command)
+        .where(Command.agent_id == agent_id, Command.tenant_id == user.tenant_id)
+        .order_by(Command.id.desc())
+        .limit(min(limit, 200))
+    ).all()
+    return [c.model_dump() for c in cmds]
 
 
 # ------------------------------------------------------------------ agent side

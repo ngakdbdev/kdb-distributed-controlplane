@@ -157,8 +157,9 @@ class Command(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     tenant_id: int = Field(foreign_key="tenant.id", index=True)
     agent_id: int = Field(foreign_key="agent.id", index=True)
-    action: str                                               # "start" / "stop" / "restart"
-    service: str                                              # e.g. "rdb-a-m"
+    action: str                                               # "start" / "stop" / "restart" / "provision" / "deprovision"
+    service: str                                              # e.g. "rdb-a-m", or "data-plane" for provision
+    payload: str = "{}"                                       # JSON spec for richer commands (provision: desired topology)
     status: CommandStatus = CommandStatus.queued
     result_detail: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
