@@ -1,0 +1,11 @@
+# Core: extraction to Arrow/Parquet works with just pyarrow + qpython3 (the
+# feeds tree already pins qpython3). The warehouse sinks pull their own SDKs,
+# installed only if you use that destination.
+pyarrow>=14
+qpython3==1.0.1
+numpy<2
+
+# --- per-sink extras (install the one(s) you need) ---
+# snowflake:  snowflake-connector-python[pandas]
+# databricks: databricks-sql-connector  databricks-sdk
+# fabric:     azure-identity  azure-storage-file-datalake

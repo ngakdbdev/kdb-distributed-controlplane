@@ -1,0 +1,5 @@
+# The live provider adapters (finnhub/twelvedata/polygon) use a websocket client.
+# Normalization + the framework are stdlib-only; websocket-client is only needed to
+# actually stream. The publisher itself reuses the feeds tree (qpython3, see
+# data-plane/feeds/requirements.txt).
+websocket-client>=1.7

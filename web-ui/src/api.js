@@ -45,6 +45,8 @@ export const api = {
   metricsSnapshot: () => request("/metrics/snapshot"),
 
   listConnectors: () => request("/connectors"),
+  listProviders: () => request("/connectors/providers"),
+  listExportSinks: () => request("/export/sinks"),
   toggleConnector: (id) => request(`/connectors/${id}/toggle`, { method: "POST" }),
 
   listSubscribers: () => request("/subscribers"),

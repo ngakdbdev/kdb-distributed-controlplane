@@ -4,9 +4,18 @@ from sqlmodel import Session, select
 from ..db import get_session, log_event
 from ..models import Connector
 from ..orchestrator import orchestrator
+from ..provider_catalog import PROVIDER_CATALOG
 from .auth import CurrentUser, require_tenant_scope
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
+
+
+@router.get("/providers")
+def list_providers(user: CurrentUser = Depends(require_tenant_scope)):
+    """Catalog of market-data provider adapters the UI can offer - which are
+    live (usable with an API key) vs licensed (need a data agreement), and what
+    each one requires. Canonical adapters live in data-plane/feeds/providers/."""
+    return PROVIDER_CATALOG
 
 
 @router.get("")
