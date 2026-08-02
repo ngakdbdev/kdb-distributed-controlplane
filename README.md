@@ -1,4 +1,4 @@
-# kdb+ tick control plane - demo MVP
+# kdb+ tick control plane -  MVP
 
 A control plane (web UI + API + self-healing watchdog) sitting above a sharded kdb+ tick deployment
 built on the Tick-X pattern (tickerplant → write-down DB → chained RDB → intraday DB, split across two
