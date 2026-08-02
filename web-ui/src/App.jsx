@@ -9,6 +9,7 @@ import TickHouses from "./pages/TickHouses.jsx";
 import Login from "./pages/Login.jsx";
 import Metrics from "./pages/Metrics.jsx";
 import Query from "./pages/Query.jsx";
+import Trading from "./pages/Trading.jsx";
 import Subscribers from "./pages/Subscribers.jsx";
 import Topology from "./pages/Topology.jsx";
 
@@ -16,6 +17,7 @@ const PAGES = {
   topology: Topology,
   metrics: Metrics,
   query: Query,
+  trading: Trading,
   connectors: Connectors,
   subscribers: Subscribers,
   tickhouses: TickHouses,
