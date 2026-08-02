@@ -23,18 +23,30 @@ class HighLevelSpec(BaseModel):
     location: str
     os: str
     profile: str
-    shard_ranges: str                 # "a-d, e-h, i-j"
+    shard_ranges: str = ""            # letter-range policy: "a-d, e-h, i-j"
+    sharding_policy: str = "letter-range"
+    shard_symbols: list | None = None  # explicit policy: [{"label","symbols":[...]}]
     idb: bool = False
     ldap_ref: str = ""
     gateway_config: dict | None = None
+    target_config: dict | None = None  # cloud/k8s coordinates (non-secret)
+
+
+def _build(body: "HighLevelSpec"):
+    return th.auto_spec(body.name, body.location, body.os, body.profile,
+                        shard_ranges=body.shard_ranges, idb=body.idb, ldap_ref=body.ldap_ref,
+                        gateway_config=body.gateway_config, sharding_policy=body.sharding_policy,
+                        shard_symbols=body.shard_symbols, target_config=body.target_config)
 
 
 @router.get("/meta")
 def meta(user: CurrentUser = Depends(require_tenant_scope)):
-    """Enum choices for the create wizard's dropdowns."""
+    """Enum choices + per-cloud config fields for the create wizard."""
     return {"clouds": list(th.CLOUDS), "os_types": list(th.OS_TYPES),
             "profiles": list(th.PROFILES), "component_types": list(th.COMPONENT_TYPES),
-            "required_components": list(th.REQUIRED_COMPONENTS)}
+            "required_components": list(th.REQUIRED_COMPONENTS),
+            "sharding_policies": list(th.SHARDING_POLICIES),
+            "config_fields": {c: th.config_fields(c) for c in th.CLOUDS}}
 
 
 @router.post("/preview")
@@ -42,9 +54,7 @@ def preview(body: HighLevelSpec, user: CurrentUser = Depends(require_tenant_scop
     """Auto-tune a full spec from the high-level choices and return it with any
     validation problems - the wizard's 'auto-fill + review' step. No persistence."""
     try:
-        spec = th.auto_spec(body.name, body.location, body.os, body.profile,
-                            body.shard_ranges, idb=body.idb, ldap_ref=body.ldap_ref,
-                            gateway_config=body.gateway_config)
+        spec = _build(body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"spec": th.spec_to_dict(spec), "problems": th.validate_spec(spec)}
@@ -55,9 +65,7 @@ def create(body: HighLevelSpec, user: CurrentUser = Depends(require_tenant_scope
            session: Session = Depends(get_session)):
     """Persist a tick cluster definition (auto-tuned from the high-level choices)."""
     try:
-        spec = th.auto_spec(body.name, body.location, body.os, body.profile,
-                            body.shard_ranges, idb=body.idb, ldap_ref=body.ldap_ref,
-                            gateway_config=body.gateway_config)
+        spec = _build(body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     problems = th.validate_spec(spec)

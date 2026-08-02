@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Nav from "./components/Nav.jsx";
+import { COPYRIGHT } from "./brand.js";
 import AuditLog from "./pages/AuditLog.jsx";
 import Connectors from "./pages/Connectors.jsx";
 import Export from "./pages/Export.jsx";
@@ -61,7 +62,7 @@ export default function App() {
         <Page />
       </main>
       <footer className="app-footer">
-        <span>&copy; {new Date().getFullYear()} QByte Computing Limited. All rights reserved.</span>
+        <span>{COPYRIGHT}</span>
       </footer>
     </div>
   );

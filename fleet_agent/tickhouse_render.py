@@ -26,9 +26,24 @@ def render_helm_sets(desired: dict) -> list:
 
     shards = desired.get("shards", [])
     if shards:
-        ranges = ";".join(f"{s['lo']}-{s['hi']}" for s in shards)
-        # helm list values are escaped with \,  -> use a single ';'-joined string
-        sets.append(f"shardRanges={ranges}")
+        if desired.get("sharding_policy") == "explicit-symbols":
+            # explicit assignment: shardSymbols=s0:AAPL|MSFT;s1:GOOG|AMZN
+            parts = [f"{s['id']}:{'|'.join(s.get('symbols', []))}" for s in shards]
+            sets.append(f"shardSymbols={';'.join(parts)}")
+        else:
+            ranges = ";".join(f"{s['lo']}-{s['hi']}" for s in shards)
+            sets.append(f"shardRanges={ranges}")
+
+    # cloud / k8s target config (non-secret coordinates)
+    tc = desired.get("target_config") or {}
+    if tc.get("namespace"):
+        sets.append(f"global.namespace={tc['namespace']}")
+    if tc.get("storage_class"):
+        sets.append(f"global.storageClass={tc['storage_class']}")
+    if tc.get("ingress_class"):
+        sets.append(f"global.ingressClass={tc['ingress_class']}")
+    if tc.get("region"):
+        sets.append(f"global.region={tc['region']}")
 
     gw = desired.get("gateway_config") or {}
     if gw.get("port"):

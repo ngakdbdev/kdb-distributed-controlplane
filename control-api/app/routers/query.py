@@ -62,9 +62,34 @@ def targets(user: CurrentUser = Depends(require_tenant_scope)):
 
 class RunBody(BaseModel):
     target: str = "gateway"
+    targets: list[str] | None = None   # federate across several (scatter-gather)
     query: str
     limit: int = qs.DEFAULT_ROW_LIMIT
     allow_write: bool = False
+
+
+def _run_one(target_id: str, query: str, limit: int, allow_write: bool) -> dict:
+    """Run against a single target; returns {target, ok, grid|error, elapsed_ms}."""
+    import time
+    host, port = _resolve(target_id)
+    t0 = time.perf_counter()
+    try:
+        conn = _connect(host, port)
+    except Exception as exc:  # noqa: BLE001
+        return {"target": target_id, "ok": False, "error": f"unreachable {host}:{port}: {exc}",
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
+    try:
+        grid = qs.run_query(query, conn, limit=limit, allow_write=allow_write)
+        return {"target": target_id, "ok": True, "grid": grid,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
+    except Exception as exc:  # noqa: BLE001
+        return {"target": target_id, "ok": False, "error": f"query error: {exc}",
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 @router.post("/run")
@@ -73,33 +98,41 @@ def run(body: RunBody, user: CurrentUser = Depends(require_tenant_scope)):
     if body.allow_write and not _ALLOW_WRITE:
         raise HTTPException(status_code=403,
                             detail="writes are disabled on this deployment (QUERY_ALLOW_WRITE)")
-    # validate read-only BEFORE opening a connection
+    # validate read-only BEFORE opening any connection
     if not allow_write:
         ok, reason = qs.check_readonly(body.query)
         if not ok:
             raise HTTPException(status_code=400, detail=reason)
 
-    host, port = _resolve(body.target)
-    try:
-        conn = _connect(host, port)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"could not reach {host}:{port}: {exc}")
-    import time
-    t0 = time.perf_counter()
-    try:
-        payload = qs.run_query(body.query, conn, limit=body.limit, allow_write=allow_write)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001 - surface a q error to the user
-        raise HTTPException(status_code=400, detail=f"query error: {exc}")
-    finally:
-        try:
-            conn.close()
-        except Exception:  # noqa: BLE001
-            pass
-    payload["target"] = body.target
-    payload["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-    return payload
+    targets = body.targets or [body.target]
+    # validate every target resolves before running
+    for t in targets:
+        _resolve(t)
+
+    # single target: return the grid directly (unchanged shape)
+    if len(targets) == 1:
+        res = _run_one(targets[0], body.query, body.limit, allow_write)
+        if not res["ok"]:
+            raise HTTPException(status_code=502 if "unreachable" in res["error"] else 400,
+                                detail=res["error"])
+        payload = res["grid"]
+        payload["target"] = targets[0]
+        payload["elapsed_ms"] = res["elapsed_ms"]
+        return payload
+
+    # federated: fan out, combine successful grids, report per-target status
+    results = [_run_one(t, body.query, body.limit, allow_write) for t in targets]
+    labeled = [(r["target"], r["grid"]) for r in results if r["ok"]]
+    if not labeled:
+        raise HTTPException(status_code=502, detail="all targets failed: " +
+                            "; ".join(f"{r['target']}: {r['error']}" for r in results))
+    combined = qs.combine_results(labeled, add_provenance=True, limit=body.limit)
+    combined["query"] = body.query
+    combined["per_target"] = [{"target": r["target"], "ok": r["ok"],
+                               "rows": r["grid"]["row_count"] if r["ok"] else 0,
+                               "error": r.get("error"), "elapsed_ms": r["elapsed_ms"]}
+                              for r in results]
+    return combined
 
 
 @router.get("/tables")
