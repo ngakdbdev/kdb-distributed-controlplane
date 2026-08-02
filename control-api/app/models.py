@@ -202,3 +202,24 @@ class AuditEvent(SQLModel, table=True):
     target: str = ""
     detail: str = ""
     outcome: str = "success"                                    # "success" / "failure"
+
+
+# --------------------------------------------------------------------------- tickhouses
+class TickHouse(SQLModel, table=True):
+    """A declaratively-defined tick cluster: shards (letter ranges), typed
+    components (feedhandler/logger/tickerplant/rdb/idb/hdb/gateway) each with a
+    hardware spec, deployment location, target OS, gateway config, and LDAP
+    binding. The full spec is stored as JSON; provisioning queues it to the
+    tenant's agent for the chosen location, which renders it into helm/compose.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenant.id", index=True)
+    name: str = Field(index=True)                             # "acme-emea"
+    location: str = "aws"                                     # aws / azure / gcp / onprem
+    os: str = "ubuntu-22.04"
+    profile: str = "balanced"                                 # high-throughput / low-latency / balanced
+    spec_json: str = "{}"                                     # full TickHouseSpec (see app.tickhouse)
+    status: str = "defined"                                   # defined / provisioning / running / failed
+    agent_id: Optional[int] = Field(default=None, foreign_key="agent.id")
+    last_command_id: Optional[int] = Field(default=None, foreign_key="command.id")
+    created_at: datetime = Field(default_factory=datetime.utcnow)

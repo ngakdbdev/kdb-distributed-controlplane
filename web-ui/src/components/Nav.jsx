@@ -1,5 +1,6 @@
 const TABS = [
   { id: "topology", label: "Topology" },
+  { id: "tickhouses", label: "TickHouses" },
   { id: "metrics", label: "Metrics" },
   { id: "connectors", label: "Connectors" },
   { id: "subscribers", label: "Subscribers" },

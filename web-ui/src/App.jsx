@@ -4,6 +4,7 @@ import AuditLog from "./pages/AuditLog.jsx";
 import Connectors from "./pages/Connectors.jsx";
 import Export from "./pages/Export.jsx";
 import Fleet from "./pages/Fleet.jsx";
+import TickHouses from "./pages/TickHouses.jsx";
 import Login from "./pages/Login.jsx";
 import Metrics from "./pages/Metrics.jsx";
 import Subscribers from "./pages/Subscribers.jsx";
@@ -14,6 +15,7 @@ const PAGES = {
   metrics: Metrics,
   connectors: Connectors,
   subscribers: Subscribers,
+  tickhouses: TickHouses,
   fleet: Fleet,
   export: Export,
   audit: AuditLog,
