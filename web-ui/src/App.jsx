@@ -4,16 +4,20 @@ import AuditLog from "./pages/AuditLog.jsx";
 import Connectors from "./pages/Connectors.jsx";
 import Export from "./pages/Export.jsx";
 import Fleet from "./pages/Fleet.jsx";
+import TickHouses from "./pages/TickHouses.jsx";
 import Login from "./pages/Login.jsx";
 import Metrics from "./pages/Metrics.jsx";
+import Query from "./pages/Query.jsx";
 import Subscribers from "./pages/Subscribers.jsx";
 import Topology from "./pages/Topology.jsx";
 
 const PAGES = {
   topology: Topology,
   metrics: Metrics,
+  query: Query,
   connectors: Connectors,
   subscribers: Subscribers,
+  tickhouses: TickHouses,
   fleet: Fleet,
   export: Export,
   audit: AuditLog,
@@ -56,6 +60,9 @@ export default function App() {
       <main className="app-main">
         <Page />
       </main>
+      <footer className="app-footer">
+        <span>&copy; {new Date().getFullYear()} QByte Computing Limited. All rights reserved.</span>
+      </footer>
     </div>
   );
 }

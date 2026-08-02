@@ -47,6 +47,22 @@ export const api = {
   listConnectors: () => request("/connectors"),
   listProviders: () => request("/connectors/providers"),
   listExportSinks: () => request("/export/sinks"),
+
+  // TickHouse (declarative tick clusters)
+  tickhouseMeta: () => request("/tickhouses/meta"),
+  previewTickhouse: (body) => request("/tickhouses/preview", { method: "POST", body: JSON.stringify(body) }),
+  createTickhouse: (body) => request("/tickhouses", { method: "POST", body: JSON.stringify(body) }),
+  listTickhouses: () => request("/tickhouses"),
+  getTickhouse: (id) => request(`/tickhouses/${id}`),
+  deleteTickhouse: (id) => request(`/tickhouses/${id}`, { method: "DELETE" }),
+  provisionTickhouse: (id, agentId) =>
+    request(`/tickhouses/${id}/provision`, { method: "POST", body: JSON.stringify({ agent_id: agentId }) }),
+  tickhouseStatus: (id) => request(`/tickhouses/${id}/status`),
+
+  // Live query workspace
+  queryTargets: () => request("/query/targets"),
+  queryTables: (target) => request(`/query/tables?target=${encodeURIComponent(target)}`),
+  runQuery: (body) => request("/query/run", { method: "POST", body: JSON.stringify(body) }),
   toggleConnector: (id) => request(`/connectors/${id}/toggle`, { method: "POST" }),
 
   listSubscribers: () => request("/subscribers"),

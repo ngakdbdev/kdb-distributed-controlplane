@@ -4,8 +4,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import init_db
+from . import licensing
 from .routers import (audit, auth, auth_ldap, auth_sso, connectors, export, fleet,
-                      metrics, subscribers, tenants, topology)
+                      license as license_router, metrics, query, subscribers, tenants,
+                      tickhouse, topology)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -36,11 +38,24 @@ app.include_router(connectors.router)
 app.include_router(export.router)
 app.include_router(subscribers.router)
 app.include_router(audit.router)
+app.include_router(license_router.router)
+app.include_router(tickhouse.router)
+app.include_router(query.router)
 
 
 @app.on_event("startup")
 def on_startup():
     init_db()
+    _check_license()
+
+
+def _check_license():
+    import os
+    info = licensing.validate(os.environ.get("LICENSE_KEY", ""))
+    logging.getLogger("license").info(licensing.status_line(info))
+    if not info.valid and os.environ.get("LICENSE_ENFORCE", "").lower() in ("1", "true", "yes"):
+        raise RuntimeError(f"product licence invalid: {info.reason} "
+                           "(set a valid LICENSE_KEY or unset LICENSE_ENFORCE)")
 
 
 @app.get("/health")

@@ -79,6 +79,25 @@ class HelmBackend:
             return ReconcileResult(ok=False, detail=f"helm uninstall failed: {out[-500:]}")
         return ReconcileResult(ok=True, detail="helm release uninstalled")
 
+    def reconcile_spec(self, desired: dict) -> ReconcileResult:
+        """Provision a full TickHouse spec: render per-component hardware +
+        shard ranges into helm values and upgrade."""
+        from .tickhouse_render import render_helm_sets, summarize
+        sets = render_helm_sets(desired)
+        args = ["helm", "upgrade", "--install", self.release, self.chart_path,
+                "-n", self.namespace, "--create-namespace"]
+        for s in sets:
+            args += ["--set", s]
+        args += ["--wait", "--timeout", "15m"]
+        rc, out = _run(args)
+        steps = [f"helm upgrade with {len(sets)} settings ({summarize(desired)})"]
+        n = desired.get("shardCount")
+        if rc != 0:
+            return ReconcileResult(ok=False, shard_count=n,
+                                   detail=f"helm upgrade failed: {out[-500:]}", steps=steps)
+        return ReconcileResult(ok=True, shard_count=n,
+                               detail="tickhouse reconciled via helm", steps=steps)
+
 
 class ComposeBackend:
     """Reconciles a single-box / on-prem stack: regenerate docker-compose.yml +
@@ -127,6 +146,30 @@ class ComposeBackend:
         if rc != 0:
             return ReconcileResult(ok=False, detail=f"compose down failed: {out[-500:]}")
         return ReconcileResult(ok=True, detail="compose stack brought down")
+
+    def reconcile_spec(self, desired: dict) -> ReconcileResult:
+        """Provision a full TickHouse spec on-prem: regenerate topology for the
+        shard count and bring the stack up with the profile/OS env applied."""
+        from .tickhouse_render import render_compose_env, summarize
+        n = desired.get("shardCount")
+        steps = []
+        rc, out = _run([self.python, "scripts/gen_topology.py", "--shards", str(n),
+                        "--compose", "docker-compose.yml", "--shards-json", "data-plane/shards.json"],
+                       cwd=self.project_dir)
+        steps.append(f"gen_topology --shards {n}")
+        if rc != 0:
+            return ReconcileResult(ok=False, shard_count=n,
+                                   detail=f"topology generation failed: {out[-500:]}", steps=steps)
+        env = {**os.environ, **render_compose_env(desired)}
+        proc = subprocess.run(["docker", "compose", "up", "-d", "--remove-orphans"],
+                              cwd=self.project_dir, env=env, capture_output=True, text=True, timeout=900)
+        steps.append(f"docker compose up -d ({summarize(desired)})")
+        if proc.returncode != 0:
+            return ReconcileResult(ok=False, shard_count=n,
+                                   detail=f"compose up failed: {(proc.stderr or proc.stdout)[-500:]}",
+                                   steps=steps)
+        return ReconcileResult(ok=True, shard_count=n,
+                               detail="tickhouse reconciled via compose", steps=steps)
 
 
 def build_backend(cfg) -> object:
