@@ -88,6 +88,34 @@ def test_run_query_blocks_write_then_runs_readonly():
     assert out["kind"] == "table" and calls == ["select from trade"]
 
 
+# ---- federation / combine_results ----------------------------------------
+
+def test_combine_unions_rows_with_provenance():
+    g1 = qs.shape_result({"sym": ["AAPL"], "price": [1.0]})
+    g2 = qs.shape_result({"sym": ["MSFT"], "price": [2.0]})
+    out = qs.combine_results([("gw-emea", g1), ("gw-apac", g2)])
+    assert out["kind"] == "federated" and out["target_count"] == 2
+    assert out["columns"] == ["_target", "sym", "price"]
+    assert out["rows"] == [["gw-emea", "AAPL", 1.0], ["gw-apac", "MSFT", 2.0]]
+    assert out["row_count"] == 2
+
+
+def test_combine_outer_joins_mismatched_columns():
+    g1 = qs.shape_result({"sym": ["AAPL"], "price": [1.0]})
+    g2 = qs.shape_result({"sym": ["MSFT"], "venue": ["X"]})
+    out = qs.combine_results([("a", g1), ("b", g2)], add_provenance=False)
+    assert out["columns"] == ["sym", "price", "venue"]
+    # missing cells filled with None
+    assert out["rows"][0] == ["AAPL", 1.0, None]
+    assert out["rows"][1] == ["MSFT", None, "X"]
+
+
+def test_combine_respects_limit():
+    g = qs.shape_result({"x": list(range(10))})
+    out = qs.combine_results([("a", g), ("b", g)], limit=5)
+    assert len(out["rows"]) == 5 and out["truncated"] is True
+
+
 # ---- endpoint (guard path; no live q needed) -----------------------------
 
 @pytest.fixture()

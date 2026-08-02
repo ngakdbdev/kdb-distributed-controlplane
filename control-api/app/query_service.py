@@ -131,3 +131,46 @@ def run_query(query: str, conn, limit: int = DEFAULT_ROW_LIMIT,
     payload = shape_result(result, limit=limit)
     payload["query"] = query
     return payload
+
+
+def combine_results(labeled: list, add_provenance: bool = True,
+                    limit: int = DEFAULT_ROW_LIMIT) -> dict:
+    """Federate results from several targets into one grid (scatter-gather).
+
+    `labeled` is a list of (target_id, grid) for the targets that succeeded.
+    Rows are unioned; when schemas differ, columns are outer-joined and missing
+    cells filled with None. A `_target` provenance column is prepended so you
+    can see which cluster each row came from.
+
+    NOTE on aggregation: this unions rows. A single gateway already
+    scatter-gathers *within* its cluster, so combining gateways gives you each
+    cluster's rows side by side. For a grouped aggregate (select ... by ...),
+    the per-target partials appear together and a semantic re-aggregation (re-sum
+    / re-average by key) may still be wanted - that's noted to the caller rather
+    than guessed at, since the right merge depends on each column's aggregation.
+    """
+    # union of columns, preserving first-seen order
+    columns = []
+    for _tid, grid in labeled:
+        for c in grid.get("columns", []):
+            if c not in columns:
+                columns.append(c)
+
+    out_cols = (["_target"] + columns) if add_provenance else columns
+    rows = []
+    total = 0
+    truncated = False
+    for tid, grid in labeled:
+        gcols = grid.get("columns", [])
+        idx = {c: i for i, c in enumerate(gcols)}
+        total += grid.get("row_count", len(grid.get("rows", [])))
+        truncated = truncated or grid.get("truncated", False)
+        for r in grid.get("rows", []):
+            aligned = [r[idx[c]] if c in idx and idx[c] < len(r) else None for c in columns]
+            rows.append(([tid] + aligned) if add_provenance else aligned)
+            if len(rows) >= limit:
+                break
+
+    return {"columns": out_cols, "rows": rows[:limit], "row_count": total,
+            "truncated": truncated or total > limit, "kind": "federated",
+            "target_count": len(labeled)}

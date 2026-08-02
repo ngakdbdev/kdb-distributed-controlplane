@@ -21,6 +21,28 @@ OS_TYPES = ("ubuntu-22.04", "ubuntu-24.04", "rhel-9", "rocky-9", "amazonlinux-20
 PROFILES = ("high-throughput", "low-latency", "balanced")
 COMPONENT_TYPES = ("feedhandler", "logger", "tickerplant", "rdb", "idb", "hdb", "gateway")
 REQUIRED_COMPONENTS = ("tickerplant", "rdb", "hdb", "gateway")
+SHARDING_POLICIES = ("letter-range", "explicit-symbols")
+
+# Non-secret target config the admin fills per environment when building a
+# cluster. Secrets (access keys, service-principal secrets, kubeconfig tokens)
+# are NEVER stored in the spec - they live in the agent's environment/secret
+# store. These are the account/cluster coordinates the deploy needs.
+CLOUD_CONFIG_FIELDS = {
+    "aws": ["region", "vpc_id", "subnet_ids", "eks_cluster"],
+    "azure": ["subscription_id", "resource_group", "location", "aks_cluster"],
+    "gcp": ["project_id", "region", "gke_cluster"],
+    "onprem": ["compose_project_dir"],
+}
+# k8s settings apply to the managed-k8s clouds (not on-prem compose)
+KUBERNETES_CONFIG_FIELDS = ["namespace", "storage_class", "ingress_class"]
+
+
+def config_fields(cloud: str) -> list:
+    """Which target-config fields the wizard should collect for a cloud."""
+    fields = list(CLOUD_CONFIG_FIELDS.get(cloud, []))
+    if cloud in ("aws", "azure", "gcp"):
+        fields += KUBERNETES_CONFIG_FIELDS
+    return fields
 
 
 # --------------------------------------------------------------------------- #
@@ -100,9 +122,10 @@ class ComponentSpec:
 
 @dataclass
 class ShardRange:
-    label: str                  # e.g. "A-D"
-    lo: str                     # "A"
+    label: str                  # e.g. "A-D" (letter-range) or "custom-1" (explicit)
+    lo: str                     # "A"  (letter-range policy)
     hi: str                     # "D"
+    symbols: list = field(default_factory=list)   # explicit-symbols policy
 
     @property
     def id(self) -> str:
@@ -120,6 +143,8 @@ class TickHouseSpec:
     gateway_config: dict = field(default_factory=dict)
     ldap_ref: str = ""          # tenant LDAP binding name (optional)
     idb_enabled: bool = False
+    sharding_policy: str = "letter-range"
+    target_config: dict = field(default_factory=dict)   # cloud/k8s coordinates (non-secret)
 
 
 # --------------------------------------------------------------------------- #
@@ -160,13 +185,23 @@ def validate_spec(spec: TickHouseSpec) -> list:
         problems.append(f"profile must be one of {PROFILES}")
     if not spec.shards:
         problems.append("at least one shard range is required")
-    # shard ranges must not overlap
-    covered = []
-    for sr in sorted(spec.shards, key=lambda s: s.lo):
-        rng = range(ord(sr.lo), ord(sr.hi) + 1)
-        if any(c in covered for c in rng):
-            problems.append(f"shard range {sr.label} overlaps another range")
-        covered.extend(rng)
+    if spec.sharding_policy == "explicit-symbols":
+        seen = {}
+        for sr in spec.shards:
+            if not sr.symbols:
+                problems.append(f"shard {sr.label} has no symbols")
+            for sym in sr.symbols:
+                if sym in seen:
+                    problems.append(f"symbol {sym} is assigned to both {seen[sym]} and {sr.label}")
+                seen[sym] = sr.label
+    else:
+        # letter ranges must not overlap
+        covered = []
+        for sr in sorted(spec.shards, key=lambda s: s.lo):
+            rng = range(ord(sr.lo), ord(sr.hi) + 1)
+            if any(c in covered for c in rng):
+                problems.append(f"shard range {sr.label} overlaps another range")
+            covered.extend(rng)
     have = {c.type for c in spec.components}
     for req in REQUIRED_COMPONENTS:
         if req not in have:
@@ -198,13 +233,37 @@ def auto_hardware(profile: str, cloud: str, os: str, component: str) -> Hardware
                         tuning=list(_PROFILE_TUNING[profile]))
 
 
+def parse_explicit_shards(assignments: list) -> list:
+    """[{'label': 'core', 'symbols': ['AAPL','MSFT']}, ...] -> ShardRanges with
+    explicit symbol membership. lo/hi are placeholders (unused by this policy);
+    ids are stable by index."""
+    out = []
+    for i, a in enumerate(assignments or []):
+        syms = [s.strip().upper() for s in (a.get("symbols") or []) if s.strip()]
+        if not syms:
+            raise ValueError(f"shard '{a.get('label', i)}' has no symbols")
+        letter = chr(ord("A") + (i % 26))
+        out.append(ShardRange(label=a.get("label") or f"shard-{i+1}",
+                              lo=letter, hi=letter, symbols=syms))
+    if not out:
+        raise ValueError("no explicit shard assignments given")
+    return out
+
+
 def auto_spec(name: str, location: str, os: str, profile: str,
-              shard_ranges: str, idb: bool = False,
-              ldap_ref: str = "", gateway_config: dict | None = None) -> TickHouseSpec:
+              shard_ranges: str = "", idb: bool = False,
+              ldap_ref: str = "", gateway_config: dict | None = None,
+              sharding_policy: str = "letter-range",
+              shard_symbols: list | None = None,
+              target_config: dict | None = None) -> TickHouseSpec:
     """Build a fully auto-tuned TickHouseSpec from the high-level choices - the
-    'reduce admin overhead' path: you pick name/location/os/profile/shards and
-    every component's hardware is filled in for you."""
-    shards = parse_shard_ranges(shard_ranges)
+    'reduce admin overhead' path: pick name/location/os/profile/shards and every
+    component's hardware is filled in for you. Shards are either letter-ranges
+    ('a-d, e-h') or explicit symbol assignments (sharding_policy)."""
+    if sharding_policy == "explicit-symbols":
+        shards = parse_explicit_shards(shard_symbols or [])
+    else:
+        shards = parse_shard_ranges(shard_ranges)
     comp_types = ["feedhandler", "logger", "tickerplant", "rdb", "hdb", "gateway"]
     if idb:
         comp_types.insert(comp_types.index("hdb"), "idb")
@@ -216,7 +275,9 @@ def auto_spec(name: str, location: str, os: str, profile: str,
     return TickHouseSpec(name=name, location=location, os=os, profile=profile,
                          shards=shards, components=components,
                          gateway_config=gateway_config or {"port": 5050},
-                         ldap_ref=ldap_ref, idb_enabled=idb)
+                         ldap_ref=ldap_ref, idb_enabled=idb,
+                         sharding_policy=sharding_policy,
+                         target_config=target_config or {})
 
 
 # --------------------------------------------------------------------------- #
@@ -224,12 +285,14 @@ def auto_spec(name: str, location: str, os: str, profile: str,
 # --------------------------------------------------------------------------- #
 def spec_to_dict(spec: TickHouseSpec) -> dict:
     d = asdict(spec)
-    d["shards"] = [{"id": sr.id, "label": sr.label, "lo": sr.lo, "hi": sr.hi} for sr in spec.shards]
+    d["shards"] = [{"id": sr.id, "label": sr.label, "lo": sr.lo, "hi": sr.hi, "symbols": sr.symbols}
+                   for sr in spec.shards]
     return d
 
 
 def spec_from_dict(d: dict) -> TickHouseSpec:
-    shards = [ShardRange(label=s.get("label", f"{s['lo']}-{s['hi']}"), lo=s["lo"], hi=s["hi"])
+    shards = [ShardRange(label=s.get("label", f"{s['lo']}-{s['hi']}"), lo=s["lo"], hi=s["hi"],
+                         symbols=s.get("symbols", []))
               for s in d.get("shards", [])]
     components = []
     for c in d.get("components", []):
@@ -240,7 +303,9 @@ def spec_from_dict(d: dict) -> TickHouseSpec:
         name=d["name"], location=d["location"], os=d["os"], profile=d["profile"],
         shards=shards, components=components,
         gateway_config=d.get("gateway_config", {}), ldap_ref=d.get("ldap_ref", ""),
-        idb_enabled=d.get("idb_enabled", False))
+        idb_enabled=d.get("idb_enabled", False),
+        sharding_policy=d.get("sharding_policy", "letter-range"),
+        target_config=d.get("target_config", {}))
 
 
 def to_provision_payload(spec: TickHouseSpec) -> dict:
@@ -252,7 +317,9 @@ def to_provision_payload(spec: TickHouseSpec) -> dict:
         "os": spec.os,
         "profile": spec.profile,
         "shardCount": len(spec.shards),
-        "shards": [{"id": sr.id, "label": sr.label, "lo": sr.lo, "hi": sr.hi} for sr in spec.shards],
+        "sharding_policy": spec.sharding_policy,
+        "shards": [{"id": sr.id, "label": sr.label, "lo": sr.lo, "hi": sr.hi,
+                    "symbols": sr.symbols} for sr in spec.shards],
         "components": [
             {"type": c.type, "per_shard": c.per_shard,
              "hardware": asdict(c.hardware) if c.hardware else None}
@@ -261,4 +328,5 @@ def to_provision_payload(spec: TickHouseSpec) -> dict:
         "gateway_config": spec.gateway_config,
         "ldap_ref": spec.ldap_ref,
         "idb_enabled": spec.idb_enabled,
+        "target_config": spec.target_config,
     }

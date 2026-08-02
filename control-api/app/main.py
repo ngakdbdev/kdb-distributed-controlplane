@@ -6,8 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .db import init_db
 from . import licensing
 from .routers import (audit, auth, auth_ldap, auth_sso, connectors, export, fleet,
-                      license as license_router, metrics, query, subscribers, tenants,
-                      tickhouse, topology)
+                      license as license_router, metrics, query, subscribers, symbols,
+                      tenants, tickhouse, topology)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -41,6 +41,7 @@ app.include_router(audit.router)
 app.include_router(license_router.router)
 app.include_router(tickhouse.router)
 app.include_router(query.router)
+app.include_router(symbols.router)
 
 
 @app.on_event("startup")

@@ -1,3 +1,4 @@
+import { PRODUCT } from "../brand.js";
 const TABS = [
   { id: "topology", label: "Topology" },
   { id: "tickhouses", label: "TickHouses" },
@@ -13,7 +14,7 @@ const TABS = [
 export default function Nav({ active, onChange, onLogout }) {
   return (
     <nav className="nav">
-      <div className="nav-brand"><span className="nav-brand-mark">QByte</span> kdb+ tick control plane</div>
+      <div className="nav-brand"><span className="nav-brand-mark">{PRODUCT.slice(0, 2)}</span> {PRODUCT}</div>
       <div className="nav-tabs">
         {TABS.map((t) => (
           <button

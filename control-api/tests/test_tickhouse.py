@@ -103,5 +103,44 @@ def test_provision_payload_matches_gateway_shard_shape():
     payload = th.to_provision_payload(spec)
     assert payload["shardCount"] == 2
     s0 = payload["shards"][0]
-    assert set(s0) == {"id", "label", "lo", "hi"}   # what shards.json/gateway use
+    assert set(s0) == {"id", "label", "lo", "hi", "symbols"}   # gateway shape + symbols
     assert payload["components"][0]["hardware"]["vcpus"] > 0
+
+
+# ---- cloud / k8s target config (item: pass config for aws/gcp/azure/k8s) ----
+
+def test_config_fields_per_cloud():
+    assert "region" in th.config_fields("aws")
+    assert "namespace" in th.config_fields("aws")        # k8s fields on managed clouds
+    assert "project_id" in th.config_fields("gcp")
+    assert "resource_group" in th.config_fields("azure")
+    assert "namespace" not in th.config_fields("onprem") # compose, no k8s
+
+def test_target_config_flows_into_spec_and_payload():
+    tc = {"region": "eu-west-1", "eks_cluster": "acme-prod", "namespace": "tick",
+          "storage_class": "gp3"}
+    spec = th.auto_spec("acme", "aws", "ubuntu-22.04", "low-latency", "a-z", target_config=tc)
+    assert spec.target_config["namespace"] == "tick"
+    payload = th.to_provision_payload(spec)
+    assert payload["target_config"]["storage_class"] == "gp3"
+    back = th.spec_from_dict(th.spec_to_dict(spec))
+    assert back.target_config["region"] == "eu-west-1"
+
+
+# ---- explicit-symbol sharding (item: user-configurable symbol shards) ----
+
+def test_explicit_symbol_sharding():
+    spec = th.auto_spec("acme", "aws", "ubuntu-22.04", "balanced", sharding_policy="explicit-symbols",
+                        shard_symbols=[{"label": "mega-cap", "symbols": ["AAPL", "MSFT"]},
+                                       {"label": "india", "symbols": ["RELIANCE", "TCS"]}])
+    assert th.validate_spec(spec) == []
+    assert spec.sharding_policy == "explicit-symbols"
+    assert spec.shards[0].symbols == ["AAPL", "MSFT"]
+    payload = th.to_provision_payload(spec)
+    assert payload["shards"][1]["symbols"] == ["RELIANCE", "TCS"]
+
+def test_explicit_sharding_flags_duplicate_symbol():
+    spec = th.auto_spec("acme", "aws", "ubuntu-22.04", "balanced", sharding_policy="explicit-symbols",
+                        shard_symbols=[{"label": "a", "symbols": ["AAPL"]},
+                                       {"label": "b", "symbols": ["AAPL"]}])
+    assert any("assigned to both" in p for p in th.validate_spec(spec))

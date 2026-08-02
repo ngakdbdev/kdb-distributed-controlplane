@@ -63,6 +63,11 @@ export const api = {
   queryTargets: () => request("/query/targets"),
   queryTables: (target) => request(`/query/tables?target=${encodeURIComponent(target)}`),
   runQuery: (body) => request("/query/run", { method: "POST", body: JSON.stringify(body) }),
+
+  // Symbol reference
+  searchSymbols: (q, market) =>
+    request(`/symbols/search?q=${encodeURIComponent(q || "")}${market ? `&market=${encodeURIComponent(market)}` : ""}`),
+  symbolMarkets: () => request("/symbols/markets"),
   toggleConnector: (id) => request(`/connectors/${id}/toggle`, { method: "POST" }),
 
   listSubscribers: () => request("/subscribers"),

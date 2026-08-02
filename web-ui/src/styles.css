@@ -234,3 +234,87 @@ kbd {
 .query-grid td { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 0.82rem; white-space: nowrap; }
 .query-grid .null { color: var(--muted); }
 @media (max-width: 760px) { .query-workspace { grid-template-columns: 1fr; } }
+
+/* ---- full-screen login ---- */
+.login-fullscreen { min-height: 100vh; display: grid; grid-template-columns: 1.1fr 0.9fr; }
+.login-hero {
+  background: linear-gradient(150deg, #0b1a3a 0%, #0d1117 55%, #131a2e 100%);
+  display: flex; align-items: center; padding: 3rem 3.5rem; position: relative; overflow: hidden;
+}
+.login-hero::after {
+  content: ""; position: absolute; inset: 0;
+  background: radial-gradient(700px 400px at 80% 10%, rgba(79,140,255,0.18), transparent 60%);
+  pointer-events: none;
+}
+.login-hero-inner { max-width: 460px; z-index: 1; }
+.login-logo { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 2.5rem; }
+.login-logo-mark {
+  background: var(--accent); color: white; font-weight: 800; font-size: 1.1rem;
+  width: 2.4rem; height: 2.4rem; display: grid; place-items: center; border-radius: 9px;
+  letter-spacing: 0.02em;
+}
+.login-logo-name { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.01em; }
+.login-hero-title { font-size: 2rem; line-height: 1.2; font-weight: 700; margin: 0 0 1.5rem; }
+.login-hero-points { list-style: none; padding: 0; margin: 0; color: var(--muted); }
+.login-hero-points li { padding: 0.4rem 0 0.4rem 1.6rem; position: relative; line-height: 1.4; }
+.login-hero-points li::before {
+  content: "▸"; color: var(--accent); position: absolute; left: 0;
+}
+.login-hero-foot { margin-top: 2.5rem; color: var(--muted); font-size: 0.85rem; }
+
+.login-panel { display: flex; align-items: center; justify-content: center; padding: 2rem; background: var(--bg); }
+.login-form {
+  width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 0.75rem;
+}
+.login-form h2 { margin: 0; font-size: 1.6rem; }
+.login-form label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; color: var(--muted); }
+.login-form input {
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 0.6rem 0.7rem; font-size: 0.95rem;
+}
+.login-form input:focus { outline: none; border-color: var(--accent); }
+.login-submit {
+  background: var(--accent); color: white; border: none; border-radius: 8px;
+  padding: 0.7rem; font-size: 0.95rem; font-weight: 600; cursor: pointer; margin-top: 0.25rem;
+}
+.login-submit:disabled { opacity: 0.6; cursor: default; }
+.login-copyright { text-align: center; color: var(--muted); font-size: 0.75rem; margin-top: 1rem; }
+@media (max-width: 800px) {
+  .login-fullscreen { grid-template-columns: 1fr; }
+  .login-hero { display: none; }
+}
+
+/* ---- symbol picker ---- */
+.symbol-picker { position: relative; }
+.symbol-chips {
+  display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center;
+  background: #0d1117; border: 1px solid var(--border); border-radius: 8px; padding: 0.3rem 0.4rem; min-height: 2.2rem;
+}
+.symbol-chips input { flex: 1; min-width: 8rem; background: transparent; border: none; color: var(--text); outline: none; font-size: 0.85rem; }
+.symbol-chip { background: #1f2530; border: 1px solid var(--border); border-radius: 6px; padding: 0.1rem 0.4rem; font-family: monospace; font-size: 0.8rem; display: inline-flex; align-items: center; gap: 0.3rem; }
+.symbol-chip button { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0; font-size: 0.9rem; }
+.symbol-dropdown {
+  position: absolute; z-index: 20; top: 100%; left: 0; right: 0; margin-top: 0.25rem;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; max-height: 240px; overflow: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.symbol-option { display: grid; grid-template-columns: 5rem 1fr auto; gap: 0.5rem; align-items: center; width: 100%; text-align: left; background: none; border: none; color: var(--text); padding: 0.4rem 0.6rem; cursor: pointer; }
+.symbol-option:hover { background: #1f2530; }
+.symbol-option-sym { font-family: monospace; font-weight: 600; }
+.symbol-option-name { color: var(--muted); font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.symbol-option-market { color: var(--accent); font-size: 0.72rem; }
+
+/* ---- query targets multi-select + federation ---- */
+.target-list { display: flex; flex-direction: column; gap: 0.3rem; }
+.target-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+.per-target { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.5rem; }
+.per-target-pill { font-size: 0.75rem; border-radius: 999px; padding: 0.15rem 0.5rem; border: 1px solid var(--border); }
+.per-target-pill.ok { color: var(--success); border-color: var(--success); }
+.per-target-pill.fail { color: var(--danger); border-color: var(--danger); }
+
+/* ---- wizard sections ---- */
+.wizard-section-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0.9rem 0 0.4rem; }
+.form-row.wrap { flex-wrap: wrap; }
+.sym-shards { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem; }
+.sym-shard-row { display: grid; grid-template-columns: 7rem 1fr auto; gap: 0.5rem; align-items: start; }
+.sym-shard-label { align-self: start; }
