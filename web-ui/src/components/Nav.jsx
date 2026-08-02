@@ -2,6 +2,7 @@ const TABS = [
   { id: "topology", label: "Topology" },
   { id: "tickhouses", label: "TickHouses" },
   { id: "metrics", label: "Metrics" },
+  { id: "query", label: "Query" },
   { id: "connectors", label: "Connectors" },
   { id: "subscribers", label: "Subscribers" },
   { id: "fleet", label: "Fleet" },
@@ -12,7 +13,7 @@ const TABS = [
 export default function Nav({ active, onChange, onLogout }) {
   return (
     <nav className="nav">
-      <div className="nav-brand">kdb+ tick control plane</div>
+      <div className="nav-brand"><span className="nav-brand-mark">QByte</span> kdb+ tick control plane</div>
       <div className="nav-tabs">
         {TABS.map((t) => (
           <button

@@ -58,6 +58,11 @@ export const api = {
   provisionTickhouse: (id, agentId) =>
     request(`/tickhouses/${id}/provision`, { method: "POST", body: JSON.stringify({ agent_id: agentId }) }),
   tickhouseStatus: (id) => request(`/tickhouses/${id}/status`),
+
+  // Live query workspace
+  queryTargets: () => request("/query/targets"),
+  queryTables: (target) => request(`/query/tables?target=${encodeURIComponent(target)}`),
+  runQuery: (body) => request("/query/run", { method: "POST", body: JSON.stringify(body) }),
   toggleConnector: (id) => request(`/connectors/${id}/toggle`, { method: "POST" }),
 
   listSubscribers: () => request("/subscribers"),
