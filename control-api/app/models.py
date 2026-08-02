@@ -38,6 +38,7 @@ class User(SQLModel, table=True):
     active: bool = True
     auth_provider: str = "local"                 # "local" / "entra"
     external_id: Optional[str] = None            # Entra object id (oid), for SSO users
+    can_trade: bool = False                       # may place orders in the trading terminal
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -223,3 +224,34 @@ class TickHouse(SQLModel, table=True):
     agent_id: Optional[int] = Field(default=None, foreign_key="agent.id")
     last_command_id: Optional[int] = Field(default=None, foreign_key="command.id")
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# --------------------------------------------------------------------------- trading
+class Order(SQLModel, table=True):
+    """A trading order. In paper mode it's filled by the simulated OMS at the
+    reference/limit price; a real broker route is a configured seam. route
+    records how it was handled ('paper' / 'broker')."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenant.id", index=True)
+    user_email: str = Field(index=True)
+    symbol: str = Field(index=True)
+    side: str                                                  # "buy" / "sell"
+    qty: float
+    order_type: str = "market"                                # "market" / "limit"
+    limit_price: Optional[float] = None
+    status: str = "new"                                        # new / filled / rejected / cancelled
+    route: str = "paper"
+    fill_price: Optional[float] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Position(SQLModel, table=True):
+    """A tenant's net position in a symbol (weighted-average cost), maintained
+    as orders fill. realized_pnl accumulates as fills reduce/flip the position."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenant.id", index=True)
+    symbol: str = Field(index=True)
+    qty: float = 0.0
+    avg_price: float = 0.0
+    realized_pnl: float = 0.0
+    updated_at: datetime = Field(default_factory=datetime.utcnow)

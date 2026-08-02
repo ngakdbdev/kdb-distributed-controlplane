@@ -68,6 +68,16 @@ export const api = {
   searchSymbols: (q, market) =>
     request(`/symbols/search?q=${encodeURIComponent(q || "")}${market ? `&market=${encodeURIComponent(market)}` : ""}`),
   symbolMarkets: () => request("/symbols/markets"),
+
+  // Trading terminal
+  tradingPermission: () => request("/trading/permission"),
+  placeOrder: (body) => request("/trading/orders", { method: "POST", body: JSON.stringify(body) }),
+  listOrders: () => request("/trading/orders"),
+  getPositions: (marks) => request(`/trading/positions${marks ? `?marks=${encodeURIComponent(marks)}` : ""}`),
+  computeGreeks: (body) => request("/trading/greeks", { method: "POST", body: JSON.stringify(body) }),
+  marketSummary: (body) => request("/trading/market", { method: "POST", body: JSON.stringify(body) }),
+  forecast: (body) => request("/trading/forecast", { method: "POST", body: JSON.stringify(body) }),
+  grantTrading: (email, can) => request("/trading/grant", { method: "POST", body: JSON.stringify({ email, can_trade: can }) }),
   toggleConnector: (id) => request(`/connectors/${id}/toggle`, { method: "POST" }),
 
   listSubscribers: () => request("/subscribers"),
