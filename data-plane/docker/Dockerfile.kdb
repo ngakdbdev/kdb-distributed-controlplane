@@ -1,32 +1,35 @@
 # Dockerfile.kdb - runs any q process in the tick chain (tp/wdb/rdb/idb/gateway)
-# KDB-X Community Edition binaries are NOT bundled here - Anthropic's sandbox
-# and generic base images cannot reach kx.com to download them, and KX's
-# license terms require you to fetch the binary from KX directly.
 #
-# Before building this image:
-#   1. Sign up and download KDB-X Community Edition (free, no expiry) from
-#      https://kx.com/products/kdb-x/ or the KX Developer Center
-#   2. Place the linux binary + license (k4.lic) at data-plane/docker/kdbx/
-#      so the COPY below can find them
+# KX binaries are NOT baked into the image. Instead, mount a DATA FOLDER holding
+# all your KX binaries and the container picks the right one for its platform at
+# start (see docker/kdb-entrypoint.sh). Unzip the KX portal downloads into the
+# data folder (each has just the binary; q.k is embedded) + add your licence:
+#     <data folder>/l64/q        (Linux x86-64)
+#     <data folder>/l64arm/q     (Linux ARM64 - Graviton etc.)
+#     <data folder>/k4.lic       (your KX licence)
+# Helper: data-plane/docker/stage-kdbx.sh. compose mounts
+# ${KX_BINARIES_DIR:-./data-plane/docker/kdbx} at /kdbx.
 #
-# See deploy/gcp/README.md for the exact steps.
+# KDB-X Community Edition is free (no expiry, commercial use allowed) from
+# https://kx.com/products/kdb-x/ - fetch it yourself; KX's terms don't allow us
+# to bundle or redistribute the binary or a licence. Never commit a licence.
 
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates rlwrap procps && \
+    ca-certificates curl rlwrap procps unzip && \
     rm -rf /var/lib/apt/lists/*
-
-# KDB-X / kdb+ binary and license - fetched by you per the note above
-COPY docker/kdbx/q /usr/local/kdbx/q
-COPY docker/kdbx/k4.lic /usr/local/kdbx/k4.lic
-ENV QHOME=/usr/local/kdbx
-ENV QLIC=/usr/local/kdbx/k4.lic
-ENV PATH="/usr/local/kdbx:${PATH}"
 
 WORKDIR /app
 COPY q/ /app/
+COPY docker/kdb-entrypoint.sh /usr/local/bin/kdb-entrypoint.sh
+RUN chmod +x /usr/local/bin/kdb-entrypoint.sh
 
-# each service overrides CMD with its own script + flags via docker-compose
-ENTRYPOINT ["q"]
+# data folder with per-platform binaries is mounted here at run time
+ENV KX_BINARIES_DIR=/kdbx
+ENV PATH="/kdbx:${PATH}"
+
+# the entrypoint resolves the arch, sets QHOME/QLIC, and execs the right q;
+# each service passes its own script + flags as CMD via docker-compose.
+ENTRYPOINT ["/usr/local/bin/kdb-entrypoint.sh"]
 CMD ["tick.q"]
