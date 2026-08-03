@@ -31,6 +31,31 @@ config is host-agnostic.
 Port 80 must stay open even though the app is HTTPS-only — Let's Encrypt uses it
 for the certificate challenge, and Caddy uses it to issue the redirect.
 
+## Local HTTPS testing (no public domain)
+
+To exercise the HTTPS chain on your own machine before pointing real DNS at a
+server — Caddy issues a self-signed cert from its internal CA, so no Let's
+Encrypt and no public reachability are needed.
+
+1. Point the domain at your machine. Add to your hosts file
+   (`C:\Windows\System32\drivers\etc\hosts` as Administrator, or
+   `/etc/hosts`):
+   ```
+   127.0.0.1 tickforge.qbytecomputing.com
+   ```
+2. Bring down the Let's Encrypt overlay if it's running (it will be stuck
+   retrying a cert it can't get), then start the local one:
+   ```
+   docker compose -f docker-compose.yml -f deploy/tls/docker-compose.tls.yml down
+   docker compose -f docker-compose.yml -f deploy/tls/docker-compose.local-tls.yml up -d --build
+   ```
+3. Open `https://tickforge.qbytecomputing.com` and accept the browser's
+   "not trusted" warning — expected for a self-signed cert. (To remove the
+   warning, export and trust Caddy's root CA from the `caddy-local-data` volume.)
+
+This is only for local testing. On a real host use `docker-compose.tls.yml`
+(Let's Encrypt) with public DNS pointing at the machine.
+
 ## On AWS (later) — two options, no app changes
 
 - **Keep this setup on EC2.** Point an Elastic IP (and the DNS record) at the

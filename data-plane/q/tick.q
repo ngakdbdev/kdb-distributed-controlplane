@@ -34,7 +34,7 @@ if[not `TPLOG in key `.; system "mkdir -p log"]
 .u.internalSecret:$[count getenv`INTERNAL_SECRET; getenv`INTERNAL_SECRET; ""]
 
 .u.strikes:()!()                    / handle -> consecutive-breach count
-.u.discarded:([] time:`timestamp$(); handle:`int$(); bytes:`long$(); tables:`symbol$(); reason:`symbol$())
+.u.discarded:([] time:`timestamp$(); handle:`int$(); bytes:`long$(); tbls:`symbol$(); reason:`symbol$())
 
 .u.init:{
   if[not `TPLOG in key `.; TPLOG::.u.L];
@@ -115,7 +115,7 @@ if[not `TPLOG in key `.; system "mkdir -p log"]
   ([] handle:hs;
       queuedBytes:.u.queued each hs;
       strikes:{$[x in key .u.strikes; .u.strikes x; 0]} each hs;
-      tables:{`$", " sv string .u.tablesOf x} each hs)
+      tbls:{`$", " sv string .u.tablesOf x} each hs)
   }
 
 / clean up a subscriber that disconnected on its own (fixes the leaked-handle

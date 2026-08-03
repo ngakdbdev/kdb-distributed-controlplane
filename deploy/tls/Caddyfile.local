@@ -1,0 +1,23 @@
+# Local-testing Caddy config: issues a self-signed certificate from Caddy's own
+# internal CA instead of Let's Encrypt. Use this when the domain points at your
+# own machine (e.g. a hosts-file entry -> 127.0.0.1) and there's no public DNS /
+# reachability for a real cert. The browser will warn the cert isn't trusted —
+# that's expected locally; proceed past it (or trust Caddy's root CA).
+#
+# For real deployments use ../Caddyfile (Let's Encrypt), not this file.
+
+{
+	local_certs
+}
+
+{$TICKFORGE_DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	reverse_proxy web-ui:80
+}

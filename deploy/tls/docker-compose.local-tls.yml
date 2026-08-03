@@ -1,0 +1,32 @@
+# Local HTTPS testing overlay. Caddy serves the domain with a self-signed cert
+# from its internal CA — no Let's Encrypt, no public DNS required. Use when the
+# domain resolves to your own machine (hosts-file entry -> 127.0.0.1).
+#
+#   docker compose -f docker-compose.yml -f deploy/tls/docker-compose.local-tls.yml up -d --build
+#
+# Then open https://tickforge.qbytecomputing.com and accept the browser's
+# "not trusted" warning (expected for a self-signed cert). For real deployments
+# use docker-compose.tls.yml instead (Let's Encrypt).
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      TICKFORGE_DOMAIN: "${TICKFORGE_DOMAIN:-tickforge.qbytecomputing.com}"
+    volumes:
+      - ./deploy/tls/Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - caddy-local-data:/data
+      - caddy-local-config:/config
+    depends_on:
+      - web-ui
+
+  # Caddy is the only public entrypoint; unpublish the app's plain-HTTP port.
+  web-ui:
+    ports: !reset []
+
+volumes:
+  caddy-local-data:
+  caddy-local-config:
