@@ -20,7 +20,7 @@ if[0=count shardId; shardId:"s0"]
 
 .u.shard:`$shardId
 .u.l:`$":log/", shardId, "_tp"
-.u.L:.u.l,".",string .z.d
+.u.L:`$(string[.u.l],".",string .z.d)   / e.g. `:log/s0_tp.2026.08.03
 if[not `TPLOG in key `.; system "mkdir -p log"]
 
 .u.w:()!()                          / subscriber handles keyed by table
@@ -38,7 +38,7 @@ if[not `TPLOG in key `.; system "mkdir -p log"]
 
 .u.init:{
   if[not `TPLOG in key `.; TPLOG::.u.L];
-  L::hopen `$":",string TPLOG;
+  L::hopen TPLOG;
   .u.i::0j;
   }
 
@@ -50,7 +50,7 @@ if[not `TPLOG in key `.; system "mkdir -p log"]
 .u.upd:{[t;data]
   data:$[0>type data; enlist data; data];
   t insert data;
-  -25!(`.u.upd;t;data);              / log first, ack second (DR guarantee)
+  L enlist (`.u.upd;t;data);        / log first, ack second (DR guarantee)
   .u.i+:1;
   if[count w:.u.w t; (neg w) @\: (`.u.upd;t;data)];
   }

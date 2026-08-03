@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
 
-export default function Subscribers() {
+export default function Subscribers({ onNavigate }) {
   const [subscribers, setSubscribers] = useState([]);
   const [error, setError] = useState("");
   const [form, setForm] = useState({ name: "", table: "trade", role: "read-only" });
   const [busy, setBusy] = useState(false);
+  const [tpUp, setTpUp] = useState(null);   // are any tickerplants live?
 
   async function refresh() {
     try {
@@ -13,6 +14,11 @@ export default function Subscribers() {
     } catch (err) {
       setError(String(err));
     }
+    try {
+      const topo = await api.topologyStatus();
+      const tps = Object.entries(topo).filter(([n]) => n.startsWith("tp-"));
+      setTpUp(tps.some(([, st]) => st === "running"));
+    } catch { setTpUp(false); }
   }
 
   useEffect(() => { refresh(); }, []);
@@ -47,7 +53,13 @@ export default function Subscribers() {
   return (
     <div className="page">
       <h2>Subscribers & entitlements</h2>
-      <p className="muted">Who or what may subscribe to which table. Simple role-based list for the demo.</p>
+      <p className="muted">Who or what may subscribe to which table, and whether a live stream exists to subscribe to.</p>
+      {tpUp === false && (
+        <div className="ops-banner warn">
+          <div><strong>No live tickerplants or data streams.</strong> Subscribers can be defined, but nothing will be delivered until a tickerplant is running and a feed is publishing.</div>
+          <button className="primary" onClick={() => onNavigate?.("topology")}>Open Topology →</button>
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
 
       <form className="card inline-form" onSubmit={addSubscriber}>
@@ -70,6 +82,9 @@ export default function Subscribers() {
       <table className="data-table">
         <thead><tr><th>Name</th><th>Table</th><th>Role</th><th>Active</th><th></th></tr></thead>
         <tbody>
+          {subscribers.length === 0 && (
+            <tr><td colSpan={5} className="muted" style={{ padding: "1rem" }}>No subscribers defined yet.</td></tr>
+          )}
           {subscribers.map((s) => (
             <tr key={s.id}>
               <td>{s.name}</td>

@@ -42,16 +42,22 @@ export default function Topology({ onNavigate }) {
   }
 
   function ServiceRow({ svc }) {
+    const st = status[svc] || "unknown";
+    const isRunning = st === "running";
+    const busy = busyService === svc;
     return (
       <div className="service-row" key={svc}>
         <span className="service-name">{svc}</span>
-        <StatusBadge status={status[svc] || "unknown"} />
+        <StatusBadge status={st} />
         <div className="service-actions">
-          <button disabled={busyService === svc} onClick={() => act(svc, api.startService)}>Start</button>
-          <button disabled={busyService === svc} onClick={() => act(svc, api.stopService)}>Stop</button>
-          <button disabled={busyService === svc} onClick={() => act(svc, api.restartService)}>Restart</button>
-          <button className="danger" disabled={busyService === svc}
-                  title="Stops the container to demonstrate the watchdog's self-healing runbook"
+          <button disabled={busy || isRunning} title={isRunning ? "already running" : "start this process"}
+                  onClick={() => act(svc, api.startService)}>Start</button>
+          <button disabled={busy || !isRunning} title={isRunning ? "stop this process" : "no running instance to stop"}
+                  onClick={() => act(svc, api.stopService)}>Stop</button>
+          <button disabled={busy || !isRunning} title={isRunning ? "restart this process" : "no running instance to restart"}
+                  onClick={() => act(svc, api.restartService)}>Restart</button>
+          <button className="danger" disabled={busy || !isRunning}
+                  title={isRunning ? "Stops the container to demonstrate the watchdog's self-healing runbook" : "no running instance to kill"}
                   onClick={() => act(svc, api.stopService)}>
             Kill (demo self-heal)
           </button>
