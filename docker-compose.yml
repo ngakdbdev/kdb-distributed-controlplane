@@ -11,67 +11,108 @@ x-feed-build: &feed-build
   context: ./data-plane
   dockerfile: docker/Dockerfile.feed
 
+x-kdb-env: &kdb-env
+  KX_INSTALL_SOURCE: "${KX_INSTALL_SOURCE:-local}"
+  KX_BEARER_TOKEN: "${KX_BEARER_TOKEN:-}"
+  KX_VERSION: "${KX_VERSION:-4.1}"
+  KX_CHANNEL: "${KX_CHANNEL:-~latest~}"
+  KX_LICENSE_PATH: "${KX_LICENSE_PATH:-/kdbx/k4.lic}"
+
 services:
   # ---------------------------------------------------------------- shard s0 (A-M)
   tp-s0:
     build: *kdb-build
     command: ["tick.q", "s0", "-p", "5010"]
+    environment:
+      <<: *kdb-env
     restart: unless-stopped
     volumes:
+      - ${KX_BINARIES_DIR:-./data-plane/docker/kdbx}:/kdbx:ro
+      - kx-cache:/kdbx-cache
       - tp-log-s0:/app/log
 
   wdb-s0:
     build: *kdb-build
     command: ["wdb.q", "-shard", "s0", "-tphost", "tp-s0", "-tpport", "5010",
               "-flushmin", "2", "-dbdir", "/data/db", "-p", "5040"]
+    environment:
+      <<: *kdb-env
     restart: unless-stopped
     depends_on: [tp-s0]
     volumes:
+      - ${KX_BINARIES_DIR:-./data-plane/docker/kdbx}:/kdbx:ro
+      - kx-cache:/kdbx-cache
       - db-s0:/data/db
 
   rdb-s0:
     build: *kdb-build
     command: ["rdb.q", "-shard", "s0", "-tphost", "tp-s0", "-tpport", "5010", "-p", "5020"]
+    environment:
+      <<: *kdb-env
     restart: unless-stopped
     depends_on: [tp-s0]
+    volumes:
+      - ${KX_BINARIES_DIR:-./data-plane/docker/kdbx}:/kdbx:ro
+      - kx-cache:/kdbx-cache
 
   idb-s0:
     build: *kdb-build
     command: ["idb.q", "-shard", "s0", "-dbdir", "/data/db", "-pollsec", "15", "-p", "5030"]
+    environment:
+      <<: *kdb-env
     restart: unless-stopped
     depends_on: [wdb-s0]
     volumes:
+      - ${KX_BINARIES_DIR:-./data-plane/docker/kdbx}:/kdbx:ro
+      - kx-cache:/kdbx-cache
       - db-s0:/data/db
 
   # ---------------------------------------------------------------- shard s1 (N-Z)
   tp-s1:
     build: *kdb-build
     command: ["tick.q", "s1", "-p", "5010"]
+    environment:
+      <<: *kdb-env
     restart: unless-stopped
     volumes:
+      - ${KX_BINARIES_DIR:-./data-plane/docker/kdbx}:/kdbx:ro
+      - kx-cache:/kdbx-cache
       - tp-log-s1:/app/log
 
   wdb-s1:
     build: *kdb-build
     command: ["wdb.q", "-shard", "s1", "-tphost", "tp-s1", "-tpport", "5010",
               "-flushmin", "2", "-dbdir", "/data/db", "-p", "5040"]
+    environment:
+      <<: *kdb-env
     restart: unless-stopped
     depends_on: [tp-s1]
     volumes:
+      - ${KX_BINARIES_DIR:-./data-plane/docker/kdbx}:/kdbx:ro
+      - kx-cache:/kdbx-cache
       - db-s1:/data/db
 
   rdb-s1:
     build: *kdb-build
     command: ["rdb.q", "-shard", "s1", "-tphost", "tp-s1", "-tpport", "5010", "-p", "5020"]
+    environment:
+      <<: *kdb-env
     restart: unless-stopped
     depends_on: [tp-s1]
+    volumes:
+      - ${KX_BINARIES_DIR:-./data-plane/docker/kdbx}:/kdbx:ro
+      - kx-cache:/kdbx-cache
 
   idb-s1:
     build: *kdb-build
     command: ["idb.q", "-shard", "s1", "-dbdir", "/data/db", "-pollsec", "15", "-p", "5030"]
+    environment:
+      <<: *kdb-env
     restart: unless-stopped
     depends_on: [wdb-s1]
     volumes:
+      - ${KX_BINARIES_DIR:-./data-plane/docker/kdbx}:/kdbx:ro
+      - kx-cache:/kdbx-cache
       - db-s1:/data/db
 
   # -------------------------------------------------------------------- gateway
@@ -81,8 +122,11 @@ services:
     build: *kdb-build
     command: ["gateway.q", "-p", "5050"]
     environment:
+      <<: *kdb-env
       SHARDS_JSON: /app/shards.json
     volumes:
+      - ${KX_BINARIES_DIR:-./data-plane/docker/kdbx}:/kdbx:ro
+      - kx-cache:/kdbx-cache
       - ./data-plane/shards.json:/app/shards.json:ro
     restart: unless-stopped
     depends_on: [rdb-s0, idb-s0, wdb-s0, rdb-s1, idb-s1, wdb-s1]
@@ -173,3 +217,4 @@ volumes:
   db-s1:
   control-api-data:
   postgres-data:
+  kx-cache:

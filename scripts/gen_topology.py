@@ -30,6 +30,25 @@ IDB = topology.TIER_PORTS["idb"]
 WDB = topology.TIER_PORTS["wdb"]
 GW = topology.TIER_PORTS["gateway"]
 
+# The data folder of KX binaries, mounted read-only into every kdb service. The
+# container's entrypoint picks the right <arch>/q at start (docker/kdb-entrypoint.sh),
+# so one image runs on amd64 or arm64. Override the host path with KX_BINARIES_DIR.
+# The kx-cache volume is writable scratch for the portal-pull fallback.
+KX_BIN_MOUNT = "${KX_BINARIES_DIR:-./data-plane/docker/kdbx}:/kdbx:ro"
+KX_CACHE_MOUNT = "kx-cache:/kdbx-cache"
+
+# KX binary source for the kdb containers: 'local' uses the staged data folder;
+# 'kx-portal' pulls <arch>.zip with the bearer token when it isn't staged. All
+# non-secret defaults; the token is empty unless set in the environment.
+KX_ENV_ANCHOR = """\
+x-kdb-env: &kdb-env
+  KX_INSTALL_SOURCE: "${KX_INSTALL_SOURCE:-local}"
+  KX_BEARER_TOKEN: "${KX_BEARER_TOKEN:-}"
+  KX_VERSION: "${KX_VERSION:-4.1}"
+  KX_CHANNEL: "${KX_CHANNEL:-~latest~}"
+  KX_LICENSE_PATH: "${KX_LICENSE_PATH:-/kdbx/k4.lic}"
+"""
+
 
 def shards_json(n: int) -> str:
     return json.dumps(topology.shards_json(n), indent=2) + "\n"
@@ -44,31 +63,48 @@ def _data_plane_services(n: int) -> str:
   tp-{sid}:
     build: *kdb-build
     command: ["tick.q", "{sid}", "-p", "{TP}"]
+    environment:
+      <<: *kdb-env
     restart: unless-stopped
     volumes:
+      - {KX_BIN_MOUNT}
+      - {KX_CACHE_MOUNT}
       - tp-log-{sid}:/app/log
 
   wdb-{sid}:
     build: *kdb-build
     command: ["wdb.q", "-shard", "{sid}", "-tphost", "tp-{sid}", "-tpport", "{TP}",
               "-flushmin", "2", "-dbdir", "/data/db", "-p", "{WDB}"]
+    environment:
+      <<: *kdb-env
     restart: unless-stopped
     depends_on: [tp-{sid}]
     volumes:
+      - {KX_BIN_MOUNT}
+      - {KX_CACHE_MOUNT}
       - db-{sid}:/data/db
 
   rdb-{sid}:
     build: *kdb-build
     command: ["rdb.q", "-shard", "{sid}", "-tphost", "tp-{sid}", "-tpport", "{TP}", "-p", "{RDB}"]
+    environment:
+      <<: *kdb-env
     restart: unless-stopped
     depends_on: [tp-{sid}]
+    volumes:
+      - {KX_BIN_MOUNT}
+      - {KX_CACHE_MOUNT}
 
   idb-{sid}:
     build: *kdb-build
     command: ["idb.q", "-shard", "{sid}", "-dbdir", "/data/db", "-pollsec", "15", "-p", "{IDB}"]
+    environment:
+      <<: *kdb-env
     restart: unless-stopped
     depends_on: [wdb-{sid}]
     volumes:
+      - {KX_BIN_MOUNT}
+      - {KX_CACHE_MOUNT}
       - db-{sid}:/data/db
 """)
     return "\n".join(out)
@@ -86,8 +122,11 @@ def _gateway_service(n: int) -> str:
     build: *kdb-build
     command: ["gateway.q", "-p", "{GW}"]
     environment:
+      <<: *kdb-env
       SHARDS_JSON: /app/shards.json
     volumes:
+      - {KX_BIN_MOUNT}
+      - {KX_CACHE_MOUNT}
       - ./data-plane/shards.json:/app/shards.json:ro
     restart: unless-stopped
     depends_on: [{deps}]
@@ -206,6 +245,7 @@ x-feed-build: &feed-build
   context: ./data-plane
   dockerfile: docker/Dockerfile.feed
 
+""" + KX_ENV_ANCHOR + """
 services:
 """
     return (
@@ -214,7 +254,7 @@ services:
         + _gateway_service(n) + "\n"
         + _feeds_service(n) + "\n"
         + _control_plane_services(n) + "\n"
-        + "volumes:\n" + _volumes(n) + "\n"
+        + "volumes:\n" + _volumes(n) + "\n  kx-cache:\n"
     )
 
 
