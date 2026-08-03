@@ -21,7 +21,7 @@ if[0=count shardId; shardId:"s0"]
 .u.shard:`$shardId
 .u.l:`$":log/", shardId, "_tp"
 .u.L:.u.l,".",string .z.d
-if[not `TPLOG in key `.; system "mkdir log"]
+if[not `TPLOG in key `.; system "mkdir -p log"]
 
 .u.w:()!()                          / subscriber handles keyed by table
 .u.i:0j                             / running message sequence number
