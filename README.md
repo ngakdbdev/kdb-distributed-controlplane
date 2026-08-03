@@ -1,8 +1,8 @@
-# kdb+ tick control plane - demo MVP
+# kdb+ tick control plane -  MVP
 
 A control plane (web UI + API + self-healing watchdog) sitting above a sharded kdb+ tick deployment
 built on the Tick-X pattern (tickerplant → write-down DB → chained RDB → intraday DB, split across two
-symbol-range shards). Built as a two-week demo to show prospective clients a working self-healing,
+symbol-range shards). Built to attribute controllability to KDB tick architecture and  to show prospective clients a working self-healing,
 observable, sharded tick architecture - **not** a production multi-tenant platform. See the plan
 document (`kdb-control-plane-mvp-plan.md`, shared alongside this project) for full scope notes.
 
