@@ -1,0 +1,31 @@
+# TickForge HTTPS edge. Caddy terminates TLS for the domain, auto-obtains and
+# renews a Let's Encrypt certificate, redirects all HTTP to HTTPS, and proxies
+# inward to the web-ui (which serves the app and proxies /api to control-api).
+# The domain and ACME email come from the environment (see .env.example), so the
+# same file works on any host — this VM today, an AWS EC2 box later.
+#
+# Bring-your-own cert (corporate CA) instead of Let's Encrypt: replace the
+# reverse_proxy line's site with a `tls /etc/caddy/cert.pem /etc/caddy/key.pem`
+# directive and mount those files (never commit them).
+
+{
+	email {$ACME_EMAIL}
+	# For a private/test host without a public domain, uncomment to use a local CA:
+	# local_certs
+}
+
+{$TICKFORGE_DOMAIN} {
+	encode zstd gzip
+
+	# HSTS + baseline hardening. HSTS tells browsers to only ever use HTTPS.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# WebSocket upgrades (live metrics) pass through reverse_proxy unchanged.
+	reverse_proxy web-ui:80
+}

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Nav from "./components/Nav.jsx";
 import { COPYRIGHT } from "./brand.js";
 import AuditLog from "./pages/AuditLog.jsx";
+import Overview from "./pages/Overview.jsx";
 import Connectors from "./pages/Connectors.jsx";
 import Export from "./pages/Export.jsx";
 import Fleet from "./pages/Fleet.jsx";
@@ -14,6 +15,7 @@ import Subscribers from "./pages/Subscribers.jsx";
 import Topology from "./pages/Topology.jsx";
 
 const PAGES = {
+  overview: Overview,
   topology: Topology,
   metrics: Metrics,
   query: Query,
@@ -40,7 +42,7 @@ function captureSsoToken() {
 
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(() => captureSsoToken() || !!localStorage.getItem("kcp_token"));
-  const [active, setActive] = useState("topology");
+  const [active, setActive] = useState("overview");
 
   useEffect(() => {
     if (!loggedIn && captureSsoToken()) setLoggedIn(true);
@@ -61,7 +63,7 @@ export default function App() {
     <div className="app-shell">
       <Nav active={active} onChange={setActive} onLogout={logout} />
       <main className="app-main">
-        <Page />
+        <Page onNavigate={setActive} />
       </main>
       <footer className="app-footer">
         <span>{COPYRIGHT}</span>

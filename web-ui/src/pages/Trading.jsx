@@ -8,6 +8,7 @@ export default function Trading() {
   const symbol = syms[0] || "AAPL";
   const [market, setMarket] = useState(null);
   const [forecast, setForecast] = useState(null);
+  const [sample, setSample] = useState(false);
   const [orders, setOrders] = useState([]);
   const [portfolio, setPortfolio] = useState(null);
   const [error, setError] = useState("");
@@ -27,7 +28,7 @@ export default function Trading() {
   }
 
   async function loadMarket() {
-    setLoading(true); setError(""); setMarket(null); setForecast(null);
+    setLoading(true); setError(""); setMarket(null); setForecast(null); setSample(false);
     try {
       // pull recent trades for the symbol from the cluster via the query API
       const res = await api.runQuery({
@@ -44,7 +45,25 @@ export default function Trading() {
       setForecast(await api.forecast({ prices, horizon: 10 }));
     } catch (err) {
       setError(`couldn't load market data (${String(err).replace(/^Error:\s*/, "")}). ` +
-               `A live cluster with trades for ${symbol} is needed here.`);
+               `Load a live cluster with trades for ${symbol}, or use Sample data to preview the panels.`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadSample() {
+    // synthetic random walk so the metrics/greeks/forecast panels are visible
+    // without a live cluster. Clearly flagged as SAMPLE in the UI.
+    setLoading(true); setError(""); setMarket(null); setForecast(null);
+    const prices = [180];
+    for (let i = 1; i < 80; i++) prices.push(Math.max(1, +(prices[i - 1] * (1 + (Math.random() - 0.48) * 0.02)).toFixed(2)));
+    const sizes = prices.map(() => Math.round(100 + Math.random() * 900));
+    try {
+      setMarket(await api.marketSummary({ prices, sizes }));
+      setForecast(await api.forecast({ prices, horizon: 10 }));
+      setSample(true);
+    } catch (err) {
+      setError(String(err).replace(/^Error:\s*/, ""));
     } finally {
       setLoading(false);
     }
@@ -69,10 +88,14 @@ export default function Trading() {
           <button className="primary" disabled={loading} onClick={loadMarket}>
             {loading ? "Loading…" : `Load ${symbol}`}
           </button>
+          <button disabled={loading} onClick={loadSample} title="Preview the panels on synthetic data (no live cluster needed)">
+            Sample data
+          </button>
         </div>
         {error && <div className="error">{error}</div>}
       </div>
 
+      {sample && <div className="sample-note">Showing <span className="sample-badge">SAMPLE</span> data — illustrative only, not live market figures.</div>}
       {market && (
         <div className="metric-cards">
           <Metric label="Last" value={fmt(market.last)} />

@@ -1,5 +1,6 @@
 import { PRODUCT } from "../brand.js";
 const TABS = [
+  { id: "overview", label: "Overview" },
   { id: "topology", label: "Topology" },
   { id: "tickhouses", label: "TickHouses" },
   { id: "metrics", label: "Metrics" },
