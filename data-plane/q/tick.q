@@ -33,6 +33,7 @@ if[not `TPLOG in key `.; system "mkdir -p log"]
 .u.pubN:0j                          / publish samples
 .u.logNanos:0j                      / cumulative log-write time (ns)
 .u.logN:0j                          / log-write samples
+.u.errs:0j                          / .u.upd errors (bad batches)
 
 / ---------------------------------------------- slow-subscriber config + state
 .u.maxSubBytes:$[count getenv`SLOW_SUB_MAX_BYTES; "J"$getenv`SLOW_SUB_MAX_BYTES; 52428800]  / 50 MB
@@ -57,6 +58,15 @@ if[not `TPLOG in key `.; system "mkdir -p log"]
   (t;value t)}
 
 .u.upd:{[t;data]
+  / never let a bad batch fail silently on the async path: run the real work
+  / protected, and LOG the exact error + a data sample so a broken feed is
+  / diagnosable from `docker logs tp-*` instead of vanishing.
+  @[.u.doUpd t; data; {[e]
+     .u.errs+:1;
+     -1 "[tp ",shardId,"] .u.upd ERROR: ",e," | sample=",(-3!3#data);
+   }]}
+
+.u.doUpd:{[t;data]
   / feeds send a list of rows in schema order; coerce to typed columns so a
   / string from the wire lands in a `sym` column as a symbol, etc.
   tbl:value t; cs:cols tbl; tc:exec t from meta tbl;
@@ -156,8 +166,8 @@ if[.u.slowCheckMs>0; system "t ",string .u.slowCheckMs]
   hs:.u.subHandles[];
   qd:$[count hs; sum .u.queued each hs; 0];
   lag:$[count hs; max 0,.u.queued each hs; 0];
-  `shard`recv`pub`dropped`queueDepth`subLag`subs`lastSeq`lastTs`pubLatencyUs`logLatencyUs`logBytes!(
-    shardId; .u.recv; .u.pub; .u.dropped; qd; lag; count hs; .u.i; .u.lastTs;
+  `shard`recv`pub`dropped`errs`queueDepth`subLag`subs`lastSeq`lastTs`pubLatencyUs`logLatencyUs`logBytes!(
+    shardId; .u.recv; .u.pub; .u.dropped; .u.errs; qd; lag; count hs; .u.i; .u.lastTs;
     $[.u.pubN>0; (.u.pubNanos div .u.pubN) div 1000; 0];
     $[.u.logN>0; (.u.logNanos div .u.logN) div 1000; 0];
     @[hcount; .u.L; 0j])}

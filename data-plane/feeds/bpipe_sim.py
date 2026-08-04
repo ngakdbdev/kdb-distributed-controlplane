@@ -26,6 +26,31 @@ VENUES = ["XNAS", "XNYS", "ARCX", "BATS"]
 SIDES = ["B", "S"]
 
 
+def build_universe(count: int, symbols_arg: str, symbols_file: str) -> list:
+    """Resolve the symbol universe: an explicit list/file if given, otherwise the
+    built-in set, padded with synthetic tickers (SYN00001, ...) up to `count` so
+    you can simulate thousands of symbols for high-cardinality load tests."""
+    syms: list = []
+    if symbols_file and os.path.exists(symbols_file):
+        with open(symbols_file) as fh:
+            syms = [s.strip().upper() for s in fh.read().replace("\n", ",").split(",") if s.strip()]
+    elif symbols_arg:
+        syms = [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
+    else:
+        syms = list(SYMBOLS)
+    if count and count > 0:
+        if len(syms) >= count:
+            syms = syms[:count]
+        else:
+            i = 1
+            while len(syms) < count:
+                syms.append(f"SYN{i:05d}")
+                i += 1
+    # de-dup preserving order
+    seen = set()
+    return [s for s in syms if not (s in seen or seen.add(s))]
+
+
 def gen_trade(sym: str, base_price: float, shard_count: int) -> list:
     ts = utc_now()
     price = round(base_price * (1 + random.uniform(-0.002, 0.002)), 2)
@@ -42,12 +67,21 @@ def main():
     parser.add_argument("--rate", type=float, default=float(os.environ.get("BPIPE_RATE_HZ", "20")),
                         help="ticks per second across all symbols")
     parser.add_argument("--batch-ms", type=int, default=int(os.environ.get("BPIPE_BATCH_MS", "200")))
+    parser.add_argument("--symbols", default=os.environ.get("BPIPE_SYMBOLS", ""),
+                        help="explicit comma-separated symbol list (overrides the built-in set)")
+    parser.add_argument("--symbols-file", default=os.environ.get("BPIPE_SYMBOLS_FILE", ""),
+                        help="path to a file of symbols (comma or newline separated)")
+    parser.add_argument("--symbol-count", type=int, default=int(os.environ.get("SIM_SYMBOL_COUNT", "0")),
+                        help="grow/trim the universe to this many symbols (pads with synthetic tickers)")
     args = parser.parse_args()
+
+    universe = build_universe(args.symbol_count, args.symbols, args.symbols_file)
+    logging.getLogger("bpipe_sim").info("simulating %d symbols across %d shards", len(universe), args.shards)
 
     pub = ShardedPublisher("bpipe_sim", shard_count=args.shards)
     pub.connect()
 
-    prices = {s: random.uniform(20, 500) for s in SYMBOLS}
+    prices = {s: random.uniform(20, 500) for s in universe}
     interval = args.batch_ms / 1000.0
     per_batch = max(1, int(args.rate * interval))
 
@@ -55,7 +89,7 @@ def main():
         try:
             batch = []
             for _ in range(per_batch):
-                sym = random.choice(SYMBOLS)
+                sym = random.choice(universe)
                 prices[sym] *= 1 + random.uniform(-0.0015, 0.0015)
                 batch.append(gen_trade(sym, prices[sym], args.shards))
             if batch:

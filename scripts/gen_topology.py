@@ -145,6 +145,10 @@ def _feeds_service(n: int) -> str:
       TP_HOST_PATTERN: "tp-{{shard}}"
       TP_PORT: "{TP}"
       BPIPE_RATE_HZ: "${{BPIPE_RATE_HZ:-20}}"
+      SIM_SYMBOL_COUNT: "${{SIM_SYMBOL_COUNT:-0}}"   # grow the universe (e.g. 1000)
+      BPIPE_SYMBOLS_FILE: "${{BPIPE_SYMBOLS_FILE:-}}"
+    volumes:
+      - ./data-plane/feeds/symbols:/symbols:ro
     depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
     # on-failure (not always): recovers from a crash / a not-yet-ready TP, but a
     # clean stop from the Connectors screen stays stopped.
@@ -174,6 +178,9 @@ def _feeds_service(n: int) -> str:
       TP_HOST_PATTERN: "tp-{{shard}}"
       TP_PORT: "{TP}"
       FINNHUB_API_KEY: "${{FINNHUB_API_KEY:-}}"
+      PROVIDER_SYMBOLS_FILE: "${{PROVIDER_SYMBOLS_FILE:-}}"
+    volumes:
+      - ./data-plane/feeds/symbols:/symbols:ro
     depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
     restart: on-failure
 
@@ -188,6 +195,9 @@ def _feeds_service(n: int) -> str:
       TP_HOST_PATTERN: "tp-{{shard}}"
       TP_PORT: "{TP}"
       TWELVEDATA_API_KEY: "${{TWELVEDATA_API_KEY:-}}"
+      PROVIDER_SYMBOLS_FILE: "${{PROVIDER_SYMBOLS_FILE:-}}"
+    volumes:
+      - ./data-plane/feeds/symbols:/symbols:ro
     depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
     restart: on-failure
 """

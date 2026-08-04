@@ -104,6 +104,7 @@ function TpCard({ tp, rate, onNavigate }) {
     ["queue", bytes(s.queueDepth)],
     ["subscribers", fmt(s.subs)],
     ["dropped", fmt(s.dropped)],
+    ["upd errors", fmt(s.errs)],
     ["last seq", (s.lastSeq ?? 0).toLocaleString()],
     ["last msg", clockOf(s.lastTs)],
     ["publish latency", `${fmt(s.pubLatencyUs)} µs`],
