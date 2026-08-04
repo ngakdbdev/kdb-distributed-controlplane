@@ -2,6 +2,7 @@ import { PRODUCT } from "../brand.js";
 const TABS = [
   { id: "overview", label: "Overview" },
   { id: "topology", label: "Topology" },
+  { id: "tickerplants", label: "Tickerplants" },
   { id: "tickhouses", label: "TickHouses" },
   { id: "metrics", label: "Metrics" },
   { id: "query", label: "Query" },

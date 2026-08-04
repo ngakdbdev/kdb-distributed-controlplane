@@ -37,6 +37,7 @@ export const api = {
   ssoLoginUrl: (slug) => `${BASE}/auth/sso/${encodeURIComponent(slug)}/login`,
 
   topologyStatus: () => request("/topology/status"),
+  tickerplants: () => request("/tickerplants"),
   startService: (service) => request(`/topology/service/${service}/start`, { method: "POST" }),
   stopService: (service) => request(`/topology/service/${service}/stop`, { method: "POST" }),
   restartService: (service) => request(`/topology/service/${service}/restart`, { method: "POST" }),

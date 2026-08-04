@@ -7,6 +7,7 @@ tick architecture with a second, lower-rate, differently-shaped source.
 Fans out across SHARD_COUNT shards via topology.shard_of, same as bpipe_sim.
 """
 import argparse
+import logging
 import os
 import random
 import time
@@ -46,9 +47,12 @@ def main():
     per_batch = max(1, int(args.rate * interval))
 
     while True:
-        batch = [gen_risk(random.choice(SYMBOLS), args.shards) for _ in range(per_batch)]
-        if batch:
-            pub.publish_rows("risk", batch)
+        try:
+            batch = [gen_risk(random.choice(SYMBOLS), args.shards) for _ in range(per_batch)]
+            if batch:
+                pub.publish_rows("risk", batch)
+        except Exception:  # noqa: BLE001 - keep the feed alive; log and carry on
+            logging.getLogger("crims_sim").exception("publish cycle failed, continuing")
         time.sleep(interval)
 
 

@@ -53,8 +53,9 @@ class TickerplantConnection:
             # never blocks on the tickerplant's ack, matching production
             # feedhandler behaviour
             self.q(".u.upd", table, rows, sync=False)
-        except (QException, ConnectionError, OSError) as exc:
-            self.log.warning("publish failed (%s), reconnecting", exc)
+        except Exception as exc:  # noqa: BLE001 - any failure -> log + reconnect, never die
+            self.log.warning("publish to %s:%s failed (%s: %s), reconnecting",
+                             self.host, self.port, type(exc).__name__, exc)
             self.q = None
             self.connect()
 

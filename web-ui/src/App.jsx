@@ -3,6 +3,7 @@ import Nav from "./components/Nav.jsx";
 import { COPYRIGHT } from "./brand.js";
 import AuditLog from "./pages/AuditLog.jsx";
 import Overview from "./pages/Overview.jsx";
+import Tickerplants from "./pages/Tickerplants.jsx";
 import Connectors from "./pages/Connectors.jsx";
 import Export from "./pages/Export.jsx";
 import Fleet from "./pages/Fleet.jsx";
@@ -17,6 +18,7 @@ import Topology from "./pages/Topology.jsx";
 const PAGES = {
   overview: Overview,
   topology: Topology,
+  tickerplants: Tickerplants,
   metrics: Metrics,
   query: Query,
   trading: Trading,

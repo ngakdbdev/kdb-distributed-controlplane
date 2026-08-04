@@ -34,6 +34,10 @@ def _targets() -> list[dict]:
         rdb = topology.gateway_host(s, "rdb")
         host, port = rdb.rsplit(":", 1)
         out.append({"id": f"rdb-{s.id}", "label": f"RDB {s.label} (today)", "host": host, "port": int(port)})
+    for s in topology.shards(_SHARD_COUNT):
+        tp = topology.gateway_host(s, "tickerplant")
+        host, port = tp.rsplit(":", 1)
+        out.append({"id": f"tp-{s.id}", "label": f"Tickerplant {s.label} (live buffer)", "host": host, "port": int(port)})
     return out
 
 
