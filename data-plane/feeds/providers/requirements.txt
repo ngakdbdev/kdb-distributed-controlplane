@@ -1,3 +1,6 @@
+# qpython3 uses numpy.string_, removed in NumPy 2.0 - pin below 2 so the
+# q client imports (else every feed crashes at startup).
+numpy<2
 # The live provider adapters (finnhub/twelvedata/polygon) use a websocket client.
 # Normalization + the framework are stdlib-only; websocket-client is only needed to
 # actually stream. The publisher itself reuses the feeds tree (qpython3, see

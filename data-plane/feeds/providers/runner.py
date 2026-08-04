@@ -50,7 +50,9 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="python -m providers.runner")
     p.add_argument("--list", action="store_true", help="list providers and exit")
     p.add_argument("--provider")
-    p.add_argument("--symbols", default="AAPL,MSFT,GOOGL,AMZN,TSLA")
+    p.add_argument("--symbols", default=os.environ.get("PROVIDER_SYMBOLS", "AAPL,MSFT,GOOGL,AMZN,TSLA"))
+    p.add_argument("--symbols-file", default=os.environ.get("PROVIDER_SYMBOLS_FILE", ""),
+                   help="path to a file of symbols (comma or newline separated); overrides --symbols")
     p.add_argument("--shards", type=int, default=int(os.environ.get("SHARD_COUNT", "2")))
     p.add_argument("--api-key", default=None)
     p.add_argument("--tp-host-pattern", default=os.environ.get("TP_HOST_PATTERN", "tp-{shard}"))
@@ -67,7 +69,11 @@ def main(argv=None) -> int:
         print(f"  {exc}")
         return 2
 
-    symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+    if args.symbols_file and os.path.exists(args.symbols_file):
+        with open(args.symbols_file) as _fh:
+            symbols = [s.strip() for s in _fh.read().replace("\n", ",").split(",") if s.strip()]
+    else:
+        symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     api_key = args.api_key or os.environ.get(_ENV_KEYS.get(args.provider, ""), None)
 
     from feed_common import ShardedPublisher  # noqa: E402

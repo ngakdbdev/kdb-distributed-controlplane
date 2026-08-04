@@ -5,6 +5,7 @@ Free tier gives real-time US trades (and some FX/crypto). Subscribe per symbol.
 from __future__ import annotations
 
 import json
+import time
 
 from .base import MarketDataProvider, ProviderError
 from . import normalize
@@ -35,8 +36,10 @@ class FinnhubProvider(MarketDataProvider):
         import websocket  # lazy: websocket-client, only needed to actually run
 
         def on_open(ws):
-            for sym in self.symbols:
+            for i, sym in enumerate(self.symbols):
                 ws.send(json.dumps({"type": "subscribe", "symbol": sym}))
+                if i % 50 == 49:      # gentle throttle for large lists
+                    time.sleep(0.25)
             self.log.info("subscribed to %d symbols", len(self.symbols))
 
         def on_message(ws, raw):

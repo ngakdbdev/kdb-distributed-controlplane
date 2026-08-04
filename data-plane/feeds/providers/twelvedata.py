@@ -7,6 +7,7 @@ to reach for when the demo needs non-US symbols.
 from __future__ import annotations
 
 import json
+import time
 
 from .base import MarketDataProvider, ProviderError
 from . import normalize
@@ -34,8 +35,12 @@ class TwelveDataProvider(MarketDataProvider):
         import websocket  # lazy
 
         def on_open(ws):
-            ws.send(json.dumps({"action": "subscribe",
-                                "params": {"symbols": ",".join(self.symbols)}}))
+            batch = 120                        # chunk large lists across messages
+            for i in range(0, len(self.symbols), batch):
+                chunk = self.symbols[i:i + batch]
+                ws.send(json.dumps({"action": "subscribe",
+                                    "params": {"symbols": ",".join(chunk)}}))
+                time.sleep(0.2)
             self.log.info("subscribed to %d symbols", len(self.symbols))
 
         def on_message(ws, raw):
