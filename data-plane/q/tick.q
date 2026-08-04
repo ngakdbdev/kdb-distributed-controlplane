@@ -20,11 +20,19 @@ if[0=count shardId; shardId:"s0"]
 
 .u.shard:`$shardId
 .u.l:`$":log/", shardId, "_tp"
-.u.L:.u.l,".",string .z.d
-if[not `TPLOG in key `.; system "mkdir log"]
+.u.L:`$(string[.u.l],".",string .z.d)   / e.g. `:log/s0_tp.2026.08.03
+if[not `TPLOG in key `.; system "mkdir -p log"]
 
 .u.w:()!()                          / subscriber handles keyed by table
 .u.i:0j                             / running message sequence number
+.u.recv:0j                          / rows received from feeds
+.u.pub:0j                           / rows pushed to subscribers
+.u.dropped:0j                       / subscribers dropped (slow-consumer)
+.u.lastTs:0Np                       / timestamp of last message
+.u.pubNanos:0j                      / cumulative publish time (ns)
+.u.pubN:0j                          / publish samples
+.u.logNanos:0j                      / cumulative log-write time (ns)
+.u.logN:0j                          / log-write samples
 
 / ---------------------------------------------- slow-subscriber config + state
 .u.maxSubBytes:$[count getenv`SLOW_SUB_MAX_BYTES; "J"$getenv`SLOW_SUB_MAX_BYTES; 52428800]  / 50 MB
@@ -34,25 +42,32 @@ if[not `TPLOG in key `.; system "mkdir log"]
 .u.internalSecret:$[count getenv`INTERNAL_SECRET; getenv`INTERNAL_SECRET; ""]
 
 .u.strikes:()!()                    / handle -> consecutive-breach count
-.u.discarded:([] time:`timestamp$(); handle:`int$(); bytes:`long$(); tables:`symbol$(); reason:`symbol$())
+.u.discarded:([] time:`timestamp$(); handle:`int$(); bytes:`long$(); tbls:`symbol$(); reason:`symbol$())
 
 .u.init:{
   if[not `TPLOG in key `.; TPLOG::.u.L];
-  L::hopen `$":",string TPLOG;
+  L::hopen TPLOG;
   .u.i::0j;
   }
 
 .u.sub:{[t;s]
   if[not t in tables`.; '"unknown table: ",string t];
-  .u.w[t],:enlist .z.w;
+  if[not t in key .u.w; .u.w[t]:`int$()];   / typed empty handle list -> no stray null on first sub
+  .u.w[t],:.z.w;
   (t;value t)}
 
 .u.upd:{[t;data]
-  data:$[0>type data; enlist data; data];
-  t insert data;
-  -25!(`.u.upd;t;data);              / log first, ack second (DR guarantee)
-  .u.i+:1;
-  if[count w:.u.w t; (neg w) @\: (`.u.upd;t;data)];
+  / feeds send a list of rows in schema order; coerce to typed columns so a
+  / string from the wire lands in a `sym` column as a symbol, etc.
+  tbl:value t; cs:cols tbl; tc:exec t from meta tbl;
+  rows:$[0h>type first data; enlist data; data];   / single row -> one-row list
+  d:$[98h=type data; data; flip cs!tc$'flip rows]; / already a table? use it; else build+cast
+  t insert d;
+  lw:.z.p; L enlist (`.u.upd;t;d); .u.logNanos+:`long$.z.p-lw; .u.logN+:1;
+  .u.i+:1; .u.recv+:count d; .u.lastTs:.z.p;
+  if[count w:.u.w t;
+     pw:.z.p; (neg w) @\: (`.u.upd;t;d);
+     .u.pubNanos+:`long$.z.p-pw; .u.pubN+:1; .u.pub+:(count w)*count d];
   }
 
 / the WDB calls this after every timed flush; the tickerplant relays it to
@@ -93,6 +108,7 @@ if[not `TPLOG in key `.; system "mkdir log"]
   if[h in key .u.strikes; .u.strikes:.u.strikes _ h];
   @[hclose; h; ::];                                 / close the slow handle
   `.u.discarded insert (.z.p; h; bytes; `$", " sv string tbls; `slow_consumer);
+  .u.dropped+:1;
   -1 "[tp ",shardId,"] DISCARDED slow subscriber handle ",string[h],
      " (",string[bytes]," bytes queued over ",string[.u.slowStrikes]," checks)";
   .u.notifyDiscard[h;bytes;tbls];
@@ -115,7 +131,7 @@ if[not `TPLOG in key `.; system "mkdir log"]
   ([] handle:hs;
       queuedBytes:.u.queued each hs;
       strikes:{$[x in key .u.strikes; .u.strikes x; 0]} each hs;
-      tables:{`$", " sv string .u.tablesOf x} each hs)
+      tbls:{`$", " sv string .u.tablesOf x} each hs)
   }
 
 / clean up a subscriber that disconnected on its own (fixes the leaked-handle
@@ -133,6 +149,37 @@ if[.u.slowCheckMs>0; system "t ",string .u.slowCheckMs]
   -1 "[tp ",shardId,"] end of day rollover for ",string d;
   }
 
+/ -------------------------------------------------- monitoring accessors (IPC)
+/ point-in-time counters + gauges; the control plane polls this and derives
+/ per-second rates from deltas between polls.
+.u.stats:{
+  hs:.u.subHandles[];
+  qd:$[count hs; sum .u.queued each hs; 0];
+  lag:$[count hs; max 0,.u.queued each hs; 0];
+  `shard`recv`pub`dropped`queueDepth`subLag`subs`lastSeq`lastTs`pubLatencyUs`logLatencyUs`logBytes!(
+    shardId; .u.recv; .u.pub; .u.dropped; qd; lag; count hs; .u.i; .u.lastTs;
+    $[.u.pubN>0; (.u.pubNanos div .u.pubN) div 1000; 0];
+    $[.u.logN>0; (.u.logNanos div .u.logN) div 1000; 0];
+    @[hcount; .u.L; 0j])}
+
+/ boolean health checks + overall; false where a signal is genuinely absent
+/ (no feed yet, no subscribers) rather than faked green.
+.u.health:{
+  hs:.u.subHandles[];
+  qd:$[count hs; sum .u.queued each hs; 0];
+  lag:$[count hs; max 0,.u.queued each hs; 0];
+  pl:$[.u.pubN>0; (.u.pubNanos div .u.pubN) div 1000; 0];
+  checks:`process`feed`sequence`tplog`subscribers`publishLatency`queueDepth`downstreamLag!(
+    1b;
+    (not null .u.lastTs) and .u.lastTs > .z.p - 0D00:00:30;
+    .u.i > 0;
+    0 < @[hcount; .u.L; 0j];
+    (count hs) > 0;
+    pl < 100000;
+    qd < .u.maxSubBytes;
+    lag < .u.maxSubBytes);
+  `shard`checks`overall!(shardId; checks; all value checks)}
+
 .u.init[]
--1 "[tp ",shardId,"] tickerplant up on port ",string system"p",
-   "; slow-sub discard > ",string[.u.maxSubBytes]," bytes x ",string[.u.slowStrikes]," checks";
+-1 "[tp ",shardId,"] tickerplant up on port ",(string system"p")," | slow-sub discard over ",
+   string[.u.maxSubBytes]," bytes x ",string[.u.slowStrikes]," checks";

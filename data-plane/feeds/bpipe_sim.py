@@ -10,6 +10,7 @@ routed to its owning shard's tickerplant by topology.shard_of, the same
 partition the gateway and control plane use.
 """
 import argparse
+import logging
 import os
 import random
 import time
@@ -51,13 +52,16 @@ def main():
     per_batch = max(1, int(args.rate * interval))
 
     while True:
-        batch = []
-        for _ in range(per_batch):
-            sym = random.choice(SYMBOLS)
-            prices[sym] *= 1 + random.uniform(-0.0015, 0.0015)
-            batch.append(gen_trade(sym, prices[sym], args.shards))
-        if batch:
-            pub.publish_rows("trade", batch)
+        try:
+            batch = []
+            for _ in range(per_batch):
+                sym = random.choice(SYMBOLS)
+                prices[sym] *= 1 + random.uniform(-0.0015, 0.0015)
+                batch.append(gen_trade(sym, prices[sym], args.shards))
+            if batch:
+                pub.publish_rows("trade", batch)
+        except Exception:  # noqa: BLE001 - keep the feed alive; log and carry on
+            logging.getLogger("bpipe_sim").exception("publish cycle failed, continuing")
         time.sleep(interval)
 
 

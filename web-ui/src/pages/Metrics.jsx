@@ -48,11 +48,11 @@ export default function Metrics() {
         <h3>Row counts (trade + risk, both shards)</h3>
         <ResponsiveContainer width="100%" height={260}>
           <LineChart data={history}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#2a2f3a" />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
             <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={30} />
             <YAxis tick={{ fontSize: 11 }} />
             <Tooltip />
-            <Line type="monotone" dataKey="trade" stroke="#4f8cff" dot={false} strokeWidth={2} />
+            <Line type="monotone" dataKey="trade" stroke="var(--accent)" dot={false} strokeWidth={2} />
             <Line type="monotone" dataKey="risk" stroke="#ff8a4f" dot={false} strokeWidth={2} />
           </LineChart>
         </ResponsiveContainer>

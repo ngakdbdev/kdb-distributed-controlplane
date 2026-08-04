@@ -146,7 +146,9 @@ def _feeds_service(n: int) -> str:
       TP_PORT: "{TP}"
       BPIPE_RATE_HZ: "${{BPIPE_RATE_HZ:-20}}"
     depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
-    # NOT restart:always - toggled on/off by the control API's Connectors screen
+    # on-failure (not always): recovers from a crash / a not-yet-ready TP, but a
+    # clean stop from the Connectors screen stays stopped.
+    restart: on-failure
 
   crims-sim:
     build: *feed-build
@@ -157,6 +159,37 @@ def _feeds_service(n: int) -> str:
       TP_PORT: "{TP}"
       CRIMS_RATE_HZ: "${{CRIMS_RATE_HZ:-2}}"
     depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
+
+  # Real market-data provider (opt-in). Streams live ticks into the same
+  # tickerplants instead of the synthetic sims. Needs an API key supplied via
+  # .env - never hardcode it here. Start with:
+  #   docker compose --profile providers up -d finnhub-feed
+  finnhub-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "finnhub", "--symbols", "${{FINNHUB_SYMBOLS:-AAPL,MSFT,GOOGL,AMZN,TSLA}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+      FINNHUB_API_KEY: "${{FINNHUB_API_KEY:-}}"
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
+
+  # Twelve Data live provider (opt-in). Key from .env only - never hardcode.
+  #   docker compose --profile providers up -d twelvedata-feed
+  twelvedata-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "twelvedata", "--symbols", "${{TWELVEDATA_SYMBOLS:-AAPL,MSFT,GOOGL,AMZN,TSLA}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+      TWELVEDATA_API_KEY: "${{TWELVEDATA_API_KEY:-}}"
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
 """
 
 

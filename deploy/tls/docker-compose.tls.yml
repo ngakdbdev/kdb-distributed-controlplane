@@ -1,0 +1,35 @@
+# HTTPS edge overlay — puts Caddy in front of the stack as the only public entry.
+#
+# Prereqs: a DNS A record for $TICKFORGE_DOMAIN pointing at this host's public IP,
+# ports 80 + 443 open, and TICKFORGE_DOMAIN (+ optional ACME_EMAIL) set in .env.
+#
+# Run:
+#   docker compose -f docker-compose.yml -f deploy/tls/docker-compose.tls.yml up -d --build
+#
+# Caddy then auto-provisions the certificate and redirects HTTP → HTTPS. The app's
+# plain-HTTP port is no longer published to the host (Caddy is the only entrypoint).
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      TICKFORGE_DOMAIN: "${TICKFORGE_DOMAIN:?set TICKFORGE_DOMAIN in .env, e.g. tickforge.qbytecomputing.com}"
+      ACME_EMAIL: "${ACME_EMAIL:-}"
+    volumes:
+      - ./deploy/tls/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data       # certs + ACME account (persist across restarts)
+      - caddy-config:/config
+    depends_on:
+      - web-ui
+
+  # Stop exposing the app's plain-HTTP port on the host — Caddy fronts it now.
+  # (!reset clears the base service's published ports; requires Compose v2.24+.)
+  web-ui:
+    ports: !reset []
+
+volumes:
+  caddy-data:
+  caddy-config:
