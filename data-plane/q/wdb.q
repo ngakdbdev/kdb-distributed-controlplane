@@ -1,17 +1,4 @@
-/ wdb.q - write-down database for one shard (Tick-X pattern)
-/ Subscribes to the tickerplant, buffers ticks, and on a timer flushes
-/ rows older than a cutoff to a fresh int-partition on disk, then tells
-/ the tickerplant to broadcast the flush watermark so the chained RDB can
-/ shed the same rows from memory. This keeps RDB and WDB/IDB tiers disjoint.
-/
-/ SELF-HEALING: same tickerplant-reconnect story as rdb.q - if the TP
-/ restarts, this WDB must notice and resubscribe on its own rather than
-/ silently stop receiving ticks (and therefore silently stop flushing and
-/ silently stop broadcasting watermarks, which would then starve the RDB
-/ tier too). See rdb.q for the fuller explanation of why this matters more
-/ than it looks like it should.
-
-\l schema.q
+\l /app/schema.q
 
 .u.getarg:{[a;k;def] $[k in key a; a k; def]}
 
@@ -19,13 +6,22 @@ args:.Q.opt .z.x
 shardId:first .u.getarg[args;`shard;enlist "A_M"]
 tpHost:first .u.getarg[args;`tphost;enlist "localhost"]
 tpPort:"I"$first .u.getarg[args;`tpport;enlist "5010"]
-flushIntv:"I"$first .u.getarg[args;`flushmin;enlist "2"]   / minutes
+flushIntv:"I"$first .u.getarg[args;`flushmin;enlist "2"]
 dbDir:first .u.getarg[args;`dbdir;enlist "./db"]
+hdbDir:first .u.getarg[args;`hdbdir;enlist "./hdb"]
+idbHost:first .u.getarg[args;`idbhost;enlist ""]
+idbPort:"I"$first .u.getarg[args;`idbport;enlist "0"]
+hdbHost:first .u.getarg[args;`hdbhost;enlist ""]
+hdbPort:"I"$first .u.getarg[args;`hdbport;enlist "0"]
 
 .wdb.shard:`$shardId
 .wdb.dbDir:dbDir
+.wdb.hdbDir:hdbDir
+.wdb.idbAddr:$[count idbHost;`$":",idbHost,":",string idbPort;`]
+.wdb.hdbAddr:$[count hdbHost;`$":",hdbHost,":",string hdbPort;`]
 .wdb.flushIntv:flushIntv
 .wdb.lastWatermark:0Np
+.wdb.lastSealedDate:0Nd
 .wdb.lastFlushTime:.z.p
 .wdb.tpHandle:0Ni
 .wdb.tpAddr:`$":",tpHost,":",string tpPort
@@ -33,11 +29,10 @@ dbDir:first .u.getarg[args;`dbdir;enlist "./db"]
 .wdb.lastReconnectAttempt:0Np
 .wdb.everConnected:0b
 
-if[not `metrics in key `.; metrics::([] time:`timestamp$(); table:`symbol$();
-    metric:`symbol$(); value:`float$())]
+if[not `metrics in key `.; metrics::([] time:`timestamp$(); tbl:`symbol$(); metric_name:`symbol$(); val:`float$())]
 
-.wdb.logMetric:{[tbl;metric;val]
-  `metrics insert (.z.p;tbl;metric;val);
+.wdb.logMetric:{[tbl;metric;v]
+  `metrics insert (.z.p;tbl;metric;"f"$v);
   }
 
 .wdb.upd:{[t;data]
@@ -46,30 +41,97 @@ if[not `metrics in key `.; metrics::([] time:`timestamp$(); table:`symbol$();
   .wdb.logMetric[t;`batch_arrived;count data];
   }
 
-/ the tickerplant relays this after every WDB flush - the WDB itself never
-/ needs to receive it, but chained RDB/IDB processes do; kept here for symmetry
 .wdb.shedTo:{[w] }
 
-.wdb.flush:{
-  cutoff:.z.p - .wdb.flushIntv * 0D00:01;
+/ scratch flat-file path for one date/table - what the rolling flush appends
+/ to through the day, and what .wdb.seal consumes+retires at end of day.
+/ `$string[d] MUST be parenthesized: bare `$string[d],tbl parses as
+/ `$(string[d],tbl) (`$ binds rightward across the comma), casting a
+/ string+symbol join and throwing 'type - a real trap, confirmed directly
+/ against this build.
+.wdb.scratchFile:{[d;tbl] ` sv hsym[`$.wdb.dbDir],(`$string[d]),tbl}
+
+/ every row strictly before `cutoff` gets APPENDED to its date's scratch file
+/ (a date accumulates across many flush cycles before it's sealed - this used
+/ to overwrite the file each cycle, silently dropping every batch but the
+/ last one for a given date) then dropped from the in-memory table.
+
+.wdb.flushTo:{[cutoff]
   t:tables`.;
-  t@:where not t in `metrics;
+  t:t where not t in `metrics;
   {[cutoff;tbl]
     rows:select from tbl where time < cutoff;
     if[0=count rows; :()];
-    system "mkdir -p ",.wdb.dbDir,"/",string[`date$cutoff];
-    (` sv hsym[`$.wdb.dbDir],`$string[`date$cutoff],tbl) set rows;
+    dates:distinct `date$rows`time;
+    {[tbl;rows;d]
+      drows:select from rows where (`date$time)=d;
+      ddir:.wdb.dbDir,"/",string d;
+      system "mkdir -p ",ddir;
+      f:.wdb.scratchFile[d;tbl];
+      exists:tbl in key hsym `$ddir;
+      existing:$[exists;get f;0#drows];
+      f set existing,drows;
+      .wdb.logMetric[tbl;`rows_flushed;count drows];
+      }[tbl;rows] each dates;
     delete from tbl where time < cutoff;
-    .wdb.logMetric[tbl;`rows_flushed;count rows];
     }[cutoff] each t;
+  }
+
+.wdb.flush:{
+  cutoff:.z.p - .wdb.flushIntv * 0D00:01;
+  .wdb.flushTo[cutoff];
   .wdb.lastWatermark::cutoff;
-  / broadcast on a short-lived handle, independent of the subscription
-  / handle above - a broadcast failure here just means the RDB tier keeps
-  / rows a little longer than ideal, not a correctness problem, so this
-  / stays a simple best-effort attempt rather than joining the reconnect logic
   h:@[hopen; .wdb.tpAddr; {[e] -1 "wdb: could not reach tp to broadcast watermark: ",e; 0Ni}];
   if[not null h; h (`.u.broadcastWatermark; cutoff); hclose h];
   -1 "[wdb ",shardId,"] flushed at ",string cutoff;
+  }
+
+/ seal one closed date's scratch file into a real partitioned HDB segment:
+/ sort by sym, enumerate + splay via .Q.dpft, then retire the scratch file.
+/ Uses a root-level temp var (not .wdb.sealtmp) because that's the form
+/ .Q.dpft is proven (tested directly against this build) to accept.
+.wdb.seal:{[d]
+  {[d;tbl]
+    f:.wdb.scratchFile[d;tbl];
+    ddir:.wdb.dbDir,"/",string d;
+    if[not tbl in key hsym `$ddir; :()];
+    rows:get f;
+    if[0=count rows; hdel f; :()];
+    sealtmp::`sym xasc rows;
+    @[{.Q.dpft[hsym `$.wdb.hdbDir;x;`sym;`sealtmp]};
+      d;
+      {[tbl;d;e] -1 "[wdb] EOD seal FAILED for ",string[tbl]," on ",string[d],": ",e}[tbl;d]];
+    delete sealtmp from `.;
+    hdel f;
+    -1 "[wdb ",string[.wdb.shard],"] sealed ",string[count rows]," ",string[tbl]," rows -> hdb partition ",string d;
+    }[d] each `trade`risk;
+  }
+
+/ best-effort ping to a downstream process after sealing - hdb reloads its
+/ partitioned dir to see the new day, idb drops its now-redundant in-memory
+/ copy of that date. Both also self-heal on their own timers if this misses.
+.wdb.notify:{[addr;msg]
+  if[null addr; :()];
+  h:@[hopen; addr; {[a;e] -1 "wdb: could not reach ",string[a]," to notify: ",e; 0Ni}[addr]];
+  if[not null h; @[h; msg; {[e] -1 "wdb: notify call failed: ",e}]; hclose h];
+  }
+
+/ end-of-day: force-flush every row still in memory dated on or before `d`
+/ (the rolling flush only takes rows older than flushIntv - this closes the
+/ gap for whatever arrived since the last cycle), seal the day into the HDB,
+/ then push the watermark forward so the chained rdb sheds anything left
+/ of day `d` too, and tell hdb/idb about the newly-sealed day.
+.wdb.eod:{[d]
+  cutoff:`timestamp$d+1;
+  .wdb.flushTo[cutoff];
+  .wdb.seal[d];
+  h:@[hopen; .wdb.tpAddr; {[e] -1 "wdb: could not reach tp to broadcast eod watermark: ",e; 0Ni}];
+  if[not null h; h (`.u.broadcastWatermark; cutoff); hclose h];
+  .wdb.notify[.wdb.hdbAddr; (`.hdb.reload;::)];
+  .wdb.notify[.wdb.idbAddr; (`.idb.dropDate;d)];
+  .wdb.lastWatermark::cutoff;
+  .wdb.lastSealedDate::d;
+  -1 "[wdb ",shardId,"] end-of-day seal complete for ",string d;
   }
 
 .wdb.connectTp:{
@@ -100,7 +162,7 @@ if[not `metrics in key `.; metrics::([] time:`timestamp$(); table:`symbol$();
   if[.wdb.tpIsAlive[]; :()];
   if[.wdb.everConnected; -1 "[wdb ",string[.wdb.shard],"] lost connection to tickerplant, will reconnect"];
   .wdb.tpHandle::0Ni;
-  backoff:0D00:00:01 * 2 xexp min[.wdb.reconnectAttempts;5];
+  backoff:0D00:00:01 * 2 xexp (.wdb.reconnectAttempts & 5);
   if[(0Np~.wdb.lastReconnectAttempt) or (.z.p - .wdb.lastReconnectAttempt) > backoff;
     .wdb.lastReconnectAttempt::.z.p;
     .wdb.reconnectAttempts+:1;
@@ -108,15 +170,11 @@ if[not `metrics in key `.; metrics::([] time:`timestamp$(); table:`symbol$();
     ];
   }
 
-/ health endpoint the watchdog (and the gateway, via metrics) can poll
 .wdb.health:{
-  `status`shard`tpConnected`reconnectAttempts`lastWatermark!
-    (`up;.wdb.shard;not null .wdb.tpHandle;.wdb.reconnectAttempts;.wdb.lastWatermark)
+  `status`shard`tpConnected`reconnectAttempts`lastWatermark`lastSealedDate!
+    (`up;.wdb.shard;not null .wdb.tpHandle;.wdb.reconnectAttempts;.wdb.lastWatermark;.wdb.lastSealedDate)
   }
 
-/ single unified timer: checks the tp connection every tick (cheap), and
-/ only actually flushes once flushIntv minutes have elapsed - kdb+ has one
-/ global timer, so both concerns share it rather than fighting over it
 .z.ts:{
   .wdb.checkConnection[];
   if[(.z.p - .wdb.lastFlushTime) > (.wdb.flushIntv * 0D00:01);
@@ -126,10 +184,10 @@ if[not `metrics in key `.; metrics::([] time:`timestamp$(); table:`symbol$();
   }
 \t 5000
 
-/ mirror handlers under the names the tickerplant actually calls on subscribers
 .u.upd:.wdb.upd
 .u.shedTo:.wdb.shedTo
+.u.eod:.wdb.eod
 
 if[not null .wdb.connectTp[]; .wdb.everConnected::1b];
 
--1 "[wdb ",shardId,"] write-down db up (self-healing tp connection enabled), flush every ",string[flushIntv]," min, writing to ",dbDir;
+-1 "[wdb ",shardId,"] write-down db up, flush every ",string[flushIntv]," min, writing to ",dbDir,", sealing to ",hdbDir," at end of day";

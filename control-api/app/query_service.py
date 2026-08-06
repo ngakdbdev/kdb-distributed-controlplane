@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import re
 
+from qpython.qcollection import QDictionary
+
 DEFAULT_ROW_LIMIT = 1000
 MAX_ROW_LIMIT = 10000
 
@@ -93,6 +95,23 @@ def shape_result(result, limit: int = DEFAULT_ROW_LIMIT) -> dict:
     # qpython QTable / numpy structured array -> dict of columns
     if hasattr(result, "dtype") and getattr(result.dtype, "names", None):
         result = {n: list(result[n]) for n in result.dtype.names}
+
+    # qpython keyed-table / dictionary
+    if isinstance(result, QDictionary):
+        keys = getattr(result, "keys", None)
+        vals = getattr(result, "values", None)
+        # keyed table: both keys and values are structured arrays
+        if (hasattr(keys, "dtype") and getattr(keys.dtype, "names", None) and
+                hasattr(vals, "dtype") and getattr(vals.dtype, "names", None)):
+            kcols = {f"k_{n}": list(keys[n]) for n in keys.dtype.names}
+            vcols = {str(n): list(vals[n]) for n in vals.dtype.names}
+            return shape_result({**kcols, **vcols}, limit=limit)
+
+        items = getattr(result, "iteritems", None)
+        if callable(items):
+            result = {k: v for k, v in items()}
+        else:
+            result = {k: v for k, v in zip(keys, vals)}
 
     if isinstance(result, dict):
         # a table (columns of equal length) vs a plain q dict (key->val)

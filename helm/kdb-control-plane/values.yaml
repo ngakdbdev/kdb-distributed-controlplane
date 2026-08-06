@@ -11,7 +11,7 @@ global:
 
 # ==================================================================== SHARD TOPOLOGY
 # Shard count is the single scaling dimension - the product's USP. Every
-# per-shard q process (tickerplant/wdb/rdb/idb), its PVCs, the gateway's
+# per-shard q process (tickerplant/wdb/rdb/idb/hdb), its PVCs, the gateway's
 # routing table (rendered into a ConfigMap from templates/_helpers.tpl), the
 # feed fan-out, and the set of services the watchdog heals are ALL derived
 # from this one number. There is no hand-maintained per-shard list anymore:
@@ -55,11 +55,23 @@ dataPlane:
   flushMinutes: 2
   idbPollSeconds: 15
   dbVolumeSize: 20Gi
+  hdbVolumeSize: 100Gi   # cumulative historical storage - grows every trading day
   tpLogVolumeSize: 5Gi
-  # per-shard pod resource requests/limits (each shard runs 4 q processes)
+  # per-shard pod resource requests/limits (each shard runs 5 q processes)
   resources:
     requests: { cpu: "250m", memory: "256Mi" }
     limits: { memory: "1Gi" }
+
+# ------------------------------------------------------ end-of-day lifecycle
+# hourUtc: which UTC hour the trading day rolls over at (0 = midnight UTC;
+# set it to an exchange's close hour instead). The tickerplant self-triggers
+# on this - no external cron dependency. retentionDays: how long idb keeps a
+# sealed day in memory after wdb has written it into the hdb before evicting
+# it. Per-TickHouse via control-api; these are the chart-level defaults.
+eod:
+  hourUtc: 0
+idb:
+  retentionDays: 5
 
 feeds:
   bpipeRateHz: 20

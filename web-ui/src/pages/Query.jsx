@@ -143,7 +143,7 @@ export default function Query() {
     try {
       setResult(await api.runQuery({ targets: selected, query: text, limit: Number(limit), allow_write: allowWrite }));
     } catch (err) {
-      setError(String(err).replace(/^Error:\s*/, ""));
+      setError(formatQueryError(String(err).replace(/^Error:\s*/, ""), selected));
     } finally { setBusy(false); }
   }
 
@@ -234,8 +234,19 @@ export default function Query() {
   );
 }
 
+function formatQueryError(message, targets) {
+  if (/unreachable/i.test(message) || /502/.test(message)) {
+    const targetText = targets.length > 1 ? `${targets.length} targets` : targets[0] || "gateway";
+    return `Target path unavailable on ${targetText}. The gateway or shard RDB path did not answer in time. Check the Metrics page for transit pressure or switch to a live RDB target.`;
+  }
+  if (/read-only/i.test(message)) {
+    return "Query blocked by the read-only guard. Use a select/exec expression or explicitly enable writes on the deployment.";
+  }
+  return message;
+}
+
 function ResultView({ result }) {
-  const { columns, rows, row_count, truncated, elapsed_ms, kind, per_target } = result;
+  const { columns, rows, row_count, truncated, elapsed_ms, kind, per_target, warning } = result;
   const shown = useMemo(() => rows || [], [rows]);
   return (
     <div className="query-result">
@@ -252,6 +263,7 @@ function ResultView({ result }) {
         {row_count} row{row_count === 1 ? "" : "s"} · {kind}{elapsed_ms != null ? ` · ${elapsed_ms} ms` : ""}
         {truncated && <span className="truncated"> · showing first {shown.length}</span>}
       </div>
+      {warning && <div className="query-warning">{warning}</div>}
       <div className="query-grid-scroll">
         <table className="data-table query-grid">
           <thead><tr>{columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>

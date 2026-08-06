@@ -55,6 +55,7 @@ class Settings:
 
     gateway_host: str = os.environ.get("GATEWAY_HOST", "gateway")
     gateway_port: int = int(os.environ.get("GATEWAY_PORT", str(topology.TIER_PORTS["gateway"])))
+    gateway_timeout_sec: float = float(os.environ.get("GATEWAY_TIMEOUT_SEC", "5"))
 
     # --- SSO / Microsoft Entra ---
     # public_base_url is where THIS api is reachable from the user's browser

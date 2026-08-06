@@ -2,7 +2,7 @@
 / usage: q tick.q <shardId> -p <port>
 /   shardId: e.g. "s0" / "s1" - used for the log filename and shard tag
 / Responsibilities (the standard kdb-tick pattern) plus SLOW-SUBSCRIBER
-/ AUTO-DISCARD:
+/ AUTO-DISCARD plus END-OF-DAY ROLLOVER:
 /   1. accept inbound ticks from feed handlers via .u.upd
 /   2. log every tick to a TP log file before ack, for disaster recovery
 /   3. publish every tick to subscribed processes (WDB, chained RDB)
@@ -12,15 +12,30 @@
 /      DISCONNECT it. A slow subscriber otherwise backs up the tickerplant's
 /      output buffers and can OOM the whole TP - dropping the one slow consumer
 /      protects every other subscriber and the plant itself.
+/   6. detect the trading-day boundary itself (no external cron dependency)
+/      and broadcast end-of-day to every subscriber, then rotate its own log.
 
-\l schema.q
+\l /app/schema.q
 
+.u.getarg:{[a;k;def] $[k in key a; a k; def]}
+
+/ shardId is a bare positional arg ("tick.q s0 -p 5010"), unlike the other
+/ tiers - keep that convention; only the eod hour comes via .Q.opt below.
 shardId:first .z.x
 if[0=count shardId; shardId:"s0"]
 
-.u.shard:`$shardId
+args:.Q.opt .z.x
+
+/ trading-day boundary: which UTC hour the day rolls over at. 0 = midnight UTC
+/ (the default - unchanged behaviour); set e.g. 21 to roll over at 21:00 UTC
+/ for an exchange whose close is there instead. Per-TickHouse config, not a
+/ hardcoded assumption.
+.u.eodHour:"I"$first .u.getarg[args;`eodhour;enlist "0"]
+.u.tradingDate:{`date$(.z.p - .u.eodHour*0D01:00:00)}
+.u.today:.u.tradingDate[]
+
 .u.l:`$":log/", shardId, "_tp"
-.u.L:`$(string[.u.l],".",string .z.d)   / e.g. `:log/s0_tp.2026.08.03
+.u.L:`$(string[.u.l],".",string .u.today)   / e.g. `:log/s0_tp.2026.08.03
 if[not `TPLOG in key `.; system "mkdir -p log"]
 
 .u.w:()!()                          / subscriber handles keyed by table
@@ -38,7 +53,7 @@ if[not `TPLOG in key `.; system "mkdir -p log"]
 / ---------------------------------------------- slow-subscriber config + state
 .u.maxSubBytes:$[count getenv`SLOW_SUB_MAX_BYTES; "J"$getenv`SLOW_SUB_MAX_BYTES; 52428800]  / 50 MB
 .u.slowStrikes:$[count getenv`SLOW_SUB_STRIKES;  "J"$getenv`SLOW_SUB_STRIKES;  3]           / consecutive breaches before drop
-.u.slowCheckMs:$[count getenv`SLOW_SUB_CHECK_MS; "J"$getenv`SLOW_SUB_CHECK_MS; 1000]        / how often to check (ms); 0 disables
+.u.slowCheckMs:$[count getenv`SLOW_SUB_CHECK_MS; "J"$getenv`SLOW_SUB_CHECK_MS; 1000]        / how often to check (ms); 0 disables the slow-sub sweep (eod check still runs)
 .u.controlApi:$[count getenv`CONTROL_API_URL; getenv`CONTROL_API_URL; ""]
 .u.internalSecret:$[count getenv`INTERNAL_SECRET; getenv`INTERNAL_SECRET; ""]
 
@@ -80,8 +95,9 @@ if[not `TPLOG in key `.; system "mkdir -p log"]
      .u.pubNanos+:`long$.z.p-pw; .u.pubN+:1; .u.pub+:(count w)*count d];
   }
 
-/ the WDB calls this after every timed flush; the tickerplant relays it to
-/ every subscriber on its own connection, guaranteeing ordering
+/ the WDB calls this after every timed flush (including its end-of-day one);
+/ the tickerplant relays it to every subscriber on its own connection,
+/ guaranteeing ordering
 .u.broadcastWatermark:{[w]
   subs:distinct raze value .u.w;
   if[count subs; (neg subs) @\: (`.u.shedTo;w)];
@@ -134,16 +150,6 @@ if[not `TPLOG in key `.; system "mkdir -p log"]
    } each .u.subHandles[];
   }
 
-/ current per-subscriber queue depth + strike count, queryable over IPC by the
-/ control plane / dashboard
-.u.subStats:{
-  hs:.u.subHandles[];
-  ([] handle:hs;
-      queuedBytes:.u.queued each hs;
-      strikes:{$[x in key .u.strikes; .u.strikes x; 0]} each hs;
-      tbls:{`$", " sv string .u.tablesOf x} each hs)
-  }
-
 / clean up a subscriber that disconnected on its own (fixes the leaked-handle
 / bug in the vanilla version) - drop it from every table and from strikes
 .z.pc:{[h]
@@ -151,13 +157,59 @@ if[not `TPLOG in key `.; system "mkdir -p log"]
   if[h in key .u.strikes; .u.strikes:.u.strikes _ h];
   }
 
-/ timer drives the slow-subscriber sweep
-.z.ts:{ @[.u.checkSlow; ::; {[e] -1 "[tp] slow-sub check error: ",e}] }
-if[.u.slowCheckMs>0; system "t ",string .u.slowCheckMs]
-
-.u.end:{[d]
-  -1 "[tp ",shardId,"] end of day rollover for ",string d;
+/ ---------------------------------------------------------- end-of-day logic
+/ relay end-of-day to every subscriber (wdb seals the closing day into the
+/ hdb and force-flushes any tail rows; rdb defensively clears itself of the
+/ closing day too, belt-and-suspenders with the watermark wdb's seal sends)
+.u.broadcastEod:{[d]
+  subs:distinct raze value .u.w;
+  if[count subs; (neg subs) @\: (`.u.eod;d)];
   }
+
+/ close the current log, open a fresh one named for the new trading day, and
+/ restart the sequence counter - without this a tp that outlives midnight
+/ keeps appending to yesterday's log file forever.
+.u.rotateLog:{
+  @[hclose;L;{[e]}];
+  TPLOG::`$(string[.u.l],".",string .u.today);
+  L::hopen TPLOG;
+  .u.i::0j;
+  -1 "[tp ",shardId,"] rotated tp log -> ",string TPLOG;
+  }
+
+.u.doEod:{[d]
+  -1 "[tp ",shardId,"] end of day rollover for ",string d;
+  .u.broadcastEod[d];
+  .u.rotateLog[];
+  }
+
+/ self-triggered: no external cron/scheduler container needed or assumed up.
+/ checked on every timer tick regardless of whether the slow-sub sweep is
+/ enabled - a disabled slow-sub feature must never also silently disable EOD.
+.u.checkEod:{
+  d:.u.tradingDate[];
+  if[d>.u.today;
+    closing:.u.today;
+    .u.today::d;
+    .u.doEod[closing];
+    ];
+  }
+
+/ manual/test override: force end-of-day for `d` right now, independent of
+/ the wall clock. Also advances .u.today so the automatic check doesn't fire
+/ again for the same day.
+.u.end:{[d]
+  .u.today::d+1;
+  .u.doEod[d];
+  }
+
+/ timer drives both the slow-subscriber sweep and the eod check
+.z.ts:{
+  @[.u.checkEod; ::; {[e] -1 "[tp ",shardId,"] eod check error: ",e}];
+  if[.u.slowCheckMs>0; @[.u.checkSlow; ::; {[e] -1 "[tp ",shardId,"] slow-sub check error: ",e}]];
+  }
+.u.timerMs:$[.u.slowCheckMs>0;.u.slowCheckMs;1000]
+system "t ",string .u.timerMs
 
 / -------------------------------------------------- monitoring accessors (IPC)
 / point-in-time counters + gauges; the control plane polls this and derives
@@ -170,7 +222,7 @@ if[.u.slowCheckMs>0; system "t ",string .u.slowCheckMs]
     shardId; .u.recv; .u.pub; .u.dropped; .u.errs; qd; lag; count hs; .u.i; .u.lastTs;
     $[.u.pubN>0; (.u.pubNanos div .u.pubN) div 1000; 0];
     $[.u.logN>0; (.u.logNanos div .u.logN) div 1000; 0];
-    @[hcount; .u.L; 0j])}
+    @[hcount; TPLOG; 0j])}
 
 / boolean health checks + overall; false where a signal is genuinely absent
 / (no feed yet, no subscribers) rather than faked green.
@@ -183,7 +235,7 @@ if[.u.slowCheckMs>0; system "t ",string .u.slowCheckMs]
     1b;
     (not null .u.lastTs) and .u.lastTs > .z.p - 0D00:00:30;
     .u.i > 0;
-    0 < @[hcount; .u.L; 0j];
+    0 < @[hcount; TPLOG; 0j];
     (count hs) > 0;
     pl < 100000;
     qd < .u.maxSubBytes;
@@ -192,4 +244,4 @@ if[.u.slowCheckMs>0; system "t ",string .u.slowCheckMs]
 
 .u.init[]
 -1 "[tp ",shardId,"] tickerplant up on port ",(string system"p")," | slow-sub discard over ",
-   string[.u.maxSubBytes]," bytes x ",string[.u.slowStrikes]," checks";
+   string[.u.maxSubBytes]," bytes x ",string[.u.slowStrikes]," checks | eod hour ",string[.u.eodHour],"h UTC";

@@ -48,10 +48,13 @@ TIER_PORTS = {
     "idb": 5030,
     "wdb": 5040,
     "gateway": 5050,
+    "hdb": 5060,
 }
 
-# the four per-shard q processes, in dependency order
-SHARD_TIERS = ("tickerplant", "wdb", "rdb", "idb")
+# the five per-shard q processes, in dependency order. hdb depends on wdb
+# because it loads the partitioned directory wdb's end-of-day seal writes into
+# - it has nothing to serve until wdb has sealed at least one day.
+SHARD_TIERS = ("tickerplant", "wdb", "rdb", "idb", "hdb")
 
 # feed simulators - not sharded, not healed as failures (their on/off state is
 # a deliberate user choice via the Connectors screen), listed here so callers
@@ -89,6 +92,10 @@ class Shard:
     @property
     def db_volume(self) -> str:
         return f"db-{self.id}"
+
+    @property
+    def hdb_volume(self) -> str:
+        return f"hdb-{self.id}"
 
     @property
     def tp_log_volume(self) -> str:
@@ -149,9 +156,11 @@ def shards_json(n: int) -> dict:
             "label": s.label,
             "lo": s.lo,
             "hi": s.hi,
+            "tp": gateway_host(s, "tickerplant"),
             "rdb": gateway_host(s, "rdb"),
             "idb": gateway_host(s, "idb"),
             "wdb": gateway_host(s, "wdb"),
+            "hdb": gateway_host(s, "hdb"),
         })
     return {"shardCount": n, "gatewayPort": TIER_PORTS["gateway"], "shards": out}
 

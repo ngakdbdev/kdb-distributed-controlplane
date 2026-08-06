@@ -152,9 +152,12 @@ class ComposeBackend:
         shard count and bring the stack up with the profile/OS env applied."""
         from .tickhouse_render import render_compose_env, summarize
         n = desired.get("shardCount")
+        eod = desired.get("eod_config") or {}
         steps = []
         rc, out = _run([self.python, "scripts/gen_topology.py", "--shards", str(n),
-                        "--compose", "docker-compose.yml", "--shards-json", "data-plane/shards.json"],
+                        "--compose", "docker-compose.yml", "--shards-json", "data-plane/shards.json",
+                        "--eod-hour", str(eod.get("eod_hour_utc", 0)),
+                        "--idb-retention-days", str(eod.get("idb_retention_days", 5))],
                        cwd=self.project_dir)
         steps.append(f"gen_topology --shards {n}")
         if rc != 0:

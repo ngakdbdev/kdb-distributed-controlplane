@@ -132,6 +132,9 @@ class ShardRange:
         return f"s{self.lo.lower()}{self.hi.lower()}"
 
 
+DEFAULT_EOD_CONFIG = {"eod_hour_utc": 0, "idb_retention_days": 5}
+
+
 @dataclass
 class TickHouseSpec:
     name: str
@@ -145,6 +148,12 @@ class TickHouseSpec:
     idb_enabled: bool = False
     sharding_policy: str = "letter-range"
     target_config: dict = field(default_factory=dict)   # cloud/k8s coordinates (non-secret)
+    # end-of-day lifecycle: eod_hour_utc is when the trading day rolls over
+    # (0 = midnight UTC; set it to an exchange's close hour instead) - the
+    # tickerplant self-triggers on this, no external cron dependency.
+    # idb_retention_days is how long the intraday cache keeps a day in memory
+    # after wdb has sealed it into the hdb before evicting it.
+    eod_config: dict = field(default_factory=lambda: dict(DEFAULT_EOD_CONFIG))
 
 
 # --------------------------------------------------------------------------- #
@@ -208,6 +217,12 @@ def validate_spec(spec: TickHouseSpec) -> list:
             problems.append(f"missing required component: {req}")
     if spec.idb_enabled and "idb" not in have:
         problems.append("idb_enabled is set but no idb component is present")
+    eod_hour = spec.eod_config.get("eod_hour_utc", 0)
+    if not (isinstance(eod_hour, int) and 0 <= eod_hour <= 23):
+        problems.append("eod_config.eod_hour_utc must be an integer 0-23 (UTC hour the trading day rolls over)")
+    retention = spec.eod_config.get("idb_retention_days", 5)
+    if not (isinstance(retention, int) and retention >= 1):
+        problems.append("eod_config.idb_retention_days must be a positive integer")
     return problems
 
 
@@ -255,7 +270,8 @@ def auto_spec(name: str, location: str, os: str, profile: str,
               ldap_ref: str = "", gateway_config: dict | None = None,
               sharding_policy: str = "letter-range",
               shard_symbols: list | None = None,
-              target_config: dict | None = None) -> TickHouseSpec:
+              target_config: dict | None = None,
+              eod_config: dict | None = None) -> TickHouseSpec:
     """Build a fully auto-tuned TickHouseSpec from the high-level choices - the
     'reduce admin overhead' path: pick name/location/os/profile/shards and every
     component's hardware is filled in for you. Shards are either letter-ranges
@@ -277,7 +293,8 @@ def auto_spec(name: str, location: str, os: str, profile: str,
                          gateway_config=gateway_config or {"port": 5050},
                          ldap_ref=ldap_ref, idb_enabled=idb,
                          sharding_policy=sharding_policy,
-                         target_config=target_config or {})
+                         target_config=target_config or {},
+                         eod_config={**DEFAULT_EOD_CONFIG, **(eod_config or {})})
 
 
 # --------------------------------------------------------------------------- #
@@ -305,7 +322,8 @@ def spec_from_dict(d: dict) -> TickHouseSpec:
         gateway_config=d.get("gateway_config", {}), ldap_ref=d.get("ldap_ref", ""),
         idb_enabled=d.get("idb_enabled", False),
         sharding_policy=d.get("sharding_policy", "letter-range"),
-        target_config=d.get("target_config", {}))
+        target_config=d.get("target_config", {}),
+        eod_config={**DEFAULT_EOD_CONFIG, **d.get("eod_config", {})})
 
 
 def to_provision_payload(spec: TickHouseSpec) -> dict:
@@ -329,4 +347,5 @@ def to_provision_payload(spec: TickHouseSpec) -> dict:
         "ldap_ref": spec.ldap_ref,
         "idb_enabled": spec.idb_enabled,
         "target_config": spec.target_config,
+        "eod_config": spec.eod_config,
     }

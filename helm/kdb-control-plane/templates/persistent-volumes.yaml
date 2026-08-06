@@ -1,6 +1,8 @@
 {{/*
-One db PVC and one tp-log PVC per shard, generated from the shard count.
-db-s{i} is shared between shard i's wdb (writer) and idb (reader).
+One db PVC, one hdb PVC, and one tp-log PVC per shard, generated from the
+shard count. db-s{i} is shared between shard i's wdb (writer) and idb
+(reader). hdb-s{i} is shared between the same wdb (which seals end-of-day
+partitions into it) and that shard's hdb (which serves them read-only).
 */}}
 {{- range $i := until (int .Values.shardCount) }}
 {{- $sid := printf "s%d" $i }}
@@ -19,6 +21,21 @@ spec:
   resources:
     requests:
       storage: {{ $.Values.dataPlane.dbVolumeSize }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hdb-{{ $sid }}
+  namespace: {{ $.Values.global.namespace }}
+  labels: { app: hdb-{{ $sid }}, shard: {{ $sid | quote }} }
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if $.Values.global.storageClassName }}
+  storageClassName: {{ $.Values.global.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $.Values.dataPlane.hdbVolumeSize }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
