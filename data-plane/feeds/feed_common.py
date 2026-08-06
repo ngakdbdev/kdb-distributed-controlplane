@@ -11,6 +11,7 @@ import os
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
+from typing import Optional
 
 from qpython import qconnection
 from qpython.qtype import QException
@@ -44,20 +45,123 @@ class TickerplantConnection:
                 self.q = None
                 time.sleep(2)
 
+    def _normalize_value(self, value):
+        if isinstance(value, datetime):
+            return self._fmt_ts(value)
+        return value
+
+    def _normalize_row(self, row: list) -> list:
+        return [self._normalize_value(v) for v in row]
+
     def publish(self, table: str, rows: list):
         """Fire-and-forget async publish of a batch of rows to `table`."""
         if self.q is None:
             self.connect()
         try:
-            # .u.upd is called async (no return value expected) so the feed
-            # never blocks on the tickerplant's ack, matching production
-            # feedhandler behaviour
-            self.q(".u.upd", table, rows, sync=False)
+            self._publish_via_literal(table, rows)
         except Exception as exc:  # noqa: BLE001 - any failure -> log + reconnect, never die
             self.log.warning("publish to %s:%s failed (%s: %s), reconnecting",
                              self.host, self.port, type(exc).__name__, exc)
             self.q = None
             self.connect()
+
+    @staticmethod
+    def _fmt_ts(val) -> str:
+        if isinstance(val, datetime):
+            if val.tzinfo is not None:
+                val = val.astimezone(timezone.utc).replace(tzinfo=None)
+            return val.strftime("%Y.%m.%dD%H:%M:%S.%f") + "000"
+        return str(val)
+
+    @staticmethod
+    def _qstr(s: str) -> str:
+        return '"' + str(s).replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+    def _row_literal(self, row: list) -> str:
+        vals = []
+        for i, v in enumerate(row):
+            if i == 0:
+                vals.append(self._qstr(self._fmt_ts(v)))
+            elif isinstance(v, (int,)):
+                vals.append(str(v))
+            elif isinstance(v, (float,)):
+                vals.append(repr(v))
+            else:
+                vals.append(self._qstr(v))
+        return "(" + ";".join(vals) + ")"
+
+    def _publish_via_literal(self, table: str, rows: list) -> None:
+        if not rows:
+            return
+        schemas = {
+            "trade": [
+                ("time", "timestamp", lambda v: self._fmt_ts(v)),
+                ("sym", "symbol", str),
+                ("price", "float", float),
+                ("size", "long", int),
+                ("side", "symbol", str),
+                ("venue", "symbol", str),
+                ("shard", "symbol", str),
+            ],
+            "risk": [
+                ("time", "timestamp", lambda v: self._fmt_ts(v)),
+                ("sym", "symbol", str),
+                ("riskType", "symbol", str),
+                ("limit", "float", float),
+                ("exposure", "float", float),
+                ("status", "symbol", str),
+                ("shard", "symbol", str),
+            ],
+        }
+        spec = schemas.get(table)
+        if spec is None:
+            raise ValueError(f"unsupported table for literal publish: {table}")
+
+        cols = list(zip(*rows))
+        n = len(rows)
+
+        def sym_list(vals):
+            vals = [str(v).replace('"', '\\"') for v in vals]
+            if len(vals) == 1:
+                return f'enlist `$"{vals[0]}"'
+            return "(" + ";".join(f'`$"{v}"' for v in vals) + ")"
+
+        def timestamp_list(vals):
+            values = [self._fmt_ts(v) for v in vals]
+            if len(values) == 1:
+                return f'enlist {values[0]}'
+            return "(" + ";".join(values) + ")"
+
+        def float_list(vals):
+            xs = [repr(float(v)) for v in vals]
+            if len(xs) == 1:
+                return f"enlist {xs[0]}"
+            return "(" + ";".join(xs) + ")"
+
+        def long_list(vals):
+            xs = [str(int(v)) for v in vals]
+            if len(xs) == 1:
+                return f"enlist {xs[0]}j"
+            return "(" + ";".join(xs[:-1] + [xs[-1] + "j"]) + ")"
+
+        col_exprs = []
+        for i, (name, qtype, cast_fn) in enumerate(spec):
+            values = [self._normalize_value(v) for v in cols[i]]
+            if qtype == "timestamp":
+                lst = timestamp_list(values)
+            elif qtype == "symbol":
+                lst = sym_list(values)
+            elif qtype == "long":
+                lst = long_list(values)
+            elif qtype == "float":
+                lst = float_list(values)
+            else:
+                raise ValueError(f"unsupported qtype: {qtype}")
+            col_exprs.append(f"{name}:{lst}")
+
+        expr = f"d:([] {'; '.join(col_exprs)}); .u.upd[`{table};d]"
+        self._last_literal_expr = expr
+        self.q(expr, sync=False)
 
     def close(self):
         if self.q is not None:
@@ -75,8 +179,8 @@ class ShardedPublisher:
     change - the feed side of "N-way sharding is real".
     """
 
-    def __init__(self, feed_name: str, shard_count: int | None = None,
-                 host_pattern: str | None = None, port: int | None = None,
+    def __init__(self, feed_name: str, shard_count: Optional[int] = None,
+                 host_pattern: Optional[str] = None, port: Optional[int] = None,
                  shard_index: int = -1):
         self.n = shard_count if shard_count is not None else int(os.environ.get("SHARD_COUNT", "2"))
         host_pattern = host_pattern or os.environ.get("TP_HOST_PATTERN", "tp-{shard}")

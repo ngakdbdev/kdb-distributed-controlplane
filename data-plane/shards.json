@@ -7,18 +7,22 @@
       "label": "A-M",
       "lo": "A",
       "hi": "M",
+      "tp": "tp-s0:5010",
       "rdb": "rdb-s0:5020",
       "idb": "idb-s0:5030",
-      "wdb": "wdb-s0:5040"
+      "wdb": "wdb-s0:5040",
+      "hdb": "hdb-s0:5060"
     },
     {
       "id": "s1",
       "label": "N-Z",
       "lo": "N",
       "hi": "Z",
+      "tp": "tp-s1:5010",
       "rdb": "rdb-s1:5020",
       "idb": "idb-s1:5030",
-      "wdb": "wdb-s1:5040"
+      "wdb": "wdb-s1:5040",
+      "hdb": "hdb-s1:5060"
     }
   ]
 }

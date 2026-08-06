@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import Nav from "./components/Nav.jsx";
 import { COPYRIGHT } from "./brand.js";
 import AuditLog from "./pages/AuditLog.jsx";
+import Alerts from "./pages/Alerts.jsx";
 import Overview from "./pages/Overview.jsx";
 import Tickerplants from "./pages/Tickerplants.jsx";
 import Connectors from "./pages/Connectors.jsx";
+import Execution from "./pages/Execution.jsx";
 import Export from "./pages/Export.jsx";
 import Fleet from "./pages/Fleet.jsx";
 import TickHouses from "./pages/TickHouses.jsx";
@@ -20,8 +22,10 @@ const PAGES = {
   topology: Topology,
   tickerplants: Tickerplants,
   metrics: Metrics,
+  alerts: Alerts,
   query: Query,
   trading: Trading,
+  execution: Execution,
   connectors: Connectors,
   subscribers: Subscribers,
   tickhouses: TickHouses,

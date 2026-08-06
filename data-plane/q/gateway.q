@@ -1,112 +1,159 @@
-/ gateway.q - single entry point for the control API and any client.
-/ Routes symbol-scoped queries to the right shard's RDB+IDB, fans out
-/ across shards for un-scoped queries, and aggregates health + the
-/ batch_sent/batch_arrived transit-lag metric for the dashboard.
-/
-/ SHARD TOPOLOGY IS NO LONGER HARDCODED. At startup the gateway reads a
-/ shards.json document (generated from the single shard-count knob by
-/ app.topology / scripts/gen_topology.py, mounted here as a ConfigMap on
-/ k8s or a bind mount under compose) and builds its routing table and host
-/ map from it. This is what makes N-way sharding real: change the shard
-/ count, regenerate shards.json, and the gateway routes across N shards
-/ with no code change. If the file is missing or unparseable it falls back
-/ to the built-in 2-shard A-M / N-Z topology so it always comes up.
+/ gateway.q - routes queries/health across every shard's tiers.
+/ Learns shard count/routing entirely from the mounted shards.json (env
+/ SHARDS_JSON, default /app/shards.json) - genuinely never hardcoded, so this
+/ scales past 2 shards without touching this file.
 
-/ ---------------------------------------------------------------- topology load
-.gw.shardsFile:$[count getenv `SHARDS_JSON; getenv `SHARDS_JSON; "/app/shards.json"]
+.gw.addr:{[hp] `$":",hp}
 
-/ built-in fallback (2 shards, uniform ports) - matches app.topology at N=2
-.gw.fallback:(
-  `id`label`lo`hi`rdb`idb`wdb!("s0";"A-M";"A";"M";"rdb-s0:5020";"idb-s0:5030";"wdb-s0:5040");
-  `id`label`lo`hi`rdb`idb`wdb!("s1";"N-Z";"N";"Z";"rdb-s1:5020";"idb-s1:5030";"wdb-s1:5040"))
-
-.gw.loadTopology:{
-  parsed:@[
-    {[f] .j.k raze read0 hsym `$f};
-    .gw.shardsFile;
-    {[e] -1 "[gateway] could not read/parse ",.gw.shardsFile,": ",e,
-            " - falling back to built-in 2-shard topology"; (::)}
-    ];
-  shards:$[(::)~parsed; .gw.fallback; parsed`shards];
-  / normalise: each element is a dict with string values
-  shards
+.gw.loadConfig:{
+  path:$[count getenv`SHARDS_JSON; getenv`SHARDS_JSON; "/app/shards.json"];
+  .gw.cfg::.j.k raze read0 hsym `$path;
+  rows:.gw.cfg`shards;
+  ids:`$rows`id;
+  .gw.shardRanges::([] id:ids; lo:first each rows`lo; hi:first each rows`hi);
+  .gw.hosts::ids!{[r]
+      (`tp`rdb`idb`wdb`hdb)!.gw.addr each (r`tp;r`rdb;r`idb;r`wdb;r`hdb)
+    } each rows;
+  -1 "[gateway] up, routing across ",string[count ids]," shards: ",", " sv string ids;
   }
 
-.gw.shards:.gw.loadTopology[]
+.gw.conn:()!()
 
-/ id (symbol) -> `rdb`idb`wdb!(address syms), lazily hopened via .gw.h
-.gw.hosts:(!) . flip {[s]
-  addr:{[hp] `$":",hp};
-  (`$s`id; `rdb`idb`wdb!(addr s`rdb; addr s`idb; addr s`wdb))
-  } each .gw.shards
+.gw.get:{[d;k;def] $[(k in key d); d k; def]}
+.gw.msDiff:{[a;b] $[(null a) or (null b); 0n; (`float$`long$(a-b))%1000000f]}
+.gw.msAge:{[a] $[null a; 0n; (`float$`long$(.z.p-a))%1000000f]}
 
-/ routing table: first-letter range -> shard id, for symbol-scoped queries
-.gw.routes:{[s] `lo`hi`id!(first s`lo; first s`hi; `$s`id)} each .gw.shards
-.gw.routes:$[0=count .gw.routes; ([] lo:"A"; hi:"Z"; id:`s0); (uj/) enlist each .gw.routes]
+.gw.downTier:{[shard]
+  `status`shard`uptimeSec`rowsTrade`rowsRisk`lastTradeTs`lastRiskTs`watermark`tpConnected`reconnectAttempts!
+    (`down;shard;0j;0j;0j;0Np;0Np;0Np;0b;0j)
+  }
 
-/ first A-Z letter of a symbol (skipping digits/punctuation); ' ' if none,
-/ which falls through to the first shard - mirrors app.topology.shard_of
+.gw.downTp:{[shard]
+  `status`shard`recv`pub`dropped`errs`queueDepth`subLag`subs`lastSeq`lastTs`pubLatencyUs`logLatencyUs`logBytes!
+    (`down;shard;0j;0j;0j;0j;0j;0j;0j;0j;0Np;0j;0j;0j)
+  }
+
+.gw.downIdb:{[shard]
+  `status`shard`rowsTrade`rowsRisk`partitionsLoaded`retentionDays!(`down;shard;0j;0j;0j;0j)
+  }
+
+.gw.downWdb:{[shard]
+  `status`shard`tpConnected`reconnectAttempts`lastWatermark`lastSealedDate!(`down;shard;0b;0j;0Np;0Nd)
+  }
+
+.gw.downHdb:{[shard]
+  `status`shard`partitions`oldestDate`newestDate`rowsTrade`rowsRisk`lastReload`lastError!
+    (`down;shard;0j;0Nd;0Nd;0j;0j;0Np;"")
+  }
+
 .gw.firstAlpha:{[sym] a:(upper string sym) inter .Q.A; $[count a; first a; " "]}
 
 .gw.shardOf:{[sym]
   c:.gw.firstAlpha sym;
-  hit:select from .gw.routes where lo<=c, c<=hi;
-  $[count hit; first hit`id; first .gw.routes`id]}
-
-/ ---------------------------------------------------------------- connections
-.gw.conn:()!()
+  m:select from .gw.shardRanges where lo<=c, c<=hi;
+  $[count m; first m`id; first .gw.shardRanges`id]
+  }
 
 .gw.h:{[shard;tier]
   key_:` sv shard,tier;
   if[key_ in key .gw.conn; :.gw.conn key_];
   addr:.gw.hosts[shard][tier];
-  h:@[hopen; addr; {[a;e] -2 "gateway: could not reach ",string[a],": ",e; 0N}[addr]];
+  h:@[hopen; addr; {[a;e] -1 "gateway: could not reach ",string[a],": ",e; 0N}[addr]];
   if[not null h; .gw.conn[key_]:h];
-  h}
-
-/ query trade or risk for a single symbol, checking IDB then RDB and
-/ concatenating - the flush watermark guarantees no overlap between them
-.gw.bySym:{[tbl;sym]
-  shard:.gw.shardOf sym;
-  rdbH:.gw.h[shard;`rdb]; idbH:.gw.h[shard;`idb];
-  rdbRows:$[null rdbH; 0#([] time:`timestamp$()); rdbH ({[t;s] select from t where sym=s}; tbl; sym)];
-  idbRows:$[null idbH; 0#([] time:`timestamp$()); idbH ({[t;s] select from t where sym=s}; tbl; sym)];
-  `time xasc idbRows,rdbRows}
-
-/ fan out across all shards for un-scoped queries (dashboards, demos)
-.gw.all:{[tbl]
-  raze {[tbl;shard]
-    rdbH:.gw.h[shard;`rdb]; idbH:.gw.h[shard;`idb];
-    rdbRows:$[null rdbH; 0#([] time:`timestamp$()); rdbH ({[t] select from t}; tbl)];
-    idbRows:$[null idbH; 0#([] time:`timestamp$()); idbH ({[t] select from t}; tbl)];
-    idbRows,rdbRows
-    }[tbl] each key .gw.hosts}
-
-.gw.health:{
-  raze {[shard]
-    rdbH:.gw.h[shard;`rdb]; idbH:.gw.h[shard;`idb]; wdbH:.gw.h[shard;`wdb];
-    rdbStat:$[null rdbH; (`status`shard!(`down;shard)); @[rdbH;(`.rdb.health;::);{(`status`shard!(`down;x))}[shard]]];
-    idbStat:$[null idbH; (`status`shard!(`down;shard)); @[idbH;(`.idb.health;::);{(`status`shard!(`down;x))}[shard]]];
-    enlist `shard`rdb`idb!(shard;rdbStat;idbStat)
-    }[] each key .gw.hosts}
-
-/ per-table transit lag, sourced from each WDB's metrics table
-.gw.transitLag:{
-  raze {[shard]
-    wdbH:.gw.h[shard;`wdb];
-    if[null wdbH; :0#([] shard:`symbol$();table:`symbol$();metric:`symbol$();avgMs:`float$())];
-    m:@[wdbH;({select avgMs:avg value from metrics where metric=`batch_arrived_lag_ms by table};::);
-      {0#([] table:`symbol$();avgMs:`float$())}];
-    update shard:shard from m
-    }[] each key .gw.hosts}
-
-/ topology, exposed so the control API / UI can show which shard owns what
-.gw.topology:{
-  ([] id:`$.gw.shards@\:`id; label:.gw.shards@\:`label;
-      lo:.gw.shards@\:`lo; hi:.gw.shards@\:`hi)}
-
-.gw.query:{[tbl;sym]
-  $[null sym; .gw.all tbl; .gw.bySym[tbl;sym]]
+  h
   }
 
--1 "[gateway] up, routing across ",string[count .gw.hosts]," shards: ",", " sv string key .gw.hosts;
+.gw.fetch:{[shard;tier;expr;fallback]
+  h:.gw.h[shard;tier];
+  $[null h; fallback; @[h;(expr;::);{[fb;e] fb}[fallback]]]
+  }
+
+.gw.bySym:{[tbl;sym]
+  shard:.gw.shardOf sym;
+  rdbH:.gw.h[shard;`rdb];
+  idbH:.gw.h[shard;`idb];
+  hdbH:.gw.h[shard;`hdb];
+  rdbRows:$[null rdbH; 0#([] time:`timestamp$()); rdbH ({[t;s] select from t where sym=s}; tbl; sym)];
+  idbRows:$[null idbH; 0#([] time:`timestamp$()); idbH ({[t;s] select from t where sym=s}; tbl; sym)];
+  / hdb rows carry a leading `date` column (partitioned-table artifact) that
+  / rdb/idb rows don't - drop it so the three concatenate cleanly.
+  hdbRows:$[null hdbH; 0#([] time:`timestamp$()); hdbH ({[t;s] delete date from select from t where sym=s}; tbl; sym)];
+  `time xasc hdbRows,idbRows,rdbRows
+  }
+
+.gw.all:{[tbl]
+  raze {[tbl;shard]
+    rdbH:.gw.h[shard;`rdb];
+    idbH:.gw.h[shard;`idb];
+    hdbH:.gw.h[shard;`hdb];
+    rdbRows:$[null rdbH; 0#([] time:`timestamp$()); rdbH ({[t] select from t}; tbl)];
+    idbRows:$[null idbH; 0#([] time:`timestamp$()); idbH ({[t] select from t}; tbl)];
+    hdbRows:$[null hdbH; 0#([] time:`timestamp$()); hdbH ({[t] delete date from select from t}; tbl)];
+    hdbRows,idbRows,rdbRows
+    }[tbl] each key .gw.hosts
+  }
+
+.gw.health:{
+  {[shard]
+    rdbStat:.gw.fetch[shard;`rdb;`.rdb.health; .gw.downTier shard];
+    idbStat:.gw.fetch[shard;`idb;`.idb.health; .gw.downIdb shard];
+    wdbStat:.gw.fetch[shard;`wdb;`.wdb.health; .gw.downWdb shard];
+    hdbStat:.gw.fetch[shard;`hdb;`.hdb.health; .gw.downHdb shard];
+    tpStat:.gw.fetch[shard;`tp;`.u.stats; .gw.downTp shard];
+    `shard`tp`rdb`idb`wdb`hdb!(shard;tpStat;rdbStat;idbStat;wdbStat;hdbStat)
+    } each key .gw.hosts
+  }
+
+.gw.transitLag:{
+  raze {[shard]
+    rows:([] shard:`symbol$(); table:`symbol$(); stage:`symbol$(); lagMs:`float$(); queueBytes:`long$(); rdbRows:`long$(); watermark:`timestamp$());
+    tpStat:.gw.fetch[shard;`tp;`.u.stats; .gw.downTp shard];
+    rdbStat:.gw.fetch[shard;`rdb;`.rdb.health; .gw.downTier shard];
+    wdbStat:.gw.fetch[shard;`wdb;`.wdb.health; .gw.downWdb shard];
+    tpLast:.gw.get[tpStat;`lastTs;0Np];
+    tpQueue:`long$.gw.get[tpStat;`queueDepth;0j];
+    wm:.gw.get[wdbStat;`lastWatermark;0Np];
+    rdbTradeTs:.gw.get[rdbStat;`lastTradeTs;0Np];
+    rdbRiskTs:.gw.get[rdbStat;`lastRiskTs;0Np];
+    rdbTradeRows:`long$.gw.get[rdbStat;`rowsTrade;0j];
+    rdbRiskRows:`long$.gw.get[rdbStat;`rowsRisk;0j];
+    rows,:enlist (shard;`trade;`feed_to_tp;.gw.msAge tpLast;tpQueue;rdbTradeRows;wm);
+    rows,:enlist (shard;`trade;`tp_to_rdb;.gw.msDiff[tpLast;rdbTradeTs];tpQueue;rdbTradeRows;wm);
+    rows,:enlist (shard;`trade;`rdb_to_gateway;.gw.msAge rdbTradeTs;tpQueue;rdbTradeRows;wm);
+    rows,:enlist (shard;`trade;`tp_to_wdb_flush;.gw.msDiff[tpLast;wm];tpQueue;rdbTradeRows;wm);
+    rows,:enlist (shard;`risk;`feed_to_tp;.gw.msAge tpLast;tpQueue;rdbRiskRows;wm);
+    rows,:enlist (shard;`risk;`tp_to_rdb;.gw.msDiff[tpLast;rdbRiskTs];tpQueue;rdbRiskRows;wm);
+    rows,:enlist (shard;`risk;`rdb_to_gateway;.gw.msAge rdbRiskTs;tpQueue;rdbRiskRows;wm);
+    rows,:enlist (shard;`risk;`tp_to_wdb_flush;.gw.msDiff[tpLast;wm];tpQueue;rdbRiskRows;wm);
+    rows
+    } each key .gw.hosts
+  }
+
+.gw.componentMetrics:{
+  ([] shard:`symbol$();
+      tpRecv:`long$(); tpPub:`long$(); tpQueue:`long$(); tpSubLag:`long$(); tpPubLatencyUs:`long$(); tpLogLatencyUs:`long$();
+      rdbRowsTrade:`long$(); rdbRowsRisk:`long$(); rdbReconnects:`long$(); rdbConnected:`boolean$();
+      wdbConnected:`boolean$(); wdbReconnects:`long$(); wdbLastWatermark:`timestamp$();
+      hdbConnected:`boolean$(); hdbPartitions:`long$());
+  raze {[shard]
+    tpStat:.gw.fetch[shard;`tp;`.u.stats; .gw.downTp shard];
+    rdbStat:.gw.fetch[shard;`rdb;`.rdb.health; .gw.downTier shard];
+    wdbStat:.gw.fetch[shard;`wdb;`.wdb.health; .gw.downWdb shard];
+    hdbStat:.gw.fetch[shard;`hdb;`.hdb.health; .gw.downHdb shard];
+    enlist (shard;
+            `long$.gw.get[tpStat;`recv;0j]; `long$.gw.get[tpStat;`pub;0j]; `long$.gw.get[tpStat;`queueDepth;0j]; `long$.gw.get[tpStat;`subLag;0j];
+            `long$.gw.get[tpStat;`pubLatencyUs;0j]; `long$.gw.get[tpStat;`logLatencyUs;0j];
+            `long$.gw.get[rdbStat;`rowsTrade;0j]; `long$.gw.get[rdbStat;`rowsRisk;0j]; `long$.gw.get[rdbStat;`reconnectAttempts;0j]; not null .gw.h[shard;`rdb];
+            `boolean$.gw.get[wdbStat;`tpConnected;0b]; `long$.gw.get[wdbStat;`reconnectAttempts;0j]; .gw.get[wdbStat;`lastWatermark;0Np];
+            not null .gw.h[shard;`hdb]; `long$.gw.get[hdbStat;`partitions;0j])
+    } each key .gw.hosts
+  }
+
+.gw.topology:{
+  t:.gw.cfg`shards;
+  ([] id:`$t`id; label:t`label; lo:t`lo; hi:t`hi)
+  }
+
+.gw.query:{[tbl;sym] $[null sym; .gw.all tbl; .gw.bySym[tbl;sym]]}
+
+.gw.loadConfig[]

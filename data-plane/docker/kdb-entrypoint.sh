@@ -68,7 +68,14 @@ if [ -z "$QHOME" ] || [ ! -x "$QHOME/$KX_ARCH/q" ]; then
 fi
 
 export QHOME
-export QLIC="${QLIC:-${KX_LICENSE_PATH:-$KX_BINARIES_DIR/k4.lic}}"
+
+# KDB-X can load license directly from KDB_LICENSE_B64. Do not force QLIC in
+# that mode, because a file-based QLIC can override and fail this runtime path.
+if [ -z "$KDB_LICENSE_B64" ]; then
+  export QLIC="${QLIC:-${KX_LICENSE_PATH:-$KX_BINARIES_DIR/kc.lic}}"
+else
+  unset QLIC
+fi
 QBIN="$QHOME/$KX_ARCH/q"
 
 echo "kdb-entrypoint: arch=$KX_ARCH source=$KX_INSTALL_SOURCE QHOME=$QHOME -> $QBIN $*" >&2

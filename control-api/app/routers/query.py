@@ -10,6 +10,7 @@ relayed through that tenant's agent - a natural follow-on (the agent already
 lives in-cluster). Targets/host resolution here come from env + topology.
 """
 import os
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -26,6 +27,7 @@ _GW_HOST = os.environ.get("QUERY_GATEWAY_HOST", "gateway")
 _GW_PORT = int(os.environ.get("QUERY_GATEWAY_PORT", "5050"))
 _SHARD_COUNT = int(os.environ.get("QUERY_SHARD_COUNT", os.environ.get("SHARD_COUNT", "2")))
 _ALLOW_WRITE = os.environ.get("QUERY_ALLOW_WRITE", "").lower() in ("1", "true", "yes")
+_MARKET_TABLE_RE = re.compile(r"\bfrom\s+(trade|risk)\b", re.IGNORECASE)
 
 
 def _targets() -> list[dict]:
@@ -75,6 +77,38 @@ class RunBody(BaseModel):
 def _run_one(target_id: str, query: str, limit: int, allow_write: bool) -> dict:
     """Run against a single target; returns {target, ok, grid|error, elapsed_ms}."""
     import time
+
+    # Gateway is a router, not a physical table host; for plain market-table
+    # queries we fan out to all RDB shards and merge, so users can keep writing
+    # standard q like `select ... from trade ...` against target "gateway".
+    if target_id == "gateway" and _MARKET_TABLE_RE.search(query):
+        t0 = time.perf_counter()
+        shard_targets = [t["id"] for t in _targets() if t["id"].startswith("rdb-")]
+        results = [_run_one(t, query, limit, allow_write) for t in shard_targets]
+        labeled = [(r["target"], r["grid"]) for r in results if r["ok"]]
+        if not labeled:
+            return {
+                "target": target_id,
+                "ok": False,
+                "error": "all shard RDB targets failed: " + "; ".join(
+                    f"{r['target']}: {r.get('error', 'unknown error')}" for r in results
+                ),
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+            }
+        grid = qs.combine_results(labeled, add_provenance=True, limit=limit)
+        grid["kind"] = "gateway-federated"
+        if re.search(r"\bby\b", query, re.IGNORECASE):
+            grid["warning"] = (
+                "grouped query merged from per-shard partials; if this is an aggregate, "
+                "re-aggregate by key for exact global totals"
+            )
+        return {
+            "target": target_id,
+            "ok": True,
+            "grid": grid,
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+        }
+
     host, port = _resolve(target_id)
     t0 = time.perf_counter()
     try:
@@ -142,6 +176,11 @@ def run(body: RunBody, user: CurrentUser = Depends(require_tenant_scope)):
 @router.get("/tables")
 def tables(target: str = "gateway", user: CurrentUser = Depends(require_tenant_scope)):
     """Convenience: list the tables on a target (runs `tables[]`)."""
+    if target == "gateway":
+        # Gateway routes `trade`/`risk` across shards; advertise those directly
+        # so the query UI remains intuitive.
+        return {"tables": ["trade", "risk"]}
+
     host, port = _resolve(target)
     try:
         conn = _connect(host, port)

@@ -82,9 +82,9 @@ def test_uniform_ports_per_tier():
 
 
 def test_healed_services_scales_with_shard_count():
-    assert T.healed_services(1) == ["tp-s0", "wdb-s0", "rdb-s0", "idb-s0", "gateway"]
+    assert T.healed_services(1) == ["tp-s0", "wdb-s0", "rdb-s0", "idb-s0", "hdb-s0", "gateway"]
     h4 = T.healed_services(4)
-    assert len(h4) == 4 * 4 + 1        # 4 tiers * 4 shards + gateway
+    assert len(h4) == 5 * 4 + 1        # 5 tiers * 4 shards + gateway
     assert "gateway" in h4
     assert "bpipe-sim" not in h4       # feeds are never healed as failures
 

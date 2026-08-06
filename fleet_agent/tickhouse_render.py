@@ -49,6 +49,12 @@ def render_helm_sets(desired: dict) -> list:
     if gw.get("port"):
         sets.append(f"gateway.port={gw['port']}")
 
+    eod = desired.get("eod_config") or {}
+    if "eod_hour_utc" in eod:
+        sets.append(f"eod.hourUtc={eod['eod_hour_utc']}")
+    if "idb_retention_days" in eod:
+        sets.append(f"idb.retentionDays={eod['idb_retention_days']}")
+
     for comp in desired.get("components", []):
         hw = comp.get("hardware") or {}
         t = comp["type"]

@@ -24,17 +24,19 @@ Python module so the two implementations can't silently drift.
 {{- range $i := until $n -}}
   {{- $size := add $base (ternary 1 0 (lt $i $extra)) -}}
   {{- $offset := add (mul $i $base) (min $i $extra) -}}
-  {{- $lo := substr $offset (add $offset 1) $alphabet -}}
-  {{- $hi := substr (sub (add $offset $size) 1) (add $offset $size) $alphabet -}}
+  {{- $lo := substr (int $offset) (int (add $offset 1)) $alphabet -}}
+  {{- $hi := substr (int (sub (add $offset $size) 1)) (int (add $offset $size)) $alphabet -}}
   {{- $label := ternary $lo (printf "%s-%s" $lo $hi) (eq $lo $hi) -}}
   {{- $shard := dict
         "id"    (printf "s%d" $i)
         "label" $label
         "lo"    $lo
         "hi"    $hi
+        "tp"    (printf "tp-s%d:5010" $i)
         "rdb"   (printf "rdb-s%d:5020" $i)
         "idb"   (printf "idb-s%d:5030" $i)
-        "wdb"   (printf "wdb-s%d:5040" $i) -}}
+        "wdb"   (printf "wdb-s%d:5040" $i)
+        "hdb"   (printf "hdb-s%d:5060" $i) -}}
   {{- $shards = append $shards $shard -}}
 {{- end -}}
 {{- dict "shardCount" $n "gatewayPort" 5050 "shards" $shards | toJson -}}

@@ -21,6 +21,11 @@ export default function Login({ onLoggedIn }) {
       localStorage.setItem("kcp_token", access_token);
       onLoggedIn();
     } catch (err) {
+      const message = String(err?.message || "").toLowerCase();
+      if (message.includes("timed out")) {
+        setError("Sign-in timed out. The control API is slow or restarting; please retry in a few seconds.");
+        return;
+      }
       setError(org
         ? "LDAP sign-in failed - check organisation ID, username and password."
         : "Login failed - check email/password.");

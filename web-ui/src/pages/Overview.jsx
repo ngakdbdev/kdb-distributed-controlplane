@@ -18,12 +18,14 @@ function fmt(n) {
 }
 
 export default function Overview({ onNavigate }) {
+  const REFRESH_MS = 1000;
   const [topo, setTopo] = useState({});
   const [connected, setConnected] = useState(false);
   const [totals, setTotals] = useState({ trade: 0, risk: 0 });
   const [rate, setRate] = useState([]);       // msgs/sec history
   const [clusters, setClusters] = useState([]);
   const [feeds, setFeeds] = useState([]);
+  const [pressure, setPressure] = useState(null);
   const prev = useRef(null);
 
   useEffect(() => {
@@ -31,7 +33,10 @@ export default function Overview({ onNavigate }) {
     pull();
     api.listTickhouses().then(setClusters).catch(() => setClusters([]));
     api.listConnectors().then(setFeeds).catch(() => setFeeds([]));
-    const id = setInterval(pull, 3000);
+    const id = setInterval(pull, REFRESH_MS);
+    const pullPressure = () => api.metricsSnapshot().then((snap) => setPressure(summarizePressure(snap))).catch(() => {});
+    pullPressure();
+    const pressureId = setInterval(pullPressure, REFRESH_MS);
     const ws = metricsSocket((s) => {
       setConnected(true);
       const trade = s.rowCounts?.trade ?? 0, risk = s.rowCounts?.risk ?? 0;
@@ -50,7 +55,7 @@ export default function Overview({ onNavigate }) {
     });
     ws.onclose = () => setConnected(false);
     ws.onerror = () => setConnected(false);
-    return () => { clearInterval(id); ws.close(); };
+    return () => { clearInterval(id); clearInterval(pressureId); ws.close(); };
   }, []);
 
   const svc = Object.entries(topo);
@@ -70,7 +75,7 @@ export default function Overview({ onNavigate }) {
       <div className="ops-head">
         <div>
           <h2>{PRODUCT} operations</h2>
-          <p className="muted" style={{ margin: 0 }}>Live control plane — throughput, cluster health, and self-healing at a glance.</p>
+          <p className="muted" style={{ margin: 0 }}>Live control plane — throughput, cluster health, and self-healing at a glance. <span className="live-cadence">Low-latency mode: refresh every second.</span></p>
         </div>
         <span className={`live-pill ${connected ? "on" : "off"}`}>{connected ? "● LIVE" : "○ offline"}</span>
       </div>
@@ -93,6 +98,12 @@ export default function Overview({ onNavigate }) {
         <div className="ops-banner">
           <div><strong>No live processes reporting.</strong> Provision a cluster or start the local stack to bring this dashboard to life.</div>
           <button className="primary" onClick={() => onNavigate?.("tickhouses")}>Go to TickHouses →</button>
+        </div>
+      )}
+      {pressure?.elevated && (
+        <div className="ops-banner warn">
+          <div><strong>Load shedding is active.</strong> {pressure.summary} Metrics and trading will prefer live routes over slow subscribers.</div>
+          <button className="primary" onClick={() => onNavigate?.("metrics")}>Inspect pressure →</button>
         </div>
       )}
 
@@ -190,6 +201,23 @@ export default function Overview({ onNavigate }) {
       </div>
     </div>
   );
+}
+
+function summarizePressure(snapshot) {
+  const rows = (snapshot?.componentMetrics || []).filter((row) => {
+    const queue = Number(row.tpQueue || 0);
+    const lag = Number(row.tpSubLag || 0);
+    return queue > 0 || lag > 0 || row.rdbConnected === false || row.wdbConnected === false;
+  });
+  if (!rows.length) return { elevated: false, rows: [], summary: "No active load shedding or subscriber pressure." };
+  const labels = rows.map((row) => row.shard).join(", ");
+  const maxQueue = Math.max(...rows.map((row) => Number(row.tpQueue || 0)));
+  const maxLag = Math.max(...rows.map((row) => Number(row.tpSubLag || 0)));
+  return {
+    elevated: true,
+    rows,
+    summary: `${labels} under pressure: queue depth ${fmt(maxQueue, 0)}, subscriber lag ${fmt(maxLag, 0)}.`,
+  };
 }
 
 function NavCard({ title, desc, onGo }) {
