@@ -255,3 +255,21 @@ class Position(SQLModel, table=True):
     avg_price: float = 0.0
     realized_pnl: float = 0.0
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# --------------------------------------------------------------------------- llm config
+class LLMConfig(SQLModel, table=True):
+    """Runtime-editable override for the natural-language-to-q / code-gen LLM
+    provider (see app/llm_provider.py, app/llm_runtime_config.py). Single row
+    (id=1) - this is a control-plane-wide setting, not per-tenant, set via
+    the platform admin's Model Settings page instead of editing NL2Q_LLM_*
+    env vars and restarting the container. Until a platform admin saves a
+    row here, app/llm_runtime_config.py falls back to those env vars."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    provider: str = "none"          # none | anthropic | openai_compatible
+    model: str = ""
+    api_key: str = ""               # never returned by the API - see routers/llm_config.py
+    base_url: str = ""
+    timeout_sec: float = 20.0
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_by: str = ""

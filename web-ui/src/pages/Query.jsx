@@ -35,14 +35,34 @@ function nl2q(input) {
   if (up.length) sym = up[0];
   const forM = s.match(/(?:for|symbol|sym)\s+([a-z]{1,6})\b/);
   if (!sym && forM) sym = forM[1].toUpperCase();
-  const where = sym ? ` where sym=\`${sym}` : "";
+  const whereParts = [];
+  if (sym) whereParts.push(`sym=\`${sym}`);
+  // comparison against an aggregate ("price greater than avg price") - a
+  // where-phrase, not a top-level aggregation. kdb+ evaluates where-phrases
+  // left to right, so appending this after the sym filter above scopes the
+  // "avg price" to that symbol's rows, not the whole table. The captured
+  // column comes straight from the regex (whatever word follows avg/average/
+  // mean), so it can't be misdirected by an unrelated column name - like
+  // "sym" - appearing earlier in the sentence.
+  const gtM = s.match(/(?:greater than|more than|higher than|above|over)\s+(?:the\s+)?(?:avg|average|mean)\s+(\w+)/);
+  const ltM = s.match(/(?:less than|lower than|below|under)\s+(?:the\s+)?(?:avg|average|mean)\s+(\w+)/);
+  const cmpM = gtM || ltM;
+  if (cmpM) {
+    const c = cols.includes(cmpM[1]) ? cmpM[1] : pickCol(s, cols, "price");
+    whereParts.push(`${c}${gtM ? ">" : "<"}avg ${c}`);
+  }
+  const where = whereParts.length ? ` where ${whereParts.join(", ")}` : "";
   // grouping
   const byM = s.match(/(?:by|per|grouped by|group by)\s+(sym|symbol|venue|side|status|shard|risktype)/);
   const groupCol = byM ? (byM[1] === "symbol" ? "sym" : byM[1] === "risktype" ? "riskType" : byM[1]) : null;
   const byClause = groupCol ? ` by ${groupCol}` : "";
-  // aggregation
+  // aggregation - skipped once the avg/sum/... keyword has already been
+  // consumed above as a comparison filter; the user asked for matching
+  // records, not a one-row summary.
   let agg = null;
-  if (/\bvwap\b/.test(s)) agg = "vwap:size wavg price";
+  if (cmpM) {
+    // handled as a where-phrase above
+  } else if (/\bvwap\b/.test(s)) agg = "vwap:size wavg price";
   else if (/\b(avg|average|mean)\b/.test(s)) { const c = pickCol(s, cols, "price"); agg = `avg${c[0].toUpperCase() + c.slice(1)}:avg ${c}`; }
   else if (/\b(sum|total)\b/.test(s)) { const c = pickCol(s, cols, "size"); agg = `sum${c[0].toUpperCase() + c.slice(1)}:sum ${c}`; }
   else if (/\b(max|highest|peak)\b/.test(s)) { const c = pickCol(s, cols, "price"); agg = `max${c[0].toUpperCase() + c.slice(1)}:max ${c}`; }
@@ -70,7 +90,14 @@ export default function Query() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [nl, setNl] = useState("");
+  const [genBusy, setGenBusy] = useState(false);
+  const [genSource, setGenSource] = useState("");
   const [ac, setAc] = useState({ open: false, items: [], from: 0, to: 0 });
+  const [analysis, setAnalysis] = useState(null);
+  const [analyzeBusy, setAnalyzeBusy] = useState(false);
+  const [codeNl, setCodeNl] = useState("");
+  const [codeGenBusy, setCodeGenBusy] = useState(false);
+  const [codeGenError, setCodeGenError] = useState("");
   const editorRef = useRef(null);
 
   useEffect(() => {
@@ -132,9 +159,57 @@ export default function Query() {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); runIt(); }
   }
 
-  function generate() {
+  // Try the backend's LLM-backed generator first (grounded in this
+  // TickHouse's live schema - see control-api/app/nl2q.py); if no provider
+  // is configured there, or the call fails for any reason (network, model
+  // down, timeout), silently fall back to the offline regex generator below
+  // so the box always produces *something* regardless of deployment.
+  function useLocalGenerator() {
     const q = nl2q(nl);
     if (q) { setText(q); setAc((a) => ({ ...a, open: false })); }
+    setGenSource("offline pattern-matcher");
+  }
+  async function generate() {
+    setGenBusy(true);
+    try {
+      const res = await api.nl2q(nl, primary);
+      if (res && res.ok && res.q) {
+        setText(res.q);
+        setAc((a) => ({ ...a, open: false }));
+        setGenSource(`AI (${res.provider})`);
+      } else {
+        useLocalGenerator();
+      }
+    } catch {
+      useLocalGenerator();
+    } finally {
+      setGenBusy(false);
+    }
+  }
+
+  // Plain language -> a q FUNCTION (multi-line, not a single query - see
+  // control-api/app/q_codegen.py). No offline fallback: unlike nl2q there's
+  // no safe regex-based generator for arbitrary code, so a failure here
+  // just means try again or write it by hand. Writes into the SAME editor
+  // as everything else - review it, then Run to load/test it; this adds no
+  // new execution path, defining/calling a function is just an expression
+  // like any other query.
+  async function generateCode() {
+    if (!codeNl.trim()) return;
+    setCodeGenBusy(true); setCodeGenError("");
+    try {
+      const res = await api.codegen(codeNl, primary);
+      if (res && res.ok && res.code) {
+        setText(res.code);
+        setAc((a) => ({ ...a, open: false }));
+      } else {
+        setCodeGenError(res?.error || "code generation failed");
+      }
+    } catch (err) {
+      setCodeGenError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setCodeGenBusy(false);
+    }
   }
 
   async function runIt() {
@@ -145,6 +220,21 @@ export default function Query() {
     } catch (err) {
       setError(formatQueryError(String(err).replace(/^Error:\s*/, ""), selected));
     } finally { setBusy(false); }
+  }
+
+  // Explain / flag issues / suggest an optimized rewrite / suggest related
+  // queries for whatever is currently in the editor - see
+  // control-api/app/query_advisor.py. The shard-routing tip in `issues` is
+  // deterministic and shows up even with no LLM configured; explanation/
+  // optimized_q/suggestions are null/empty in that case.
+  async function analyzeIt() {
+    if (!text.trim()) return;
+    setAnalyzeBusy(true); setAnalysis(null);
+    try {
+      setAnalysis(await api.analyzeQuery(text, primary));
+    } catch (err) {
+      setAnalysis({ issues: [], suggestions: [], llm_error: String(err).replace(/^Error:\s*/, "") });
+    } finally { setAnalyzeBusy(false); }
   }
 
   return (
@@ -192,9 +282,24 @@ export default function Query() {
           <div className="nl2q">
             <input className="nl2q-input" value={nl} placeholder="Describe it: e.g. 'vwap by symbol for AAPL' or 'last 100 trades'"
                    onChange={(e) => setNl(e.target.value)}
-                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); generate(); } }} />
-            <button className="chip generate" disabled={!nl.trim()} onClick={generate}>Generate q →</button>
+                   onKeyDown={(e) => { if (e.key === "Enter" && !genBusy) { e.preventDefault(); generate(); } }} />
+            <button className="chip generate" disabled={!nl.trim() || genBusy} onClick={generate}>
+              {genBusy ? "Generating…" : "Generate q →"}
+            </button>
+            {genSource && !genBusy && <span className="muted nl2q-source">via {genSource}</span>}
           </div>
+
+          {/* plain-English -> a q FUNCTION, not a query - see q_codegen.py */}
+          <div className="nl2q">
+            <input className="nl2q-input" value={codeNl}
+                   placeholder="Describe a q FUNCTION to write: e.g. 'check if GBP→USD→JPY beats a direct GBP→JPY trade, given the three rates'"
+                   onChange={(e) => setCodeNl(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === "Enter" && !codeGenBusy) { e.preventDefault(); generateCode(); } }} />
+            <button className="chip generate" disabled={!codeNl.trim() || codeGenBusy} onClick={generateCode}>
+              {codeGenBusy ? "Writing…" : "Generate code →"}
+            </button>
+          </div>
+          {codeGenError && <div className="error query-error">{codeGenError}</div>}
 
           <div className="editor-wrap">
             <textarea ref={editorRef} className="query-editor" value={text} spellCheck={false}
@@ -216,6 +321,9 @@ export default function Query() {
             <button className="primary" disabled={busy || !text.trim()} onClick={runIt}>
               {busy ? "Running…" : selected.length > 1 ? `Run on ${selected.length} targets` : "Run"}
             </button>
+            <button className="chip" disabled={analyzeBusy || !text.trim()} onClick={analyzeIt}>
+              {analyzeBusy ? "Analyzing…" : "Analyze"}
+            </button>
             <label className="query-limit">limit
               <input type="number" min="1" max={meta.row_limit_max} value={limit} onChange={(e) => setLimit(e.target.value)} />
             </label>
@@ -227,9 +335,48 @@ export default function Query() {
           </div>
 
           {error && <div className="error query-error">{error}</div>}
+          {analysis && <AnalysisPanel analysis={analysis} onApply={(q) => { setText(q); setAnalysis(null); }} />}
           {result && <ResultView result={result} />}
         </div>
       </div>
+    </div>
+  );
+}
+
+function AnalysisPanel({ analysis, onApply }) {
+  const { explanation, issues = [], optimized_q, suggestions = [], provider, llm_error } = analysis;
+  return (
+    <div className="query-result analysis-panel">
+      <div className="query-result-meta muted">
+        Query analysis {provider ? `· ${provider}` : ""}
+      </div>
+      {explanation && <p>{explanation}</p>}
+      {issues.length > 0 && (
+        <ul className="analysis-issues">
+          {issues.map((issue, i) => <li key={i}>{issue}</li>)}
+        </ul>
+      )}
+      {optimized_q && (
+        <div className="analysis-optimized">
+          <code>{optimized_q}</code>
+          <button className="chip" onClick={() => onApply(optimized_q)}>Use this →</button>
+        </div>
+      )}
+      {suggestions.length > 0 && (
+        <>
+          <label className="query-label">Try next</label>
+          <div className="chip-list">
+            {suggestions.map((s, i) => (
+              <button key={i} className="chip" title={s.q} onClick={() => onApply(s.q)}>{s.label || s.q}</button>
+            ))}
+          </div>
+        </>
+      )}
+      {!explanation && issues.length === 0 && !optimized_q && suggestions.length === 0 && (
+        <div className="muted">
+          {llm_error ? `No model-backed analysis available (${llm_error}).` : "Nothing to flag."}
+        </div>
+      )}
     </div>
   );
 }
@@ -246,7 +393,8 @@ function formatQueryError(message, targets) {
 }
 
 function ResultView({ result }) {
-  const { columns, rows, row_count, truncated, elapsed_ms, kind, per_target, warning } = result;
+  const { columns, rows, row_count, truncated, elapsed_ms, kind, per_target, warning,
+          routed_shards, skipped_shards } = result;
   const shown = useMemo(() => rows || [], [rows]);
   return (
     <div className="query-result">
@@ -263,6 +411,11 @@ function ResultView({ result }) {
         {row_count} row{row_count === 1 ? "" : "s"} · {kind}{elapsed_ms != null ? ` · ${elapsed_ms} ms` : ""}
         {truncated && <span className="truncated"> · showing first {shown.length}</span>}
       </div>
+      {routed_shards && skipped_shards && skipped_shards.length > 0 && (
+        <div className="query-routing muted" title="intelligent routing: shards with no matching symbols were skipped">
+          routed to {routed_shards.join(", ")} · skipped {skipped_shards.join(", ")}
+        </div>
+      )}
       {warning && <div className="query-warning">{warning}</div>}
       <div className="query-grid-scroll">
         <table className="data-table query-grid">

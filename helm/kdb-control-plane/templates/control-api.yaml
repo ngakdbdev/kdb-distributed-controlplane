@@ -46,6 +46,12 @@ spec:
               value: gateway
             - name: GATEWAY_PORT
               value: "5050"
+            - name: NL2Q_LLM_PROVIDER
+              value: {{ .Values.nl2q.llmProvider | quote }}
+            - name: NL2Q_LLM_MODEL
+              value: {{ .Values.nl2q.llmModel | quote }}
+            - name: NL2Q_LLM_BASE_URL
+              value: {{ .Values.nl2q.llmBaseUrl | quote }}
           volumeMounts:
             - name: data
               mountPath: /app/data

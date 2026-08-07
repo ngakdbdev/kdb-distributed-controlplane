@@ -1,14 +1,25 @@
 const BASE = "/api";
 const REQUEST_TIMEOUT_MS = 12000;
+// LLM-backed calls (control-api/app/nl2q.py, q_codegen.py, query_advisor.py)
+// route through a local model on CPU by default - single calls have been
+// observed taking 4-20s, and NL2Q_LLM_TIMEOUT_SEC on the backend is
+// configured up to 60s to give that room. The blanket 12s client timeout
+// above was aborting those requests client-side well before the backend
+// itself gave up, surfacing as a spurious "Request timed out" - not a real
+// backend problem. codegen additionally retries once on a visibly
+// incomplete response (see q_codegen.py), so its worst case is roughly
+// double a single call's.
+const LLM_TIMEOUT_MS = 90000;
+const CODEGEN_TIMEOUT_MS = 130000;
 
 function authHeaders() {
   const token = localStorage.getItem("kcp_token");
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-async function request(path, options = {}) {
+async function request(path, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let res;
   try {
     res = await fetch(`${BASE}${path}`, {
@@ -22,7 +33,7 @@ async function request(path, options = {}) {
     });
   } catch (err) {
     if (err?.name === "AbortError") {
-      throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+      throw new Error(`Request timed out after ${timeoutMs / 1000}s`);
     }
     throw err;
   } finally {
@@ -78,6 +89,17 @@ export const api = {
   queryTargets: () => request("/query/targets"),
   queryTables: (target) => request(`/query/tables?target=${encodeURIComponent(target)}`),
   runQuery: (body) => request("/query/run", { method: "POST", body: JSON.stringify(body) }),
+  nl2q: (text, target) =>
+    request("/query/nl2q", { method: "POST", body: JSON.stringify({ text, target }) }, LLM_TIMEOUT_MS),
+  codegen: (text, target) =>
+    request("/query/codegen", { method: "POST", body: JSON.stringify({ text, target }) }, CODEGEN_TIMEOUT_MS),
+  analyzeQuery: (q, target) =>
+    request("/query/analyze", { method: "POST", body: JSON.stringify({ q, target }) }, LLM_TIMEOUT_MS),
+  queryHistory: (limit = 50) => request(`/query/history?limit=${limit}`),
+
+  // Model settings (platform admin only - backend enforces via require_platform_admin)
+  getLLMConfig: () => request("/admin/llm-config"),
+  updateLLMConfig: (body) => request("/admin/llm-config", { method: "PUT", body: JSON.stringify(body) }),
 
   // Symbol reference
   searchSymbols: (q, market) =>

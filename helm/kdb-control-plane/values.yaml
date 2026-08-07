@@ -33,6 +33,19 @@ secrets:
   adminPasswordHash: ""        # bcrypt hash - blank falls back to the chart's dev default (password: changeme)
   jwtSecret: "dev-secret-change-in-deploy"
   watchdogSharedSecret: "dev-watchdog-secret-change-in-deploy"
+  nl2qLlmApiKey: ""            # API key for whichever nl2q.llmProvider is set below; blank is fine for "none" or a keyless local model server
+
+# ------------------------------------------------------ natural-language-to-q
+# The query workspace's plain-English box. "none" (default) uses the
+# frontend's offline regex generator only - no model, no key needed.
+# "anthropic" and "openai_compatible" ground it in a real model instead -
+# see control-api/app/nl2q.py. llmBaseUrl is how you point this at a
+# self-hosted model server (Ollama, vLLM, LM Studio) for an on-prem/
+# air-gapped cluster with no path to a public API.
+nl2q:
+  llmProvider: none
+  llmModel: claude-opus-5
+  llmBaseUrl: ""
 
 # ------------------------------------------------------------- kdb-x license
 # KDB-X binary + license are NOT bundled in the image for licensing reasons -

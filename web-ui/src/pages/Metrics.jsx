@@ -19,7 +19,8 @@ export default function Metrics() {
       setConnected(true);
       setLatest(snapshot);
       setHistory((prev) => {
-        const lagStats = summarizeLag(snapshot.transitLag || []);
+        const liveRows = (snapshot.transitLag || []).filter((row) => row.stage !== "tp_to_wdb_flush");
+        const lagStats = summarizeLag(liveRows);
         const point = {
           t: new Date().toLocaleTimeString(),
           trade: snapshot.rowCounts?.trade ?? 0,
@@ -41,8 +42,19 @@ export default function Metrics() {
   const health = latest?.health || [];
   const components = latest?.componentMetrics || [];
   const pressure = components.filter((row) => (row.tpQueue ?? 0) > 0 || (row.tpSubLag ?? 0) > 0 || (row.rdbConnected === false) || (row.wdbConnected === false));
-  const lagStats = summarizeLag(transitLag);
-  const transitScopes = buildTransitScopes(transitLag);
+  // tp_to_wdb_flush is NOT comparable to the other hops: wdb deliberately
+  // only flushes rows older than its flush interval (2 min default - see
+  // data-plane/q/wdb.q's flushIntv), so this stage's lag legitimately
+  // sawtooths up near that interval even when everything is healthy. Lumping
+  // it into the same "transit lag" number as the live feed->tp->rdb->gateway
+  // hops (which really are sub-second) made the headline KPI both perpetually
+  // alarming AND useless for its actual job - a real live-pipeline slowdown
+  // would be invisible, dwarfed by the always-present ~2min flush figure.
+  const liveTransitLag = transitLag.filter((row) => row.stage !== "tp_to_wdb_flush");
+  const flushLag = transitLag.filter((row) => row.stage === "tp_to_wdb_flush");
+  const lagStats = summarizeLag(liveTransitLag);
+  const flushLagStats = summarizeLag(flushLag);
+  const transitScopes = buildTransitScopes(liveTransitLag);
   const componentScopes = buildComponentScopes(components);
   const scopeCount = new Set([...transitScopes.map((scope) => scope.scope), ...componentScopes.map((scope) => scope.scope)]).size;
 
@@ -55,8 +67,11 @@ export default function Metrics() {
 
       <div className="kpi-row">
         <div className="kpi accent"><div className="kpi-label">Tracked scopes</div><div className="kpi-value">{scopeCount}</div><div className="kpi-sub">Adaptive grouping from live gateway rows</div></div>
-        <div className="kpi"><div className="kpi-label">Max transit lag</div><div className="kpi-value">{fmtMetric(lagStats.max)}<span className="kpi-unit">ms</span></div><div className="kpi-sub">Across all stages and tickhouses</div></div>
+        <div className="kpi"><div className="kpi-label">Max transit lag</div><div className="kpi-value">{fmtMetric(lagStats.max)}<span className="kpi-unit">ms</span></div><div className="kpi-sub">Live feed → TP → RDB → gateway hops only</div></div>
         <div className="kpi"><div className="kpi-label">Avg transit lag</div><div className="kpi-value">{fmtMetric(lagStats.avg)}<span className="kpi-unit">ms</span></div><div className="kpi-sub">Mean live delay across sampled hops</div></div>
+        <div className="kpi" title="Time since wdb's last durable flush - wdb only flushes rows older than its flush interval by design, so this normally sawtooths up toward that interval (2 min default) and resets on each flush. Not a live-query latency signal.">
+          <div className="kpi-label">Flush lag</div><div className="kpi-value">{fmtMetric(flushLagStats.max / 1000, 1)}<span className="kpi-unit">s</span></div><div className="kpi-sub">Durability only - expected up to the flush interval</div>
+        </div>
         <div className="kpi"><div className="kpi-label">Pressure scopes</div><div className="kpi-value">{pressure.length}</div><div className="kpi-sub">Queues, lag, or downstream disconnects</div></div>
       </div>
 
