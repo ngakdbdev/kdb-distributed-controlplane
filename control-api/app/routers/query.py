@@ -15,8 +15,15 @@ import re
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from .. import llm_runtime_config
+from .. import nl2q as nl2q_mod
+from .. import q_codegen
+from .. import query_advisor
+from .. import query_profile
+from .. import query_router
 from .. import query_service as qs
 from .. import topology
+from ..llm_provider import LLMError
 from .auth import CurrentUser, require_tenant_scope
 
 router = APIRouter(prefix="/query", tags=["query"])
@@ -75,15 +82,29 @@ class RunBody(BaseModel):
 
 
 def _run_one(target_id: str, query: str, limit: int, allow_write: bool) -> dict:
-    """Run against a single target; returns {target, ok, grid|error, elapsed_ms}."""
+    """Run against a single target; returns {target, ok, grid|error, elapsed_ms,
+    connect_ms, query_ms}. The last two split elapsed_ms into "getting a
+    connection open" vs "the query itself" - see query_profile.py."""
     import time
 
     # Gateway is a router, not a physical table host; for plain market-table
-    # queries we fan out to all RDB shards and merge, so users can keep writing
+    # queries we fan out to RDB shards and merge, so users can keep writing
     # standard q like `select ... from trade ...` against target "gateway".
+    # Intelligent routing (query_router.py): if the query's `sym` filter
+    # resolves to a strict subset of shards, only fan out to those - a shard
+    # that doesn't own any referenced symbol would return zero rows anyway
+    # (topology.shard_of is the SAME partitioning the gateway itself uses),
+    # so this is a pure latency win, never a correctness tradeoff. Falls
+    # back to the full shard set whenever it can't confidently narrow.
     if target_id == "gateway" and _MARKET_TABLE_RE.search(query):
         t0 = time.perf_counter()
-        shard_targets = [t["id"] for t in _targets() if t["id"].startswith("rdb-")]
+        all_shard_targets = [t["id"] for t in _targets() if t["id"].startswith("rdb-")]
+        routed = query_router.route_shards(query, _SHARD_COUNT)
+        if routed:
+            shard_targets = [f"rdb-{sid}" for sid in routed if f"rdb-{sid}" in all_shard_targets]
+        else:
+            shard_targets = all_shard_targets
+        skipped_targets = [t for t in all_shard_targets if t not in shard_targets]
         results = [_run_one(t, query, limit, allow_write) for t in shard_targets]
         labeled = [(r["target"], r["grid"]) for r in results if r["ok"]]
         if not labeled:
@@ -94,19 +115,26 @@ def _run_one(target_id: str, query: str, limit: int, allow_write: bool) -> dict:
                     f"{r['target']}: {r.get('error', 'unknown error')}" for r in results
                 ),
                 "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+                "routed_shards": shard_targets if routed else None,
             }
         grid = qs.combine_results(labeled, add_provenance=True, limit=limit)
         grid["kind"] = "gateway-federated"
+        grid["routed_shards"] = shard_targets if routed else None
+        grid["skipped_shards"] = skipped_targets if routed else []
         if re.search(r"\bby\b", query, re.IGNORECASE):
             grid["warning"] = (
                 "grouped query merged from per-shard partials; if this is an aggregate, "
                 "re-aggregate by key for exact global totals"
             )
+        query_ms = round(sum(r["elapsed_ms"] for r in results), 1)
         return {
             "target": target_id,
             "ok": True,
             "grid": grid,
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+            "connect_ms": 0.0,
+            "query_ms": query_ms,
+            "routed_shards": shard_targets if routed else None,
         }
 
     host, port = _resolve(target_id)
@@ -116,13 +144,18 @@ def _run_one(target_id: str, query: str, limit: int, allow_write: bool) -> dict:
     except Exception as exc:  # noqa: BLE001
         return {"target": target_id, "ok": False, "error": f"unreachable {host}:{port}: {exc}",
                 "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
+    t1 = time.perf_counter()
     try:
         grid = qs.run_query(query, conn, limit=limit, allow_write=allow_write)
+        t2 = time.perf_counter()
         return {"target": target_id, "ok": True, "grid": grid,
-                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
+                "elapsed_ms": round((t2 - t0) * 1000, 1),
+                "connect_ms": round((t1 - t0) * 1000, 1),
+                "query_ms": round((t2 - t1) * 1000, 1)}
     except Exception as exc:  # noqa: BLE001
         return {"target": target_id, "ok": False, "error": f"query error: {exc}",
-                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+                "connect_ms": round((t1 - t0) * 1000, 1)}
     finally:
         try:
             conn.close()
@@ -150,6 +183,12 @@ def run(body: RunBody, user: CurrentUser = Depends(require_tenant_scope)):
     # single target: return the grid directly (unchanged shape)
     if len(targets) == 1:
         res = _run_one(targets[0], body.query, body.limit, allow_write)
+        query_profile.record(
+            actor=user.email, target=targets[0], query=body.query,
+            ok=res["ok"], row_count=res["grid"]["row_count"] if res["ok"] else None,
+            elapsed_ms=res["elapsed_ms"], connect_ms=res.get("connect_ms"), query_ms=res.get("query_ms"),
+            routed_shards=res.get("routed_shards"), error=None if res["ok"] else res["error"],
+        )
         if not res["ok"]:
             raise HTTPException(status_code=502 if "unreachable" in res["error"] else 400,
                                 detail=res["error"])
@@ -161,6 +200,15 @@ def run(body: RunBody, user: CurrentUser = Depends(require_tenant_scope)):
     # federated: fan out, combine successful grids, report per-target status
     results = [_run_one(t, body.query, body.limit, allow_write) for t in targets]
     labeled = [(r["target"], r["grid"]) for r in results if r["ok"]]
+    total_rows = sum(r["grid"]["row_count"] for r in results if r["ok"])
+    query_profile.record(
+        actor=user.email, target=",".join(targets), query=body.query,
+        ok=bool(labeled), row_count=total_rows if labeled else None,
+        elapsed_ms=round(sum(r["elapsed_ms"] for r in results), 1),
+        query_ms=round(sum(r.get("query_ms") or 0 for r in results), 1),
+        routed_shards=None,
+        error=None if labeled else "; ".join(f"{r['target']}: {r.get('error')}" for r in results),
+    )
     if not labeled:
         raise HTTPException(status_code=502, detail="all targets failed: " +
                             "; ".join(f"{r['target']}: {r['error']}" for r in results))
@@ -171,6 +219,103 @@ def run(body: RunBody, user: CurrentUser = Depends(require_tenant_scope)):
                                "error": r.get("error"), "elapsed_ms": r["elapsed_ms"]}
                               for r in results]
     return combined
+
+
+class Nl2qBody(BaseModel):
+    text: str
+    target: str = "gateway"
+
+
+@router.post("/nl2q")
+def nl2q(body: Nl2qBody, user: CurrentUser = Depends(require_tenant_scope)):
+    """Natural-language -> q, via whatever LLM provider is configured
+    (app/llm_provider.py). Always 200 - the caller (the query workspace UI)
+    treats `ok: false` as "fall back to the offline regex generator", not
+    as a hard error; there's no reason to break the UI just because no
+    model is configured or a provider call timed out.
+    """
+    text = (body.text or "").strip()
+    if not text:
+        return {"ok": False, "q": None, "provider": None, "error": "empty request"}
+
+    host = port = None
+    try:
+        host, port = _resolve(body.target)
+    except HTTPException:
+        pass  # schema-only fallback still works fine without a live target
+
+    try:
+        q = nl2q_mod.generate(text, host=host, port=port)
+        return {"ok": True, "q": q, "provider": llm_runtime_config.get().provider, "error": None}
+    except nl2q_mod.NotConfigured:
+        return {"ok": False, "q": None, "provider": None, "error": "no LLM provider configured"}
+    except LLMError as exc:
+        return {"ok": False, "q": None, "provider": llm_runtime_config.get().provider, "error": str(exc)}
+
+
+class CodegenBody(BaseModel):
+    text: str
+    target: str = "gateway"
+
+
+@router.post("/codegen")
+def codegen(body: CodegenBody, user: CurrentUser = Depends(require_tenant_scope)):
+    """Plain language -> a q FUNCTION (multi-line, not a single query - see
+    app/q_codegen.py). Same "generate into the editor, human reviews and
+    clicks Run" pattern as /nl2q. There is no offline fallback here - unlike
+    a SELECT, a general function has no safe regex-based generator to fall
+    back to, so `ok: false` just means try again or write it by hand.
+    """
+    text = (body.text or "").strip()
+    if not text:
+        return {"ok": False, "code": None, "provider": None, "error": "empty request"}
+
+    host = port = None
+    try:
+        host, port = _resolve(body.target)
+    except HTTPException:
+        pass
+
+    try:
+        code = q_codegen.generate(text, host=host, port=port)
+        return {"ok": True, "code": code, "provider": llm_runtime_config.get().provider, "error": None}
+    except q_codegen.NotConfigured:
+        return {"ok": False, "code": None, "provider": None, "error": "no LLM provider configured"}
+    except LLMError as exc:
+        return {"ok": False, "code": None, "provider": llm_runtime_config.get().provider, "error": str(exc)}
+
+
+class AnalyzeBody(BaseModel):
+    q: str
+    target: str = "gateway"
+
+
+@router.post("/analyze")
+def analyze(body: AnalyzeBody, user: CurrentUser = Depends(require_tenant_scope)):
+    """Explain / flag issues / suggest an optimized rewrite / suggest
+    related follow-up queries for a q expression already in the editor.
+    The deterministic shard-routing tip (query_router.py, via
+    query_advisor.py) always runs even with no LLM configured - only the
+    explanation/optimize/suggest fields depend on a model.
+    """
+    q = (body.q or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="empty query")
+
+    host = port = None
+    try:
+        host, port = _resolve(body.target)
+    except HTTPException:
+        pass
+
+    return query_advisor.analyze(q, _SHARD_COUNT, host=host, port=port)
+
+
+@router.get("/history")
+def history(limit: int = 50, user: CurrentUser = Depends(require_tenant_scope)):
+    """Recent query executions with profiling - see query_profile.py. In-memory,
+    per control-api process; resets on restart (see module docstring for why)."""
+    return {"entries": query_profile.recent(limit), "stats": query_profile.stats()}
 
 
 @router.get("/tables")

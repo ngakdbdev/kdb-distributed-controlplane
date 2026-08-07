@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Nav from "./components/Nav.jsx";
 import { COPYRIGHT } from "./brand.js";
+import { roleFromToken } from "./jwt.js";
 import AuditLog from "./pages/AuditLog.jsx";
 import Alerts from "./pages/Alerts.jsx";
 import Overview from "./pages/Overview.jsx";
@@ -12,7 +13,9 @@ import Fleet from "./pages/Fleet.jsx";
 import TickHouses from "./pages/TickHouses.jsx";
 import Login from "./pages/Login.jsx";
 import Metrics from "./pages/Metrics.jsx";
+import ModelSettings from "./pages/ModelSettings.jsx";
 import Query from "./pages/Query.jsx";
+import QueryAnalysis from "./pages/QueryAnalysis.jsx";
 import Trading from "./pages/Trading.jsx";
 import Subscribers from "./pages/Subscribers.jsx";
 import Topology from "./pages/Topology.jsx";
@@ -24,6 +27,8 @@ const PAGES = {
   metrics: Metrics,
   alerts: Alerts,
   query: Query,
+  "query-analysis": QueryAnalysis,
+  "model-settings": ModelSettings,
   trading: Trading,
   execution: Execution,
   connectors: Connectors,
@@ -49,6 +54,12 @@ function captureSsoToken() {
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(() => captureSsoToken() || !!localStorage.getItem("kcp_token"));
   const [active, setActive] = useState("overview");
+  // Decoded straight from the JWT (see jwt.js) - works uniformly for
+  // password, LDAP, and SSO login, all of which mint the same token shape.
+  // UI-only: hides a tab a non-admin can't use anyway. The real boundary is
+  // require_platform_admin on the backend, checked on every request
+  // regardless of what this says.
+  const role = useMemo(() => (loggedIn ? roleFromToken(localStorage.getItem("kcp_token")) : null), [loggedIn]);
 
   useEffect(() => {
     if (!loggedIn && captureSsoToken()) setLoggedIn(true);
@@ -63,17 +74,20 @@ export default function App() {
     return <Login onLoggedIn={() => setLoggedIn(true)} />;
   }
 
-  const Page = PAGES[active];
+  const isPlatformAdmin = role === "platform_admin";
+  const Page = (active === "model-settings" && !isPlatformAdmin) ? Overview : (PAGES[active] || Overview);
 
   return (
     <div className="app-shell">
-      <Nav active={active} onChange={setActive} onLogout={logout} />
-      <main className="app-main">
-        <Page onNavigate={setActive} />
-      </main>
-      <footer className="app-footer">
-        <span>{COPYRIGHT}</span>
-      </footer>
+      <Nav active={active} onChange={setActive} onLogout={logout} isPlatformAdmin={isPlatformAdmin} />
+      <div className="app-content-col">
+        <main className="app-main">
+          <Page onNavigate={setActive} />
+        </main>
+        <footer className="app-footer">
+          <span>{COPYRIGHT}</span>
+        </footer>
+      </div>
     </div>
   );
 }

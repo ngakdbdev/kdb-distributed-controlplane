@@ -57,6 +57,22 @@ class Settings:
     gateway_port: int = int(os.environ.get("GATEWAY_PORT", str(topology.TIER_PORTS["gateway"])))
     gateway_timeout_sec: float = float(os.environ.get("GATEWAY_TIMEOUT_SEC", "5"))
 
+    # --- Natural-language-to-q (app/nl2q.py, app/llm_provider.py) ---
+    # "none" (default) disables the LLM path entirely - the query workspace
+    # falls back to its offline regex generator, so the feature works with
+    # zero configuration. "anthropic" talks to the Claude API (or a private
+    # Anthropic-compatible gateway via NL2Q_LLM_BASE_URL). "openai_compatible"
+    # is a plain OpenAI-shaped /chat/completions call - covers OpenAI, Azure
+    # OpenAI, and - the case that matters for an on-prem/air-gapped
+    # TickHouse - a local model server (Ollama, vLLM, LM Studio) pointed to
+    # via NL2Q_LLM_BASE_URL, so this is portable to a deployment with no
+    # path to any public API.
+    nl2q_llm_provider: str = os.environ.get("NL2Q_LLM_PROVIDER", "none")
+    nl2q_llm_model: str = os.environ.get("NL2Q_LLM_MODEL", "claude-opus-5")
+    nl2q_llm_api_key: str = os.environ.get("NL2Q_LLM_API_KEY", "")
+    nl2q_llm_base_url: str = os.environ.get("NL2Q_LLM_BASE_URL", "")
+    nl2q_llm_timeout_sec: float = float(os.environ.get("NL2Q_LLM_TIMEOUT_SEC", "20"))
+
     # --- SSO / Microsoft Entra ---
     # public_base_url is where THIS api is reachable from the user's browser
     # (used to build the OIDC redirect_uri); web_ui_url is where to send the

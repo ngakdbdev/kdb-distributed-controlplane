@@ -265,12 +265,40 @@ services:
       COMPOSE_PROJECT_NAME: "kdb-control-plane"
       GATEWAY_HOST: gateway
       GATEWAY_PORT: "5050"
+      NL2Q_LLM_PROVIDER: "${NL2Q_LLM_PROVIDER:-openai_compatible}"
+      NL2Q_LLM_MODEL: "${NL2Q_LLM_MODEL:-qwen2.5-coder:3b}"
+      NL2Q_LLM_API_KEY: "${NL2Q_LLM_API_KEY:-}"
+      NL2Q_LLM_BASE_URL: "${NL2Q_LLM_BASE_URL:-http://ollama:11434/v1}"
+      NL2Q_LLM_TIMEOUT_SEC: "${NL2Q_LLM_TIMEOUT_SEC:-60}"
     volumes:
       - control-api-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8000:8000"
-    depends_on: [gateway]
+    depends_on: [gateway, ollama]
+
+  # Open-weights model server for the query workspace's natural-language-to-q
+  # box (control-api/app/nl2q.py) - the default NL2Q_LLM_* above point here.
+  # Runs on CPU inside Docker Desktop (no Metal passthrough for Linux
+  # containers on macOS) - fine for an occasional "generate q" click, not a
+  # chat interface. Not published to the host; only control-api needs it,
+  # over the compose network at http://ollama:11434.
+  # First boot: pull the default model once with
+  #   docker exec kdb-control-plane-ollama-1 ollama pull qwen2.5-coder:3b
+  # On a beefier / GPU host, bump NL2Q_LLM_MODEL to qwen2.5-coder:7b or
+  # :32b for materially better query generation (pull that tag instead).
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      # Default keep_alive is 5 minutes of inactivity before Ollama unloads
+      # the model - confirmed empirically to cost ~9s to reload from disk on
+      # the next request (vs ~0.3s once warm). "-1" keeps it resident
+      # indefinitely once first loaded; costs ~2.4GB RAM permanently, which
+      # this box's Docker VM has headroom for.
+      OLLAMA_KEEP_ALIVE: "-1"
+    volumes:
+      - ollama-data:/root/.ollama
 
   watchdog:
     build: ./watchdog
@@ -301,4 +329,5 @@ volumes:
   hdb-s1:
   control-api-data:
   postgres-data:
+  ollama-data:
   kx-cache:
