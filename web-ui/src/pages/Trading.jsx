@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { api } from "../api.js";
 import SymbolPicker from "../components/SymbolPicker.jsx";
+import { bucketOHLC, Candlestick, DepthPanel, LiveTape } from "../components/TradingVisuals.jsx";
 
 export default function Trading({ onNavigate }) {
   const REFRESH_MS = 1000;
@@ -15,6 +16,7 @@ export default function Trading({ onNavigate }) {
   const [market, setMarket] = useState(null);
   const [forecast, setForecast] = useState(null);
   const [symbolDrilldown, setSymbolDrilldown] = useState(null);
+  const [tradeRows, setTradeRows] = useState([]);
   const [sample, setSample] = useState(false);
   const [orders, setOrders] = useState([]);
   const [portfolio, setPortfolio] = useState(null);
@@ -44,6 +46,14 @@ export default function Trading({ onNavigate }) {
       .then(setPortfolioAnalytics)
       .catch(() => {});
   }, [syms, portfolio]);
+
+  // Load market data (and with it the candlestick/tape/depth panels) as soon
+  // as the page opens or the symbol changes - previously this required
+  // clicking "Load" first, so on a fresh visit the whole drilldown card
+  // (candlestick included) just wasn't there and nothing said why.
+  useEffect(() => {
+    loadMarket();
+  }, [symbol]);
 
   useEffect(() => {
     if (sample || !market) return;
@@ -148,6 +158,7 @@ export default function Trading({ onNavigate }) {
       if (!quiet) setError(`no trades for ${sym} on the cluster`);
       return;
     }
+    setTradeRows(rows);
     const [summary, nextForecast] = await Promise.all([
       api.marketSummary({ prices, sizes }),
       api.forecast({ prices, horizon: 10 }),
@@ -155,6 +166,19 @@ export default function Trading({ onNavigate }) {
     setMarket(summary);
     setForecast(nextForecast);
     setSymbolDrilldown(buildSeriesInsight(sym, rows, summary, nextForecast));
+
+    // Give any resting limit orders for this symbol a chance to cross now
+    // that we have a fresh price - there's no separate matching engine, so
+    // this opportunistic check (piggybacking on the price poll already
+    // running) is what lets a working order eventually fill.
+    if (summary?.last != null) {
+      try {
+        const m = await api.matchOrders(sym, summary.last);
+        if (m.filled?.length) refreshBlotter();
+      } catch {
+        // best-effort - the next price tick tries again
+      }
+    }
   }
 
   const last = market?.last;
@@ -238,16 +262,7 @@ export default function Trading({ onNavigate }) {
           </div>
           <div className="drilldown-grid">
             <div>
-              <svg viewBox="0 0 320 140" className="drilldown-svg">
-                <defs>
-                  <linearGradient id="drill-grad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.35" />
-                    <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
-                  </linearGradient>
-                </defs>
-                <polyline fill="none" stroke="var(--accent)" strokeWidth="2" points={symbolDrilldown.sparkline} />
-                <polygon fill="url(#drill-grad)" points={symbolDrilldown.area} />
-              </svg>
+              <Candlestick bars={bucketOHLC(tradeRows, 5000)} height={220} />
               <div className="drill-microgrid">
                 {symbolDrilldown.heat.map((cell, idx) => (
                   <span key={idx} className={`heat-cell ${cell.cls}`} title={cell.title} />
@@ -262,6 +277,19 @@ export default function Trading({ onNavigate }) {
               <div className="drill-row"><span>Forecast</span><b className={symbolDrilldown.forecastSignal}>{symbolDrilldown.forecastLabel}</b></div>
               <div className="drill-row"><span>Expected next</span><b>{fmt(symbolDrilldown.expectedNext)}</b></div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {tradeRows.length > 0 && (
+        <div className="trading-grid">
+          <div className="card">
+            <h3>Tape <span className="muted" style={{ fontWeight: 400 }}>{symbol}</span></h3>
+            <LiveTape rows={tradeRows} maxRows={25} />
+          </div>
+          <div className="card">
+            <h3>Depth <span className="muted" style={{ fontWeight: 400 }}>{symbol}</span></h3>
+            <DepthPanel rows={tradeRows} levels={5} />
           </div>
         </div>
       )}
@@ -336,12 +364,19 @@ export default function Trading({ onNavigate }) {
                 <h4>Normalized multi-instrument tape</h4>
                 <span>Base 100, recent prints</span>
               </div>
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={portfolioAnalytics.chartSeries}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={20} />
-                  <YAxis tick={{ fontSize: 11 }} domain={["auto", "auto"]} />
-                  <Tooltip />
+              <ResponsiveContainer width="100%" height={280}>
+                <LineChart data={portfolioAnalytics.chartSeries} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={20}
+                         label={{ value: "recent prints (oldest → newest)", position: "insideBottom", offset: -2, fontSize: 11, fill: "var(--muted)" }} />
+                  <YAxis tick={{ fontSize: 11 }} domain={["auto", "auto"]}
+                         label={{ value: "indexed to 100 at series start", angle: -90, position: "insideLeft", fontSize: 11, fill: "var(--muted)" }} />
+                  <Tooltip formatter={(value, name) => [Number(value).toFixed(2), name]}
+                           labelFormatter={(label) => `print #${label}`} />
+                  <Legend verticalAlign="top" height={28} iconType="line"
+                          formatter={(value) => value === symbol ? `${value} (selected)` : value} />
+                  <ReferenceLine y={100} stroke="var(--muted)" strokeDasharray="4 4"
+                                 label={{ value: "start (100)", position: "right", fontSize: 10, fill: "var(--muted)" }} />
                   {portfolioAnalytics.members.map((member, idx) => (
                     <Line
                       key={member.symbol}
@@ -349,7 +384,9 @@ export default function Trading({ onNavigate }) {
                       dataKey={member.symbol}
                       stroke={paletteColor(idx)}
                       dot={false}
-                      strokeWidth={member.symbol === symbol ? 2.8 : 1.8}
+                      activeDot={{ r: 4 }}
+                      strokeWidth={member.symbol === symbol ? 3 : 1.6}
+                      strokeOpacity={member.symbol === symbol ? 1 : 0.65}
                     />
                   ))}
                 </LineChart>
@@ -395,7 +432,7 @@ export default function Trading({ onNavigate }) {
       {forecast && <ForecastCard forecast={forecast} />}
 
       <PortfolioCard portfolio={portfolio} />
-      <OrdersBlotter orders={orders} />
+      <OrdersBlotter orders={orders} onCancel={refreshBlotter} />
     </div>
   );
 }
@@ -446,7 +483,9 @@ function OrderTicket({ symbol, last, onDone, onError }) {
         limit_price: type === "limit" ? Number(limit) : null,
         ref_price: last != null ? Number(last) : null,
       });
-      setMsg(`Filled (paper) ${order.side} ${order.qty} ${order.symbol} @ ${order.fill_price}`);
+      setMsg(order.status === "new"
+        ? `Working (paper) ${order.side} ${order.qty} ${order.symbol} @ ${order.limit_price} — resting until the market crosses it`
+        : `Filled (paper) ${order.side} ${order.qty} ${order.symbol} @ ${order.fill_price}`);
       onDone();
     } catch (err) {
       onError(String(err).replace(/^Error:\s*/, ""));
@@ -903,19 +942,43 @@ function PortfolioCard({ portfolio }) {
   );
 }
 
-function OrdersBlotter({ orders }) {
+function OrdersBlotter({ orders, onCancel }) {
+  const [busyId, setBusyId] = useState(null);
   if (!orders?.length) return null;
+
+  async function cancel(id) {
+    setBusyId(id);
+    try {
+      await api.cancelOrder(id);
+      onCancel?.();
+    } catch {
+      // the order likely filled/matched a moment before the click - the next
+      // refresh will show its real status
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div className="card">
       <h3>Orders</h3>
       <table className="data-table">
-        <thead><tr><th>symbol</th><th>side</th><th>qty</th><th>type</th><th>status</th><th>route</th><th>fill</th></tr></thead>
+        <thead><tr><th>symbol</th><th>side</th><th>qty</th><th>type</th><th>status</th><th>route</th><th>fill</th><th></th></tr></thead>
         <tbody>
           {orders.slice(0, 25).map((order) => (
             <tr key={order.id}>
               <td>{order.symbol}</td><td className={order.side === "buy" ? "up" : "down"}>{order.side}</td>
-              <td>{fmt(order.qty)}</td><td>{order.order_type}</td><td>{order.status}</td>
-              <td><span className="paper-badge sm">{order.route}</span></td><td>{fmt(order.fill_price)}</td>
+              <td>{fmt(order.qty)}</td><td>{order.order_type}</td>
+              <td><span className={`status-badge status-${order.status}`}>{order.status}</span></td>
+              <td><span className="paper-badge sm">{order.route}</span></td>
+              <td>{order.status === "new" ? `working @ ${fmt(order.limit_price)}` : fmt(order.fill_price)}</td>
+              <td>
+                {order.status === "new" && (
+                  <button className="chip" disabled={busyId === order.id} onClick={() => cancel(order.id)}>
+                    Cancel
+                  </button>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

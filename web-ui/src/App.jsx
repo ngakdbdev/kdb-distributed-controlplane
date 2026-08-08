@@ -13,6 +13,7 @@ import Fleet from "./pages/Fleet.jsx";
 import TickHouses from "./pages/TickHouses.jsx";
 import Login from "./pages/Login.jsx";
 import Metrics from "./pages/Metrics.jsx";
+import Migration from "./pages/Migration.jsx";
 import ModelSettings from "./pages/ModelSettings.jsx";
 import Query from "./pages/Query.jsx";
 import QueryAnalysis from "./pages/QueryAnalysis.jsx";
@@ -38,6 +39,7 @@ const PAGES = {
   fleet: Fleet,
   export: Export,
   audit: AuditLog,
+  migration: Migration,
 };
 
 // The SSO callback redirects to <ui>/#access_token=...&token_type=bearer.

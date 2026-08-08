@@ -50,6 +50,12 @@ const GROUPS = [
       { id: "audit", label: "Audit log", mark: "AU" },
     ],
   },
+  {
+    label: "Sales",
+    items: [
+      { id: "migration", label: "Migration assessment", mark: "MG" },
+    ],
+  },
 ];
 const ADMIN_GROUP = {
   label: "Admin",

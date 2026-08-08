@@ -77,6 +77,85 @@ def test_shape_vector_and_scalar():
     assert s["kind"] == "scalar" and s["rows"] == [[42]]
 
 
+# ---- kdb+ timestamp/date conversion ---------------------------------------
+# Regression coverage for a real bug: qpython (pandas=False) hands timestamp
+# columns back as plain int64 nanoseconds-since-2000.01.01, not numpy
+# datetime64 - with nothing converting that, the raw integer reached the UI
+# and `new Date(hugeInt)` rendered as "Invalid Date" (confirmed live against
+# an RDB: meta.time == -12, the q type code for timestamp).
+
+class _FakeDtype:
+    def __init__(self, names):
+        self.names = names
+
+
+class _FakeMeta:
+    def __init__(self, **kw):
+        self._d = kw
+
+    def as_dict(self):
+        return self._d
+
+
+class _FakeStructuredArray:
+    """Minimal stand-in for qpython's QTable: dtype.names + per-column
+    access + a .meta exposing each column's q type code."""
+    def __init__(self, columns: dict, qtypes: dict):
+        self._columns = columns
+        self.dtype = _FakeDtype(tuple(columns.keys()))
+        self.meta = _FakeMeta(**qtypes)
+
+    def __getitem__(self, name):
+        return self._columns[name]
+
+
+def test_kdb_temporal_to_iso_timestamp():
+    # 2026-08-08T10:26:55.874225 UTC, as raw ns-since-2000.01.01 (qtype -12)
+    ns_since_2000 = int((__import__("datetime").datetime(2026, 8, 8, 10, 26, 55, 874225)
+                        - __import__("datetime").datetime(2000, 1, 1)).total_seconds() * 1_000_000_000)
+    iso = qs._kdb_temporal_to_iso(ns_since_2000, -12)
+    assert iso == "2026-08-08T10:26:55.874225"
+
+def test_kdb_temporal_to_iso_date():
+    days_since_2000 = (__import__("datetime").date(2026, 8, 8) - __import__("datetime").date(2000, 1, 1)).days
+    assert qs._kdb_temporal_to_iso(days_since_2000, -14) == "2026-08-08"
+
+def test_kdb_temporal_to_iso_passes_through_non_temporal_types():
+    assert qs._kdb_temporal_to_iso(12345, -7) == 12345   # a `long` column - not a date/timestamp
+
+def test_kdb_temporal_to_iso_none_passes_through():
+    assert qs._kdb_temporal_to_iso(None, -12) is None
+
+def test_shape_result_converts_timestamp_column_from_structured_array():
+    # exactly the shape that broke: select time, price, size from trade
+    ns = int((__import__("datetime").datetime(2026, 8, 8, 10, 0, 0)
+              - __import__("datetime").datetime(2000, 1, 1)).total_seconds() * 1_000_000_000)
+    arr = _FakeStructuredArray(
+        {"time": [ns], "price": [114.98], "size": [300]},
+        {"qtype": 98, "time": -12, "price": -9, "size": -7},
+    )
+    res = qs.shape_result(arr)
+    assert res["columns"] == ["time", "price", "size"]
+    time_val = res["rows"][0][res["columns"].index("time")]
+    assert time_val == "2026-08-08T10:00:00"
+    # a JS `new Date(...)` must be able to parse what we send - guard against
+    # ever regressing back to a bare epoch integer
+    assert isinstance(time_val, str) and "T" in time_val
+
+def test_shape_result_leaves_non_temporal_int_columns_alone():
+    arr = _FakeStructuredArray({"size": [100, 200]}, {"qtype": 98, "size": -7})
+    res = qs.shape_result(arr)
+    assert res["rows"] == [[100], [200]]
+
+def test_shape_result_structured_array_without_meta_falls_back_safely():
+    """Some structured results may have no .meta at all - must not crash,
+    just skip the conversion (better a raw number than a 500)."""
+    arr = _FakeStructuredArray({"x": [1, 2]}, {})
+    arr.meta = None
+    res = qs.shape_result(arr)
+    assert res["rows"] == [[1], [2]]
+
+
 def test_run_query_blocks_write_then_runs_readonly():
     calls = []
     def fake_conn(q):

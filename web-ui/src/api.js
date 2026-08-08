@@ -75,6 +75,10 @@ export const api = {
   listExportSinks: () => request("/export/sinks"),
 
   // TickHouse (declarative tick clusters)
+  analyzeMigration: (files) => request("/migration/analyze", { method: "POST", body: JSON.stringify({ files }) }),
+  migrationTcoRates: () => request("/migration/tco/rates"),
+  migrationTco: (body) => request("/migration/tco", { method: "POST", body: JSON.stringify(body) }),
+
   tickhouseMeta: () => request("/tickhouses/meta"),
   previewTickhouse: (body) => request("/tickhouses/preview", { method: "POST", body: JSON.stringify(body) }),
   createTickhouse: (body) => request("/tickhouses", { method: "POST", body: JSON.stringify(body) }),
@@ -110,6 +114,9 @@ export const api = {
   tradingPermission: () => request("/trading/permission"),
   placeOrder: (body) => request("/trading/orders", { method: "POST", body: JSON.stringify(body) }),
   listOrders: () => request("/trading/orders"),
+  cancelOrder: (id) => request(`/trading/orders/${id}/cancel`, { method: "POST" }),
+  matchOrders: (symbol, price) =>
+    request("/trading/orders/match", { method: "POST", body: JSON.stringify({ symbol, price }) }),
   getPositions: (marks) => request(`/trading/positions${marks ? `?marks=${encodeURIComponent(marks)}` : ""}`),
   computeGreeks: (body) => request("/trading/greeks", { method: "POST", body: JSON.stringify(body) }),
   marketSummary: (body) => request("/trading/market", { method: "POST", body: JSON.stringify(body) }),

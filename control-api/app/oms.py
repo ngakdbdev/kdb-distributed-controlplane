@@ -30,6 +30,15 @@ def signed_qty(side: str, qty: float) -> float:
     return qty if side.lower() == "buy" else -qty
 
 
+def crosses(side: str, limit_price: float, market_price: float) -> bool:
+    """Whether a resting limit order would trade against `market_price`:
+    a buy limit crosses when the market is at or below it, a sell limit
+    crosses when the market is at or above it."""
+    if side.lower() == "buy":
+        return market_price <= limit_price
+    return market_price >= limit_price
+
+
 @dataclass
 class Fill:
     price: float

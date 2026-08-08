@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { api, metricsSocket } from "../api.js";
 
@@ -20,6 +20,15 @@ export default function Metrics() {
   // (not state) purely as "previous sample" bookkeeping for the rate calc -
   // it should never itself trigger a render.
   const prevMsgRef = useRef(null);
+  // Rolling pool of REAL observed per-hop lag samples (feed->tp->rdb->gateway,
+  // never the flush-lag stage) - every websocket tick contributes whatever
+  // transitLag rows it carried, capped so this stays a "recent window" rather
+  // than growing forever. Percentiles below are computed straight from this,
+  // not synthesized - kdb+ shops care about tail latency (p99/p99.9), not the
+  // average, so that's what a serious dashboard should lead with.
+  const lagSamplesRef = useRef([]);
+  const LAG_SAMPLE_CAP = 2000;
+  const [latencyDist, setLatencyDist] = useState({ p50: 0, p90: 0, p99: 0, p999: 0, max: 0, n: 0 });
 
   useEffect(() => {
     api.metricsSnapshot().then(setLatest).catch(() => {});
@@ -42,6 +51,19 @@ export default function Metrics() {
       prevMsgRef.current = { total, time: now };
       setMsgsPerSec(rate);
       setTotalMsgs(total);
+
+      const liveRowsForSampling = (snapshot.transitLag || []).filter((row) => row.stage !== "tp_to_wdb_flush");
+      const newLags = liveRowsForSampling.map((row) => Number(row.lagMs ?? row.avgMs)).filter(Number.isFinite);
+      if (newLags.length) {
+        const pool = [...lagSamplesRef.current, ...newLags];
+        lagSamplesRef.current = pool.length > LAG_SAMPLE_CAP ? pool.slice(pool.length - LAG_SAMPLE_CAP) : pool;
+        const sorted = [...lagSamplesRef.current].sort((a, b) => a - b);
+        setLatencyDist({
+          p50: percentile(sorted, 0.50), p90: percentile(sorted, 0.90),
+          p99: percentile(sorted, 0.99), p999: percentile(sorted, 0.999),
+          max: sorted[sorted.length - 1] ?? 0, n: sorted.length,
+        });
+      }
 
       setHistory((prev) => {
         const liveRows = (snapshot.transitLag || []).filter((row) => row.stage !== "tp_to_wdb_flush");
@@ -123,41 +145,83 @@ export default function Metrics() {
                 <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={30} />
-            <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip />
-            <Line type="monotone" dataKey="msgsPerSec" stroke="var(--accent)" dot={false} strokeWidth={2.5} fill="url(#msgFill)" />
+            <YAxis tick={{ fontSize: 11 }} unit="/s" />
+            <Tooltip formatter={(value) => `${Number(value).toLocaleString()} msg/s`} />
+            <Line type="monotone" dataKey="msgsPerSec" name="messages/sec" stroke="var(--accent)" dot={false}
+                  strokeWidth={2.5} fill="url(#msgFill)" activeDot={{ r: 4 }} />
           </LineChart>
         </ResponsiveContainer>
       </div>
 
       <div className="card">
         <h3>Row counts (trade + risk, both shards)</h3>
+        <p className="muted">Cumulative rows landed in the RDB since it started - a flat line means that feed is idle, not broken.</p>
         <ResponsiveContainer width="100%" height={260}>
-          <LineChart data={history}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+          <LineChart data={history} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id="tradeFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.28} />
+                <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={30} />
             <YAxis tick={{ fontSize: 11 }} />
             <Tooltip />
-            <Line type="monotone" dataKey="trade" stroke="var(--accent)" dot={false} strokeWidth={2} />
-            <Line type="monotone" dataKey="risk" stroke="#ff8a4f" dot={false} strokeWidth={2} />
+            <Legend verticalAlign="top" height={28} iconType="line" />
+            <Line type="monotone" dataKey="trade" name="trade rows" stroke="var(--accent)" dot={false}
+                  strokeWidth={2.5} fill="url(#tradeFill)" activeDot={{ r: 4 }} />
+            <Line type="monotone" dataKey="risk" name="risk rows" stroke="#ff8a4f" dot={false}
+                  strokeWidth={2} activeDot={{ r: 4 }} />
           </LineChart>
         </ResponsiveContainer>
       </div>
 
       <div className="card">
         <h3>Transit lag pulse</h3>
+        <p className="muted">Max vs. average per-hop lag over time, live feed hops only (excludes the durability-bounded flush stage).</p>
         <ResponsiveContainer width="100%" height={220}>
-          <LineChart data={history}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+          <LineChart data={history} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={30} />
-            <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip />
-            <Line type="monotone" dataKey="lagMax" stroke="#dc2626" dot={false} strokeWidth={2} />
-            <Line type="monotone" dataKey="lagAvg" stroke="#0f766e" dot={false} strokeWidth={2} />
+            <YAxis tick={{ fontSize: 11 }} unit="ms" />
+            <Tooltip formatter={(value) => `${Number(value).toFixed(2)} ms`} />
+            <Legend verticalAlign="top" height={28} iconType="line" />
+            <Line type="monotone" dataKey="lagMax" name="max lag" stroke="#dc2626" dot={false} strokeWidth={2.2} activeDot={{ r: 4 }} />
+            <Line type="monotone" dataKey="lagAvg" name="avg lag" stroke="#0f766e" dot={false} strokeWidth={2} strokeDasharray="5 3" activeDot={{ r: 4 }} />
           </LineChart>
         </ResponsiveContainer>
+      </div>
+
+      <div className="card">
+        <div className="section-head">
+          <h3>Latency distribution (feed → TP → RDB → gateway)</h3>
+          <span className="muted" style={{ fontSize: "0.78rem" }}>{latencyDist.n} recent hop samples</span>
+        </div>
+        <p className="muted">
+          Tail latency, not the average - a p99.9 spike hiding behind a fine-looking mean is exactly what an
+          average-only dashboard misses.
+        </p>
+        {latencyDist.n === 0 ? (
+          <p className="muted">No lag samples yet - start the feed connectors to generate traffic.</p>
+        ) : (
+          <div className="latency-hist">
+            {[["p50", latencyDist.p50], ["p90", latencyDist.p90], ["p99", latencyDist.p99],
+              ["p99.9", latencyDist.p999], ["max", latencyDist.max]].map(([label, value]) => (
+              <div className="latency-hist-row" key={label}>
+                <span className="latency-hist-label">{label}</span>
+                <span className="latency-hist-bar-track">
+                  <span className="latency-hist-bar" style={{
+                    width: `${Math.min(100, (value / Math.max(1, latencyDist.max)) * 100)}%`,
+                  }} />
+                </span>
+                <span className="latency-hist-value">{fmtMetric(value)} ms</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="card">
@@ -290,6 +354,12 @@ export default function Metrics() {
       </div>
     </div>
   );
+}
+
+function percentile(sortedAsc, p) {
+  if (!sortedAsc.length) return 0;
+  const idx = Math.min(sortedAsc.length - 1, Math.floor(p * sortedAsc.length));
+  return sortedAsc[idx];
 }
 
 function summarizeLag(rows) {
