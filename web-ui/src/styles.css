@@ -371,6 +371,8 @@ kbd {
 
 /* ---- wizard sections ---- */
 .wizard-section-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0.9rem 0 0.4rem; }
+.required-marker { color: var(--danger); text-transform: none; letter-spacing: normal; font-weight: 600; margin-left: 0.4rem; }
+.field-required-missing { border-color: var(--danger) !important; }
 .form-row.wrap { flex-wrap: wrap; }
 .sym-shards { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem; }
 .sym-shard-row { display: grid; grid-template-columns: 7rem 1fr auto; gap: 0.5rem; align-items: start; }
@@ -483,15 +485,27 @@ h2, h3 { letter-spacing: -0.01em; }
 .ops-banner div { color: var(--text); }
 
 .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
-.kpi { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; box-shadow: var(--shadow); }
+.kpi-row.hero { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 0.9rem; }
+.kpi { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; box-shadow: var(--shadow); position: relative; overflow: hidden; }
 .kpi.accent { background: linear-gradient(135deg, var(--accent) 0%, #3b7dd8 100%); border: none; color: #fff; }
 .kpi.accent .kpi-label, .kpi.accent .kpi-sub { color: #d7e6fb; }
 .kpi.ok { border-color: #6ee7b7; }
 .kpi.bad { border-color: #fca5a5; }
+/* "catchy" hero-stat treatment for the marquee throughput number - a soft
+   radial glow plus a slightly larger value, reserved for the one or two
+   numbers a viewer should see first (real emphasis loses meaning if every
+   card gets it, so this is deliberately not applied broadly). */
+.kpi.glow { box-shadow: 0 8px 24px rgba(24,87,196,0.35), var(--shadow); }
+.kpi.glow::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(120px 80px at 85% -10%, rgba(255,255,255,0.35), transparent 70%);
+}
+.kpi.glow .kpi-value { font-size: 2.5rem; }
 .kpi-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .kpi-value { font-size: 2.1rem; font-weight: 700; line-height: 1.1; margin: 0.15rem 0; font-variant-numeric: tabular-nums; }
 .kpi-unit { font-size: 0.9rem; font-weight: 500; margin-left: 0.35rem; opacity: 0.8; }
 .kpi-sub { font-size: 0.78rem; color: var(--muted); }
+.card.highlight { border-color: #b9d3f7; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); }
 
 .health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.5rem; }
 .health-tile { display: flex; align-items: center; gap: 0.5rem; text-align: left; background: var(--panel);
@@ -637,6 +651,37 @@ h2, h3 { letter-spacing: -0.01em; }
 .component-metric { display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem; border-bottom: 1px dotted var(--border); padding-bottom: 0.2rem; }
 .component-metric span { color: var(--muted); font-size: 0.78rem; }
 .component-metric b { font-variant-numeric: tabular-nums; }
+
+/* ---- global recovery/self-healing notices (App.jsx: RecoveryWatch) ----
+   Fixed to one corner, narrow, no backdrop - deliberately never wide or
+   tall enough to sit over the sidebar or a page's own widgets, and never
+   blocks clicks on anything beneath it. */
+.recovery-stack {
+  position: fixed; right: 1.1rem; bottom: 1.1rem; z-index: 200;
+  display: flex; flex-direction: column; gap: 0.5rem; width: 300px;
+  max-height: calc(100vh - 2.2rem); overflow-y: auto; pointer-events: none;
+}
+.recovery-card {
+  pointer-events: auto;
+  background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--muted);
+  border-radius: 10px; box-shadow: var(--shadow-md); padding: 0.6rem 0.75rem;
+  animation: recovery-in .18s ease;
+}
+.recovery-card.restarting, .recovery-card.reconnecting { border-left-color: #d97706; }
+.recovery-card.down { border-left-color: var(--danger); }
+.recovery-card.recovered { border-left-color: var(--success); }
+.recovery-card-head { display: flex; align-items: center; gap: 0.45rem; font-size: 0.86rem; }
+.recovery-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--muted); }
+.recovery-dot.restarting, .recovery-dot.reconnecting { background: #d97706; animation: recovery-pulse 1.4s ease-in-out infinite; }
+.recovery-dot.down { background: var(--danger); }
+.recovery-dot.recovered { background: var(--success); }
+.recovery-card-body { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
+.recovery-eta { margin-top: 0.15rem; color: var(--accent); font-weight: 500; }
+@keyframes recovery-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes recovery-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (max-width: 900px) {
+  .recovery-stack { right: 0.6rem; bottom: 0.6rem; width: calc(100vw - 1.2rem); max-width: 300px; }
+}
 
 @media (max-width: 760px) {
   .drilldown-grid { grid-template-columns: 1fr; }

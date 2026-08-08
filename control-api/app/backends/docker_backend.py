@@ -76,6 +76,60 @@ class Orchestrator:
         c.restart(timeout=5)
         return True
 
+    def set_env(self, service: str, env_overrides: dict) -> bool:
+        """Apply env var overrides to a service that need to take effect
+        immediately (e.g. a connector's symbol-group scope) - docker has no
+        "update running container's env" call, so this recreates the
+        container in place: same image/name/volumes/network/restart-policy,
+        merged env. Used sparingly, only where a live config change genuinely
+        needs a fresh process (a feed sim reads its symbol universe once at
+        startup)."""
+        c = self._find(service)
+        if c is None or self.client is None:
+            log.warning("set_env requested for unknown service %s", service)
+            return False
+        try:
+            c.reload()
+            attrs = c.attrs
+            cfg = attrs["Config"]
+            host_cfg = attrs["HostConfig"]
+            name = c.name
+            image = cfg.get("Image")
+
+            env_map = {}
+            for e in cfg.get("Env") or []:
+                if "=" in e:
+                    k, v = e.split("=", 1)
+                    env_map[k] = v
+            env_map.update(env_overrides)
+
+            networks = (attrs.get("NetworkSettings", {}) or {}).get("Networks", {}) or {}
+            network_names = list(networks.keys())
+
+            c.stop(timeout=5)
+            c.remove()
+
+            new_c = self.client.containers.run(
+                image,
+                command=cfg.get("Cmd"),
+                name=name,
+                environment=env_map,
+                volumes=host_cfg.get("Binds") or None,
+                restart_policy=host_cfg.get("RestartPolicy") or None,
+                network=network_names[0] if network_names else None,
+                labels=cfg.get("Labels") or None,
+                detach=True,
+            )
+            for net_name in network_names[1:]:
+                try:
+                    self.client.networks.get(net_name).connect(new_c)
+                except DockerException as exc:
+                    log.warning("could not reattach %s to network %s: %s", service, net_name, exc)
+            return True
+        except DockerException as exc:
+            log.warning("set_env for %s failed: %s", service, exc)
+            return False
+
     def logs(self, service: str, tail: int = 200) -> Optional[str]:
         c = self._find(service)
         if c is None:

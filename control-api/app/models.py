@@ -178,6 +178,11 @@ class Connector(SQLModel, table=True):
     description: str = ""
     service_name: str                                          # service/deployment name to control
     enabled: bool = False
+    # Which symbols this connector feeds, as a JSON list e.g. '["AAPL","MSFT"]'.
+    # "[]" (the default) means "the connector's full built-in universe" - unchanged
+    # behaviour from before this field existed. A non-empty list scopes the feed to
+    # just that symbol group (see routers/connectors.py for how it's applied live).
+    symbols_json: str = "[]"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

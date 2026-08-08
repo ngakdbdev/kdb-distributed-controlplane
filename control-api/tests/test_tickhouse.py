@@ -55,8 +55,14 @@ def test_auto_hardware_rejects_unknown_profile():
 
 # ---- full auto spec -------------------------------------------------------
 
+_AWS_TC = {"region": "eu-west-1", "vpc_id": "vpc-1", "subnet_ids": "subnet-1,subnet-2",
+           "eks_cluster": "acme-prod", "namespace": "tick", "storage_class": "gp3",
+           "ingress_class": "nginx"}
+
+
 def test_auto_spec_fills_all_components():
-    spec = th.auto_spec("acme-emea", "aws", "ubuntu-22.04", "low-latency", "a-m, n-z")
+    spec = th.auto_spec("acme-emea", "aws", "ubuntu-22.04", "low-latency", "a-m, n-z",
+                        target_config=_AWS_TC)
     assert th.validate_spec(spec) == []
     types = {c.type for c in spec.components}
     assert th.REQUIRED_COMPONENTS[0] in types
@@ -116,6 +122,25 @@ def test_config_fields_per_cloud():
     assert "resource_group" in th.config_fields("azure")
     assert "namespace" not in th.config_fields("onprem") # compose, no k8s
 
+def test_validate_flags_missing_cloud_config_fields():
+    # aws requires region/vpc_id/subnet_ids/eks_cluster + k8s namespace/storage_class/
+    # ingress_class - none supplied here, so every one of those must be flagged. A spec
+    # that "validates clean" with blank cloud coordinates would only fail later, opaquely,
+    # inside helm/kubectl on the agent - catch it at definition time instead.
+    spec = th.auto_spec("acme", "aws", "ubuntu-22.04", "balanced", "a-z")
+    problems = th.validate_spec(spec)
+    for f in th.config_fields("aws"):
+        assert any(f in p for p in problems), f"expected a problem mentioning {f}"
+
+def test_validate_passes_with_full_cloud_config():
+    spec = th.auto_spec("acme", "aws", "ubuntu-22.04", "balanced", "a-z", target_config=_AWS_TC)
+    assert th.validate_spec(spec) == []
+
+def test_validate_ignores_target_config_for_onprem():
+    spec = th.auto_spec("acme", "onprem", "ubuntu-22.04", "balanced", "a-z",
+                        target_config={"compose_project_dir": "/srv/kdb"})
+    assert th.validate_spec(spec) == []
+
 def test_target_config_flows_into_spec_and_payload():
     tc = {"region": "eu-west-1", "eks_cluster": "acme-prod", "namespace": "tick",
           "storage_class": "gp3"}
@@ -132,7 +157,8 @@ def test_target_config_flows_into_spec_and_payload():
 def test_explicit_symbol_sharding():
     spec = th.auto_spec("acme", "aws", "ubuntu-22.04", "balanced", sharding_policy="explicit-symbols",
                         shard_symbols=[{"label": "mega-cap", "symbols": ["AAPL", "MSFT"]},
-                                       {"label": "india", "symbols": ["RELIANCE", "TCS"]}])
+                                       {"label": "india", "symbols": ["RELIANCE", "TCS"]}],
+                        target_config=_AWS_TC)
     assert th.validate_spec(spec) == []
     assert spec.sharding_policy == "explicit-symbols"
     assert spec.shards[0].symbols == ["AAPL", "MSFT"]

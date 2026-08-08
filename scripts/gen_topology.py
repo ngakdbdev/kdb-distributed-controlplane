@@ -167,6 +167,10 @@ def _feeds_service(n: int) -> str:
       BPIPE_RATE_HZ: "${{BPIPE_RATE_HZ:-20}}"
       SIM_SYMBOL_COUNT: "${{SIM_SYMBOL_COUNT:-0}}"   # grow the universe (e.g. 1000)
       BPIPE_SYMBOLS_FILE: "${{BPIPE_SYMBOLS_FILE:-}}"
+      # Symbol-group scope (see Connectors page / routers/connectors.py) - the
+      # control-api sets this directly on the container when an admin assigns
+      # a symbol group, overriding whatever's here; empty = full universe.
+      BPIPE_SYMBOLS: "${{BPIPE_SYMBOLS:-}}"
     volumes:
       - ./data-plane/feeds/symbols:/symbols:ro
     depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
@@ -182,6 +186,7 @@ def _feeds_service(n: int) -> str:
       TP_HOST_PATTERN: "tp-{{shard}}"
       TP_PORT: "{TP}"
       CRIMS_RATE_HZ: "${{CRIMS_RATE_HZ:-2}}"
+      CRIMS_SYMBOLS: "${{CRIMS_SYMBOLS:-}}"   # symbol-group scope, same mechanism as BPIPE_SYMBOLS
     depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
     restart: on-failure
 

@@ -10,7 +10,16 @@ export default function Metrics() {
   const [history, setHistory] = useState([]);
   const [latest, setLatest] = useState(null);
   const [connected, setConnected] = useState(false);
+  const [msgsPerSec, setMsgsPerSec] = useState(0);
+  const [totalMsgs, setTotalMsgs] = useState(0);
   const wsRef = useRef(null);
+  // tpRecv (see data-plane/q/tick.q .u.stats) is a monotonically increasing
+  // counter since that tickerplant started - the q code's own comment says
+  // "the control plane polls this and derives per-second rates from deltas
+  // between polls," which nothing actually did until now. Tracked in a ref
+  // (not state) purely as "previous sample" bookkeeping for the rate calc -
+  // it should never itself trigger a render.
+  const prevMsgRef = useRef(null);
 
   useEffect(() => {
     api.metricsSnapshot().then(setLatest).catch(() => {});
@@ -18,6 +27,22 @@ export default function Metrics() {
     const ws = metricsSocket((snapshot) => {
       setConnected(true);
       setLatest(snapshot);
+
+      const total = (snapshot.componentMetrics || []).reduce((sum, row) => sum + (Number(row.tpRecv) || 0), 0);
+      const now = Date.now();
+      let rate = 0;
+      const prevSample = prevMsgRef.current;
+      if (prevSample && total >= prevSample.total) {
+        const elapsedSec = (now - prevSample.time) / 1000;
+        if (elapsedSec > 0) rate = (total - prevSample.total) / elapsedSec;
+      }
+      // a shrinking total means a tickerplant restarted and its in-memory
+      // counter reset to 0 - report 0 for that tick rather than a bogus
+      // negative rate; the next tick picks the new baseline up cleanly.
+      prevMsgRef.current = { total, time: now };
+      setMsgsPerSec(rate);
+      setTotalMsgs(total);
+
       setHistory((prev) => {
         const liveRows = (snapshot.transitLag || []).filter((row) => row.stage !== "tp_to_wdb_flush");
         const lagStats = summarizeLag(liveRows);
@@ -27,6 +52,7 @@ export default function Metrics() {
           risk: snapshot.rowCounts?.risk ?? 0,
           lagMax: lagStats.max,
           lagAvg: lagStats.avg,
+          msgsPerSec: Math.round(rate),
         };
         const next = [...prev, point];
         return next.length > MAX_POINTS ? next.slice(next.length - MAX_POINTS) : next;
@@ -65,14 +91,45 @@ export default function Metrics() {
         {connected ? "● live" : "○ reconnecting..."} - streamed from the sharded gateway every second.
       </p>
 
+      <div className="kpi-row hero">
+        <div className="kpi accent glow">
+          <div className="kpi-label">Messages ingested / sec</div>
+          <div className="kpi-value">{fmtMetric(msgsPerSec, 0)}</div>
+          <div className="kpi-sub">Live tickerplant receive rate, all shards</div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-label">Total messages ingested</div>
+          <div className="kpi-value">{fmtCompact(totalMsgs)}</div>
+          <div className="kpi-sub">Cumulative since each tickerplant started</div>
+        </div>
+        <div className="kpi"><div className="kpi-label">Tracked scopes</div><div className="kpi-value">{scopeCount}</div><div className="kpi-sub">Adaptive grouping from live gateway rows</div></div>
+        <div className="kpi"><div className="kpi-label">Pressure scopes</div><div className="kpi-value">{pressure.length}</div><div className="kpi-sub">Queues, lag, or downstream disconnects</div></div>
+      </div>
       <div className="kpi-row">
-        <div className="kpi accent"><div className="kpi-label">Tracked scopes</div><div className="kpi-value">{scopeCount}</div><div className="kpi-sub">Adaptive grouping from live gateway rows</div></div>
         <div className="kpi"><div className="kpi-label">Max transit lag</div><div className="kpi-value">{fmtMetric(lagStats.max)}<span className="kpi-unit">ms</span></div><div className="kpi-sub">Live feed → TP → RDB → gateway hops only</div></div>
         <div className="kpi"><div className="kpi-label">Avg transit lag</div><div className="kpi-value">{fmtMetric(lagStats.avg)}<span className="kpi-unit">ms</span></div><div className="kpi-sub">Mean live delay across sampled hops</div></div>
         <div className="kpi" title="Time since wdb's last durable flush - wdb only flushes rows older than its flush interval by design, so this normally sawtooths up toward that interval (2 min default) and resets on each flush. Not a live-query latency signal.">
           <div className="kpi-label">Flush lag</div><div className="kpi-value">{fmtMetric(flushLagStats.max / 1000, 1)}<span className="kpi-unit">s</span></div><div className="kpi-sub">Durability only - expected up to the flush interval</div>
         </div>
-        <div className="kpi"><div className="kpi-label">Pressure scopes</div><div className="kpi-value">{pressure.length}</div><div className="kpi-sub">Queues, lag, or downstream disconnects</div></div>
+      </div>
+
+      <div className="card highlight">
+        <h3>Ingest throughput (messages / sec)</h3>
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart data={history}>
+            <defs>
+              <linearGradient id="msgFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35} />
+                <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+            <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={30} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip />
+            <Line type="monotone" dataKey="msgsPerSec" stroke="var(--accent)" dot={false} strokeWidth={2.5} fill="url(#msgFill)" />
+          </LineChart>
+        </ResponsiveContainer>
       </div>
 
       <div className="card">
@@ -291,4 +348,9 @@ function scopeLabel(value) {
 function fmtMetric(value, digits = 2) {
   if (value == null || Number.isNaN(value)) return "0";
   return Number(value).toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+
+function fmtCompact(value) {
+  if (value == null || Number.isNaN(value)) return "0";
+  return Number(value).toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
 }

@@ -19,9 +19,27 @@ def tadmin(client):
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
-def _hi(name="acme-emea", location="aws", profile="low-latency", ranges="a-m, n-z", idb=False):
+# Sample non-secret cloud/k8s coordinates, one full set per cloud - the
+# mandatory fields validate_spec now requires (see tickhouse.py CLOUD_CONFIG_FIELDS).
+_SAMPLE_TARGET_CONFIG = {
+    "aws": {"region": "eu-west-1", "vpc_id": "vpc-1", "subnet_ids": "subnet-1,subnet-2",
+            "eks_cluster": "acme-prod", "namespace": "tick", "storage_class": "gp3",
+            "ingress_class": "nginx"},
+    "azure": {"subscription_id": "sub-1", "resource_group": "acme-rg", "location": "westeurope",
+              "aks_cluster": "acme-aks", "namespace": "tick", "storage_class": "managed-premium",
+              "ingress_class": "nginx"},
+    "gcp": {"project_id": "acme-proj", "region": "europe-west1", "gke_cluster": "acme-gke",
+            "namespace": "tick", "storage_class": "standard-rwo", "ingress_class": "nginx"},
+    "onprem": {"compose_project_dir": "/srv/kdb"},
+}
+
+
+def _hi(name="acme-emea", location="aws", profile="low-latency", ranges="a-m, n-z", idb=False,
+        target_config=None):
     return {"name": name, "location": location, "os": "ubuntu-22.04",
-            "profile": profile, "shard_ranges": ranges, "idb": idb}
+            "profile": profile, "shard_ranges": ranges, "idb": idb,
+            "target_config": target_config if target_config is not None
+                             else _SAMPLE_TARGET_CONFIG.get(location, {})}
 
 
 def test_meta_lists_choices(client, tadmin):

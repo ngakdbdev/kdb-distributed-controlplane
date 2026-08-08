@@ -13,7 +13,7 @@ import random
 import time
 
 import topology
-from feed_common import ShardedPublisher, utc_now
+from feed_common import ShardedPublisher, build_universe, utc_now
 
 SYMBOLS = ["AAPL", "AMZN", "BAC", "C", "GOOGL", "IBM", "JPM", "META", "MSFT",
            "NFLX", "NVDA", "ORCL", "PYPL", "QCOM", "TSLA", "UBER", "V", "WMT"]
@@ -38,7 +38,17 @@ def main():
     parser.add_argument("--rate", type=float, default=float(os.environ.get("CRIMS_RATE_HZ", "2")),
                         help="records per second across all symbols")
     parser.add_argument("--batch-ms", type=int, default=int(os.environ.get("CRIMS_BATCH_MS", "1000")))
+    parser.add_argument("--symbols", default=os.environ.get("CRIMS_SYMBOLS", ""),
+                        help="explicit comma-separated symbol list (overrides the built-in set) - "
+                             "the connector's symbol-group scope, see routers/connectors.py")
+    parser.add_argument("--symbols-file", default=os.environ.get("CRIMS_SYMBOLS_FILE", ""),
+                        help="path to a file of symbols (comma or newline separated)")
+    parser.add_argument("--symbol-count", type=int, default=int(os.environ.get("SIM_SYMBOL_COUNT", "0")),
+                        help="grow/trim the universe to this many symbols (pads with synthetic tickers)")
     args = parser.parse_args()
+
+    universe = build_universe(args.symbol_count, args.symbols, args.symbols_file, SYMBOLS)
+    logging.getLogger("crims_sim").info("simulating %d symbols across %d shards", len(universe), args.shards)
 
     pub = ShardedPublisher("crims_sim", shard_count=args.shards)
     pub.connect()
@@ -48,7 +58,7 @@ def main():
 
     while True:
         try:
-            batch = [gen_risk(random.choice(SYMBOLS), args.shards) for _ in range(per_batch)]
+            batch = [gen_risk(random.choice(universe), args.shards) for _ in range(per_batch)]
             if batch:
                 pub.publish_rows("risk", batch)
         except Exception:  # noqa: BLE001 - keep the feed alive; log and carry on

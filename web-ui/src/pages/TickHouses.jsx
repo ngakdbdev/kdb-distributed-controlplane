@@ -94,15 +94,25 @@ function CreateWizard({ meta, onCreated, onError }) {
 
       {cfgFields.length > 0 && (
         <>
-          <div className="wizard-section-label">{form.location} / Kubernetes config</div>
+          <div className="wizard-section-label">
+            {form.location} / Kubernetes config <span className="required-marker">* all required</span>
+          </div>
           <div className="form-row wrap">
-            {cfgFields.map((f) => (
-              <input key={f} placeholder={f} value={config[f] || ""}
-                     onChange={(e) => setConfig((c) => ({ ...c, [f]: e.target.value }))} />
-            ))}
+            {cfgFields.map((f) => {
+              const missing = !String(config[f] || "").trim();
+              return (
+                <input key={f} placeholder={`${f} *`} value={config[f] || ""}
+                       title={`${f} is required to provision on ${form.location}`}
+                       className={missing ? "field-required-missing" : ""}
+                       onChange={(e) => setConfig((c) => ({ ...c, [f]: e.target.value }))} />
+              );
+            })}
           </div>
           <div className="muted" style={{ fontSize: "0.78rem" }}>
             Non-secret coordinates only. Credentials (keys, kubeconfig tokens) stay in the agent&rsquo;s secret store.
+            These are the account/cluster the agent already running there will deploy into &mdash; this
+            does not create a new AWS/Azure/GCP cluster for you; enroll an agent in an existing cluster first
+            (see the Fleet page).
           </div>
         </>
       )}

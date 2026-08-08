@@ -16,6 +16,7 @@ import Metrics from "./pages/Metrics.jsx";
 import ModelSettings from "./pages/ModelSettings.jsx";
 import Query from "./pages/Query.jsx";
 import QueryAnalysis from "./pages/QueryAnalysis.jsx";
+import RecoveryWatch from "./components/RecoveryWatch.jsx";
 import Trading from "./pages/Trading.jsx";
 import Subscribers from "./pages/Subscribers.jsx";
 import Topology from "./pages/Topology.jsx";
@@ -88,6 +89,7 @@ export default function App() {
           <span>{COPYRIGHT}</span>
         </footer>
       </div>
+      <RecoveryWatch />
     </div>
   );
 }

@@ -215,6 +215,40 @@ class ShardedPublisher:
             c.close()
 
 
+def build_universe(count: int, symbols_arg: str, symbols_file: str, builtin: list) -> list:
+    """Resolve a feed's symbol universe: an explicit list/file if given (this is
+    the connector "symbol group" override - see routers/connectors.py), otherwise
+    `builtin`, padded with synthetic tickers (SYN00001, ...) up to `count` so you
+    can simulate thousands of symbols for high-cardinality load tests. Shared by
+    bpipe_sim.py and crims_sim.py so a symbol-group override behaves identically
+    across feed kinds.
+
+    `count` padding only applies to the builtin default - an explicit override
+    means "feed exactly this group", full stop. Padding it with thousands of
+    unrelated SYN##### tickers would silently defeat the whole point of scoping
+    a connector to a specific symbol group."""
+    explicit = False
+    if symbols_file and os.path.exists(symbols_file):
+        with open(symbols_file) as fh:
+            syms = [s.strip().upper() for s in fh.read().replace("\n", ",").split(",") if s.strip()]
+        explicit = True
+    elif symbols_arg:
+        syms = [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
+        explicit = True
+    else:
+        syms = list(builtin)
+    if not explicit and count and count > 0:
+        if len(syms) >= count:
+            syms = syms[:count]
+        else:
+            i = 1
+            while len(syms) < count:
+                syms.append(f"SYN{i:05d}")
+                i += 1
+    seen = set()
+    return [s for s in syms if not (s in seen or seen.add(s))]
+
+
 def now_ns() -> int:
     """kdb+ timestamp is nanoseconds since 2000-01-01; qpython handles the
     epoch offset for us if we hand it a Python datetime, so callers should

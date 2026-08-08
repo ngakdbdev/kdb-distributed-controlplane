@@ -10,12 +10,17 @@ class Settings:
     # platform_admin user exists yet. Tenant admins are created per-tenant
     # via the platform admin's /tenants API instead of a static config value.
     platform_admin_email: str = os.environ.get("PLATFORM_ADMIN_EMAIL", "admin@platform.local")
-    platform_admin_password_hash: str = os.environ.get(
-        "PLATFORM_ADMIN_PASSWORD_HASH",
+    # `or default` rather than `.get(key, default)`: docker-compose's
+    # "${VAR:-}" substitution always sets the env var, just to "" when VAR is
+    # unset on the host - .get()'s default only kicks in when the key is
+    # ABSENT, so an unset host var silently became an empty password hash
+    # (every login rejected, with no error indicating why) instead of falling
+    # back to the documented "changeme" default. `or` treats "" as unset too.
+    platform_admin_password_hash: str = os.environ.get("PLATFORM_ADMIN_PASSWORD_HASH") or (
         # bcrypt hash of "changeme" - CHANGE THIS before any real deployment.
         # Generate your own with:
         #   python -c "import bcrypt; print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt()).decode())"
-        "$2b$12$FmUqCIyDLBHXtlKgNKuPF.ewEwICY7yNgfQ38/L.4NIgjWK5LMcUG",
+        "$2b$12$FmUqCIyDLBHXtlKgNKuPF.ewEwICY7yNgfQ38/L.4NIgjWK5LMcUG"
     )
 
     # A demo tenant + tenant-admin user, seeded on first boot purely so the
@@ -24,9 +29,8 @@ class Settings:
     # onboard an actual bank.
     seed_demo_tenant: bool = os.environ.get("SEED_DEMO_TENANT", "true").lower() == "true"
     demo_tenant_admin_email: str = os.environ.get("DEMO_TENANT_ADMIN_EMAIL", "admin@demo-bank.local")
-    demo_tenant_admin_password_hash: str = os.environ.get(
-        "DEMO_TENANT_ADMIN_PASSWORD_HASH",
-        "$2b$12$FmUqCIyDLBHXtlKgNKuPF.ewEwICY7yNgfQ38/L.4NIgjWK5LMcUG",  # also "changeme"
+    demo_tenant_admin_password_hash: str = os.environ.get("DEMO_TENANT_ADMIN_PASSWORD_HASH") or (
+        "$2b$12$FmUqCIyDLBHXtlKgNKuPF.ewEwICY7yNgfQ38/L.4NIgjWK5LMcUG"  # also "changeme"
     )
 
     jwt_secret: str = os.environ.get("JWT_SECRET", "dev-secret-change-in-deploy")

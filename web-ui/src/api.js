@@ -116,6 +116,8 @@ export const api = {
   forecast: (body) => request("/trading/forecast", { method: "POST", body: JSON.stringify(body) }),
   grantTrading: (email, can) => request("/trading/grant", { method: "POST", body: JSON.stringify({ email, can_trade: can }) }),
   toggleConnector: (id) => request(`/connectors/${id}/toggle`, { method: "POST" }),
+  setConnectorSymbols: (id, symbols) =>
+    request(`/connectors/${id}/symbols`, { method: "PUT", body: JSON.stringify({ symbols }) }),
 
   listSubscribers: () => request("/subscribers"),
   addSubscriber: (sub) => request("/subscribers", { method: "POST", body: JSON.stringify(sub) }),
