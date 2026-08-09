@@ -1,0 +1,44 @@
+# GKE overlay - copy/adjust, then:
+#   helm install kdb-control-plane . -n kdb-control-plane --create-namespace -f values-gcp.yaml \
+#     --set secrets.jwtSecret=$(openssl rand -hex 32) \
+#     --set secrets.watchdogSharedSecret=$(openssl rand -hex 32) \
+#     --set secrets.adminPasswordHash='<bcrypt hash>'
+#
+# See docs/predeploy-kubernetes.md for the full pre-install checklist (IAM,
+# the kdbx-license Secret, database decision) - this file only covers the
+# cloud-specific value overrides, not the whole story.
+
+global:
+  # Fill in your project/region - Artifact Registry path, trailing slash required.
+  imageRegistry: "<region>-docker.pkg.dev/<project-id>/<repo>/"
+  imageTag: "0.2.0"
+  # GKE's default is standard-rwo (SSD persistent disk backed) - confirm it
+  # exists in your cluster: kubectl get storageclass
+  storageClassName: "standard-rwo"
+
+# Point at Cloud SQL before enabling controlApi.autoscaling - the chart
+# hard-fails the install otherwise. Reach it via the Cloud SQL Auth Proxy
+# sidecar or a private-IP connection in the cluster's VPC.
+database:
+  url: "postgresql+psycopg2://<user>:<pass>@127.0.0.1:5432/kdb_control_plane"   # 127.0.0.1 if using the Cloud SQL Auth Proxy sidecar pattern
+
+# Recommended beyond a first install - see docs/predeploy-kubernetes.md §3.
+secrets:
+  existingSecret: ""   # e.g. "kdb-control-plane-secrets-prod", created via External Secrets Operator or `kubectl create secret`
+
+ingress:
+  enabled: true
+  # GKE's built-in Ingress controller.
+  className: "gce"
+  host: "tickforge.yourcompany.com"
+  # Use a Google-managed certificate (annotate the Ingress with
+  # networking.gke.io/managed-certificates in a follow-up kubectl patch or a
+  # chart fork), or run cert-manager + Let's Encrypt in-cluster and set
+  # tls: true once the kdb-control-plane-tls Secret exists.
+  tls: false
+
+controlApi:
+  autoscaling:
+    enabled: false   # flip to true only after database.url above is a real Cloud SQL instance, not sqlite
+    minReplicas: 2
+    maxReplicas: 6

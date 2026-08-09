@@ -9,6 +9,14 @@ docker==7.1.0
 kubernetes==30.1.0
 qpython3==1.0.1
 numpy<2
+pyarrow==17.0.0
+# background query export to cloud storage (app/export_sinks.py) - lazily
+# imported only when that destination is actually used, but pinned here so
+# the image always has them (small, no native-lib licensing concerns like
+# msodbcsql18 has).
+boto3==1.35.36
+azure-storage-blob==12.23.1
+azure-identity==1.19.0
 pyjwt==2.9.0
 bcrypt==4.2.0
 python-multipart==0.0.9

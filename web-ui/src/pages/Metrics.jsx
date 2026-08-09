@@ -3,8 +3,14 @@ import {
   CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { api, metricsSocket } from "../api.js";
+import Sparkline from "../components/Sparkline.jsx";
 
 const MAX_POINTS = 60;
+const TOOLTIP_STYLE = {
+  background: "#161b26", border: "1px solid #232938", borderRadius: 10,
+  color: "#eef1f7", fontSize: "0.82rem", boxShadow: "0 12px 28px rgba(0,0,0,.4)",
+};
+const AXIS_TICK = { fontSize: 11, fill: "var(--muted)" };
 
 export default function Metrics() {
   const [history, setHistory] = useState([]);
@@ -113,19 +119,26 @@ export default function Metrics() {
         {connected ? "● live" : "○ reconnecting..."} - streamed from the sharded gateway every second.
       </p>
 
-      <div className="kpi-row hero">
-        <div className="kpi accent glow">
-          <div className="kpi-label">Messages ingested / sec</div>
-          <div className="kpi-value">{fmtMetric(msgsPerSec, 0)}</div>
-          <div className="kpi-sub">Live tickerplant receive rate, all shards</div>
+      <div className="hero-stat">
+        <div className="hero-stat-main">
+          <div className="hero-stat-label">Messages ingested / sec</div>
+          <div className="hero-stat-value">{fmtMetric(msgsPerSec, 0)}</div>
+          <span className={`hero-stat-delta ${msgsPerSec > 0 ? "up" : "flat"}`}>
+            {msgsPerSec > 0 ? "▲" : "•"} live tickerplant receive rate, all shards
+          </span>
         </div>
+        <div className="hero-stat-spark">
+          <Sparkline data={history.map((h) => h.msgsPerSec)} width={160} height={48} strokeWidth={2.5} />
+        </div>
+      </div>
+      <div className="kpi-row">
         <div className="kpi">
           <div className="kpi-label">Total messages ingested</div>
           <div className="kpi-value">{fmtCompact(totalMsgs)}</div>
           <div className="kpi-sub">Cumulative since each tickerplant started</div>
         </div>
         <div className="kpi"><div className="kpi-label">Tracked scopes</div><div className="kpi-value">{scopeCount}</div><div className="kpi-sub">Adaptive grouping from live gateway rows</div></div>
-        <div className="kpi"><div className="kpi-label">Pressure scopes</div><div className="kpi-value">{pressure.length}</div><div className="kpi-sub">Queues, lag, or downstream disconnects</div></div>
+        <div className={`kpi ${pressure.length ? "bad" : "ok"}`}><div className="kpi-label">Pressure scopes</div><div className="kpi-value">{pressure.length}</div><div className="kpi-sub">Queues, lag, or downstream disconnects</div></div>
       </div>
       <div className="kpi-row">
         <div className="kpi"><div className="kpi-label">Max transit lag</div><div className="kpi-value">{fmtMetric(lagStats.max)}<span className="kpi-unit">ms</span></div><div className="kpi-sub">Live feed → TP → RDB → gateway hops only</div></div>
@@ -146,9 +159,9 @@ export default function Metrics() {
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-            <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={30} />
-            <YAxis tick={{ fontSize: 11 }} unit="/s" />
-            <Tooltip formatter={(value) => `${Number(value).toLocaleString()} msg/s`} />
+            <XAxis dataKey="t" tick={AXIS_TICK} minTickGap={30} stroke="var(--border)" />
+            <YAxis tick={AXIS_TICK} unit="/s" stroke="var(--border)" />
+            <Tooltip formatter={(value) => `${Number(value).toLocaleString()} msg/s`} contentStyle={TOOLTIP_STYLE} />
             <Line type="monotone" dataKey="msgsPerSec" name="messages/sec" stroke="var(--accent)" dot={false}
                   strokeWidth={2.5} fill="url(#msgFill)" activeDot={{ r: 4 }} />
           </LineChart>
@@ -167,10 +180,10 @@ export default function Metrics() {
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-            <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={30} />
-            <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip />
-            <Legend verticalAlign="top" height={28} iconType="line" />
+            <XAxis dataKey="t" tick={AXIS_TICK} minTickGap={30} stroke="var(--border)" />
+            <YAxis tick={AXIS_TICK} stroke="var(--border)" />
+            <Tooltip contentStyle={TOOLTIP_STYLE} />
+            <Legend verticalAlign="top" height={28} iconType="line" wrapperStyle={{ fontSize: "0.82rem", color: "var(--text-dim)" }} />
             <Line type="monotone" dataKey="trade" name="trade rows" stroke="var(--accent)" dot={false}
                   strokeWidth={2.5} fill="url(#tradeFill)" activeDot={{ r: 4 }} />
             <Line type="monotone" dataKey="risk" name="risk rows" stroke="#ff8a4f" dot={false}
@@ -185,12 +198,12 @@ export default function Metrics() {
         <ResponsiveContainer width="100%" height={220}>
           <LineChart data={history} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-            <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={30} />
-            <YAxis tick={{ fontSize: 11 }} unit="ms" />
-            <Tooltip formatter={(value) => `${Number(value).toFixed(2)} ms`} />
-            <Legend verticalAlign="top" height={28} iconType="line" />
-            <Line type="monotone" dataKey="lagMax" name="max lag" stroke="#dc2626" dot={false} strokeWidth={2.2} activeDot={{ r: 4 }} />
-            <Line type="monotone" dataKey="lagAvg" name="avg lag" stroke="#0f766e" dot={false} strokeWidth={2} strokeDasharray="5 3" activeDot={{ r: 4 }} />
+            <XAxis dataKey="t" tick={AXIS_TICK} minTickGap={30} stroke="var(--border)" />
+            <YAxis tick={AXIS_TICK} unit="ms" stroke="var(--border)" />
+            <Tooltip formatter={(value) => `${Number(value).toFixed(2)} ms`} contentStyle={TOOLTIP_STYLE} />
+            <Legend verticalAlign="top" height={28} iconType="line" wrapperStyle={{ fontSize: "0.82rem", color: "var(--text-dim)" }} />
+            <Line type="monotone" dataKey="lagMax" name="max lag" stroke="var(--danger)" dot={false} strokeWidth={2.2} activeDot={{ r: 4 }} />
+            <Line type="monotone" dataKey="lagAvg" name="avg lag" stroke="#2dd4bf" dot={false} strokeWidth={2} strokeDasharray="5 3" activeDot={{ r: 4 }} />
           </LineChart>
         </ResponsiveContainer>
       </div>

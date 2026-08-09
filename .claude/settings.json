@@ -5,7 +5,13 @@
       "Bash(python3 -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\(d['problems']\\)\")",
       "Bash(git reset *)",
       "Bash(curl -sk --resolve tickforge.qbytecomputing.com:443:127.0.0.1 -o /dev/null -w \"HTTP %{http_code}\\\\n\" https://tickforge.qbytecomputing.com/)",
-      "Bash(python3 -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\('monthly:',d['monthly_infra_usd'],'annual:',d['annual_infra_usd'],'savings:',d['estimated_annual_savings_usd']\\)\")"
+      "Bash(python3 -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\('monthly:',d['monthly_infra_usd'],'annual:',d['annual_infra_usd'],'savings:',d['estimated_annual_savings_usd']\\)\")",
+      "Skill(loop)",
+      "Skill(loop:*)",
+      "Read(//usr/local/bin/**)",
+      "Read(//Users/nihaalanthati/**)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(docker --version)"
     ]
   }
 }

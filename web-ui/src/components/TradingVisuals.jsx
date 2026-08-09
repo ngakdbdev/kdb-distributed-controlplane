@@ -33,7 +33,7 @@ export function bucketOHLC(rows, bucketMs = 5000) {
   return bars;
 }
 
-export function Candlestick({ bars, height = 280, upColor = "#16a34a", downColor = "#dc2626" }) {
+export function Candlestick({ bars, height = 280, upColor = "#16c784", downColor = "#f6465d" }) {
   const { path, volMax, lo, hi } = useMemo(() => {
     if (!bars?.length) return { path: [], volMax: 1, lo: 0, hi: 1 };
     const los = bars.map((b) => b.low), his = bars.map((b) => b.high);

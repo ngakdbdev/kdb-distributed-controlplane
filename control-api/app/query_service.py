@@ -92,12 +92,16 @@ def check_readonly(query: str) -> tuple[bool, str]:
     return True, ""
 
 
-def clamp_limit(limit) -> int:
+def clamp_limit(limit, max_allowed: int = MAX_ROW_LIMIT) -> int:
+    """`max_allowed` defaults to the interactive workspace's ceiling
+    (MAX_ROW_LIMIT) - the background bulk-export path (export_jobs.py) is the
+    one caller that passes a much higher ceiling, since the whole point of
+    that path is pulling more rows than the interactive grid ever holds."""
     try:
         n = int(limit)
     except (TypeError, ValueError):
-        return DEFAULT_ROW_LIMIT
-    return max(1, min(n, MAX_ROW_LIMIT))
+        return min(DEFAULT_ROW_LIMIT, max_allowed)
+    return max(1, min(n, max_allowed))
 
 
 # --------------------------------------------------------------------------- #
@@ -124,7 +128,7 @@ def _jsonable(v):
     return str(v)
 
 
-def shape_result(result, limit: int = DEFAULT_ROW_LIMIT) -> dict:
+def shape_result(result, limit: int = DEFAULT_ROW_LIMIT, max_allowed: int = MAX_ROW_LIMIT) -> dict:
     """Turn a q result (table / dict / vector / scalar) into a grid payload.
 
     Accepts, for testability and for real qpython results:
@@ -133,7 +137,7 @@ def shape_result(result, limit: int = DEFAULT_ROW_LIMIT) -> dict:
       - scalar                       -> a 1x1 grid
       - a qpython QTable (numpy)     -> converted via its dtype names
     """
-    limit = clamp_limit(limit)
+    limit = clamp_limit(limit, max_allowed)
 
     # qpython QTable / numpy structured array -> dict of columns
     if hasattr(result, "dtype") and getattr(result.dtype, "names", None):
@@ -148,7 +152,7 @@ def shape_result(result, limit: int = DEFAULT_ROW_LIMIT) -> dict:
                 hasattr(vals, "dtype") and getattr(vals.dtype, "names", None)):
             kcols = {f"k_{n}": v for n, v in _columns_from_structured(keys).items()}
             vcols = {str(n): v for n, v in _columns_from_structured(vals).items()}
-            return shape_result({**kcols, **vcols}, limit=limit)
+            return shape_result({**kcols, **vcols}, limit=limit, max_allowed=max_allowed)
 
         items = getattr(result, "iteritems", None)
         if callable(items):
@@ -181,16 +185,16 @@ def shape_result(result, limit: int = DEFAULT_ROW_LIMIT) -> dict:
 
 
 def run_query(query: str, conn, limit: int = DEFAULT_ROW_LIMIT,
-              allow_write: bool = False) -> dict:
+              allow_write: bool = False, max_allowed: int = MAX_ROW_LIMIT) -> dict:
     """Validate + execute + shape. `conn` is callable(query)->q result (a real
     qpython QConnection, or a fake in tests). Returns a grid payload or raises
-    ValueError for a blocked query."""
+    ValueError for a blocked query. `max_allowed` - see clamp_limit."""
     if not allow_write:
         ok, reason = check_readonly(query)
         if not ok:
             raise ValueError(reason)
     result = conn(query)
-    payload = shape_result(result, limit=limit)
+    payload = shape_result(result, limit=limit, max_allowed=max_allowed)
     payload["query"] = query
     return payload
 

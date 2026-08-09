@@ -396,6 +396,26 @@ function ResultView({ result }) {
   const { columns, rows, row_count, truncated, elapsed_ms, kind, per_target, warning,
           routed_shards, skipped_shards } = result;
   const shown = useMemo(() => rows || [], [rows]);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+
+  async function downloadParquet() {
+    setExporting(true); setExportError("");
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `query-result-${stamp}.parquet`;
+      const blob = await api.exportParquet(columns, shown, filename);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+      a.remove(); URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="query-result">
       {per_target && (
@@ -410,7 +430,13 @@ function ResultView({ result }) {
       <div className="query-result-meta muted">
         {row_count} row{row_count === 1 ? "" : "s"} · {kind}{elapsed_ms != null ? ` · ${elapsed_ms} ms` : ""}
         {truncated && <span className="truncated"> · showing first {shown.length}</span>}
+        {shown.length > 0 && (
+          <button className="chip" style={{ marginLeft: "0.6rem" }} disabled={exporting} onClick={downloadParquet} title="Downloads exactly the rows shown here, as a real .parquet file">
+            {exporting ? "Exporting…" : "⬇ Download Parquet"}
+          </button>
+        )}
       </div>
+      {exportError && <div className="error query-error">{exportError}</div>}
       {routed_shards && skipped_shards && skipped_shards.length > 0 && (
         <div className="query-routing muted" title="intelligent routing: shards with no matching symbols were skipped">
           routed to {routed_shards.join(", ")} · skipped {skipped_shards.join(", ")}

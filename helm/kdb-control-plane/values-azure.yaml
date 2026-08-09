@@ -1,0 +1,45 @@
+# AKS overlay - copy/adjust, then:
+#   helm install kdb-control-plane . -n kdb-control-plane --create-namespace -f values-azure.yaml \
+#     --set secrets.jwtSecret=$(openssl rand -hex 32) \
+#     --set secrets.watchdogSharedSecret=$(openssl rand -hex 32) \
+#     --set secrets.adminPasswordHash='<bcrypt hash>'
+#
+# See docs/predeploy-kubernetes.md for the full pre-install checklist (RBAC,
+# the kdbx-license Secret, database decision) - this file only covers the
+# cloud-specific value overrides, not the whole story.
+
+global:
+  # Fill in your ACR name - trailing slash required.
+  imageRegistry: "<your-acr-name>.azurecr.io/"
+  imageTag: "0.2.0"
+  # AKS's default is managed-csi (Azure Disk backed) - confirm it exists in
+  # your cluster: kubectl get storageclass
+  storageClassName: "managed-csi"
+
+# Point at Azure Database for PostgreSQL (or Azure SQL Database for the
+# mssql dialect) before enabling controlApi.autoscaling - the chart
+# hard-fails the install otherwise. Reach it via VNet integration or a
+# private endpoint in the same VNet as the AKS cluster.
+database:
+  url: "postgresql+psycopg2://<user>:<pass>@<server-name>.postgres.database.azure.com:5432/kdb_control_plane"
+
+# Recommended beyond a first install - see docs/predeploy-kubernetes.md §3.
+secrets:
+  existingSecret: ""   # e.g. "kdb-control-plane-secrets-prod", created via External Secrets Operator or `kubectl create secret`
+
+ingress:
+  enabled: true
+  # Requires AGIC (Application Gateway Ingress Controller) installed
+  # in-cluster; use "nginx" instead if you run ingress-nginx.
+  className: "azure-application-gateway"
+  host: "tickforge.yourcompany.com"
+  # Terminate TLS at App Gateway with a managed cert, or run cert-manager +
+  # Let's Encrypt in-cluster and set tls: true once the kdb-control-plane-tls
+  # Secret exists.
+  tls: false
+
+controlApi:
+  autoscaling:
+    enabled: false   # flip to true only after database.url above is a real Azure Database instance, not sqlite
+    minReplicas: 2
+    maxReplicas: 6

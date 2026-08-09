@@ -1,0 +1,46 @@
+# EKS overlay - copy/adjust, then:
+#   helm install kdb-control-plane . -n kdb-control-plane --create-namespace -f values-aws.yaml \
+#     --set secrets.jwtSecret=$(openssl rand -hex 32) \
+#     --set secrets.watchdogSharedSecret=$(openssl rand -hex 32) \
+#     --set secrets.adminPasswordHash='<bcrypt hash>'
+#
+# See docs/predeploy-kubernetes.md for the full pre-install checklist (IAM/RBAC,
+# the kdbx-license Secret, database decision) - this file only covers the
+# cloud-specific value overrides, not the whole story.
+
+global:
+  # Fill in your account/region - trailing slash required.
+  imageRegistry: "<account-id>.dkr.ecr.<region>.amazonaws.com/"
+  imageTag: "0.2.0"
+  # gp3 is EKS's modern default storage class (gp2 also works but is the
+  # older/costlier default) - confirm it exists in your cluster:
+  #   kubectl get storageclass
+  storageClassName: "gp3"
+
+# Point at Amazon RDS before enabling controlApi.autoscaling - the chart
+# hard-fails the install otherwise. See control-api/README-database.md for
+# the psycopg2/pymysql/pyodbc connection-string formats.
+database:
+  url: "postgresql+psycopg2://<user>:<pass>@<rds-endpoint>:5432/kdb_control_plane"
+
+# Recommended beyond a first install - see docs/predeploy-kubernetes.md §3.
+# Leave secrets.* alone (dev defaults) once this is set; it takes precedence.
+secrets:
+  existingSecret: ""   # e.g. "kdb-control-plane-secrets-prod", created via External Secrets Operator or `kubectl create secret`
+
+ingress:
+  enabled: true
+  # Requires the AWS Load Balancer Controller installed in-cluster.
+  className: "alb"
+  host: "tickforge.yourcompany.com"
+  # Terminate TLS at the ALB with an ACM certificate (annotate the Ingress
+  # with alb.ingress.kubernetes.io/certificate-arn in a follow-up
+  # kubectl patch, or via a chart fork), or run cert-manager + Let's Encrypt
+  # in-cluster and set tls: true once the kdb-control-plane-tls Secret exists.
+  tls: false
+
+controlApi:
+  autoscaling:
+    enabled: false   # flip to true only after database.url above is a real RDS endpoint, not sqlite
+    minReplicas: 2
+    maxReplicas: 6

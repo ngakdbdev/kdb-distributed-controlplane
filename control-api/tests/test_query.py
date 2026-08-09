@@ -232,3 +232,51 @@ def test_run_rejects_write_flag_when_disabled(client, tadmin):
 
 def test_query_requires_auth(client):
     assert client.get("/query/targets").status_code in (401, 403)
+
+
+# ---- parquet export (pure - no live q needed, operates on a grid already in hand) --
+
+def test_export_parquet_roundtrips_real_file(client, tadmin):
+    import io
+    import pyarrow.parquet as pq
+
+    body = {
+        "columns": ["sym", "price", "size"],
+        "rows": [["AAPL", 189.5, 100], ["MSFT", 412.1, 50], ["AAPL", None, 25]],
+    }
+    r = client.post("/query/export/parquet", json=body, headers=tadmin)
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert ".parquet" in r.headers["content-disposition"]
+
+    table = pq.read_table(io.BytesIO(r.content))
+    assert table.column_names == ["sym", "price", "size"]
+    assert table.num_rows == 3
+    assert table.column("sym").to_pylist() == ["AAPL", "MSFT", "AAPL"]
+    assert table.column("price").to_pylist() == [189.5, 412.1, None]
+
+
+def test_export_parquet_mixed_type_column_falls_back_to_string(client, tadmin):
+    import io
+    import pyarrow.parquet as pq
+
+    # a column pyarrow can't infer one type for (str + int in the same column)
+    # must degrade to a text column, not fail the whole export.
+    body = {"columns": ["weird"], "rows": [["a"], [1], [None]]}
+    r = client.post("/query/export/parquet", json=body, headers=tadmin)
+    assert r.status_code == 200, r.text
+    table = pq.read_table(io.BytesIO(r.content))
+    assert table.column("weird").to_pylist() == ["a", "1", None]
+
+
+def test_export_parquet_rejects_empty_grid(client, tadmin):
+    r = client.post("/query/export/parquet", json={"columns": ["x"], "rows": []}, headers=tadmin)
+    assert r.status_code == 400
+
+    r = client.post("/query/export/parquet", json={"columns": [], "rows": [[1]]}, headers=tadmin)
+    assert r.status_code == 400
+
+
+def test_export_parquet_requires_auth(client):
+    r = client.post("/query/export/parquet", json={"columns": ["x"], "rows": [[1]]})
+    assert r.status_code in (401, 403)

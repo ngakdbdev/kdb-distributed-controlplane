@@ -93,6 +93,20 @@ export const api = {
   queryTargets: () => request("/query/targets"),
   queryTables: (target) => request(`/query/tables?target=${encodeURIComponent(target)}`),
   runQuery: (body) => request("/query/run", { method: "POST", body: JSON.stringify(body) }),
+  // Binary response (a real .parquet file), not JSON - can't go through the
+  // shared request() helper above, which always parses the body as JSON.
+  exportParquet: async (columns, rows, filename) => {
+    const res = await fetch(`${BASE}/query/export/parquet`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ columns, rows, filename }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`${res.status} ${res.statusText}: ${body}`);
+    }
+    return res.blob();
+  },
   nl2q: (text, target) =>
     request("/query/nl2q", { method: "POST", body: JSON.stringify({ text, target }) }, LLM_TIMEOUT_MS),
   codegen: (text, target) =>
