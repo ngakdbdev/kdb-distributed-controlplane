@@ -21,14 +21,23 @@ export default function Login({ onLoggedIn }) {
       localStorage.setItem("kcp_token", access_token);
       onLoggedIn();
     } catch (err) {
-      const message = String(err?.message || "").toLowerCase();
-      if (message.includes("timed out")) {
+      const message = String(err?.message || "");
+      const lower = message.toLowerCase();
+      const statusMatch = message.match(/^(\d{3})\s/);
+      const status = statusMatch ? Number(statusMatch[1]) : null;
+      if (lower.includes("timed out")) {
         setError("Sign-in timed out. The control API is slow or restarting; please retry in a few seconds.");
-        return;
+      } else if (status === 401) {
+        setError(org
+          ? "LDAP sign-in failed - check organisation ID, username and password."
+          : "Login failed - check email/password.");
+      } else if (status && status >= 500) {
+        setError(`Sign-in unavailable right now (server error ${status}). This is not a credentials problem - the backend or proxy is likely mid-restart; please retry in a few seconds.`);
+      } else if (status) {
+        setError(`Sign-in failed (${status}). This is not necessarily a credentials problem - check the control API is reachable.`);
+      } else {
+        setError(`Sign-in failed: ${message || "network error reaching the control API."}`);
       }
-      setError(org
-        ? "LDAP sign-in failed - check organisation ID, username and password."
-        : "Login failed - check email/password.");
     } finally {
       setBusy(false);
     }

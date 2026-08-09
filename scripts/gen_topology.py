@@ -167,6 +167,10 @@ def _feeds_service(n: int) -> str:
       BPIPE_RATE_HZ: "${{BPIPE_RATE_HZ:-20}}"
       SIM_SYMBOL_COUNT: "${{SIM_SYMBOL_COUNT:-0}}"   # grow the universe (e.g. 1000)
       BPIPE_SYMBOLS_FILE: "${{BPIPE_SYMBOLS_FILE:-}}"
+      # Symbol-group scope (see Connectors page / routers/connectors.py) - the
+      # control-api sets this directly on the container when an admin assigns
+      # a symbol group, overriding whatever's here; empty = full universe.
+      BPIPE_SYMBOLS: "${{BPIPE_SYMBOLS:-}}"
     volumes:
       - ./data-plane/feeds/symbols:/symbols:ro
     depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
@@ -182,6 +186,7 @@ def _feeds_service(n: int) -> str:
       TP_HOST_PATTERN: "tp-{{shard}}"
       TP_PORT: "{TP}"
       CRIMS_RATE_HZ: "${{CRIMS_RATE_HZ:-2}}"
+      CRIMS_SYMBOLS: "${{CRIMS_SYMBOLS:-}}"   # symbol-group scope, same mechanism as BPIPE_SYMBOLS
     depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
     restart: on-failure
 
@@ -259,6 +264,14 @@ def _control_plane_services(n: int) -> str:
       NL2Q_LLM_API_KEY: "${{NL2Q_LLM_API_KEY:-}}"
       NL2Q_LLM_BASE_URL: "${{NL2Q_LLM_BASE_URL:-http://ollama:11434/v1}}"
       NL2Q_LLM_TIMEOUT_SEC: "${{NL2Q_LLM_TIMEOUT_SEC:-60}}"
+      S3_BUCKET: "${{S3_BUCKET:-}}"
+      S3_REGION: "${{S3_REGION:-}}"
+      AZURE_STORAGE_CONNECTION_STRING: "${{AZURE_STORAGE_CONNECTION_STRING:-}}"
+      ADLS_ACCOUNT_URL: "${{ADLS_ACCOUNT_URL:-}}"
+      ADLS_CONTAINER: "${{ADLS_CONTAINER:-}}"
+      EXPORT_BULK_ROW_LIMIT_MAX: "${{EXPORT_BULK_ROW_LIMIT_MAX:-5000000}}"
+      EXPORT_GATEWAY_PRESSURE_QUEUE_THRESHOLD: "${{EXPORT_GATEWAY_PRESSURE_QUEUE_THRESHOLD:-200000}}"
+      EXPORT_GATEWAY_PRESSURE_LAG_THRESHOLD: "${{EXPORT_GATEWAY_PRESSURE_LAG_THRESHOLD:-1000}}"
     volumes:
       - control-api-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock

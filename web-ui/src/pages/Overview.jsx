@@ -4,6 +4,13 @@ import {
 } from "recharts";
 import { api, metricsSocket } from "../api.js";
 import { PRODUCT } from "../brand.js";
+import Sparkline from "../components/Sparkline.jsx";
+
+const TOOLTIP_STYLE = {
+  background: "#161b26", border: "1px solid #232938", borderRadius: 10,
+  color: "#eef1f7", fontSize: "0.82rem", boxShadow: "0 12px 28px rgba(0,0,0,.4)",
+};
+const TOOLTIP_LABEL_STYLE = { color: "#838ba1" };
 
 const MAX = 60;
 
@@ -107,13 +114,21 @@ export default function Overview({ onNavigate }) {
         </div>
       )}
 
-      {/* headline KPIs */}
-      <div className="kpi-row">
-        <div className="kpi accent">
-          <div className="kpi-label">Throughput</div>
-          <div className="kpi-value">{fmt(mps)}<span className="kpi-unit">msg/s</span></div>
-          <div className="kpi-sub">{stream === "live" ? "ingest rate, both shards" : "waiting for data"}</div>
+      {/* headline hero stat — the one number a viewer should see first */}
+      <div className="hero-stat">
+        <div className="hero-stat-main">
+          <div className="hero-stat-label">Throughput, both shards</div>
+          <div className="hero-stat-value">{fmt(mps)}<span className="kpi-unit">msg/s</span></div>
+          <span className={`hero-stat-delta ${mps > 0 ? "up" : "flat"}`}>
+            {mps > 0 ? "▲" : "•"} {stream === "live" ? "live ingest" : "waiting for data"}
+          </span>
         </div>
+        <div className="hero-stat-spark">
+          <Sparkline data={rate.map((r) => r.mps)} width={160} height={48} strokeWidth={2.5} />
+        </div>
+      </div>
+
+      <div className="kpi-row">
         <div className="kpi">
           <div className="kpi-label">Messages ingested</div>
           <div className="kpi-value">{fmt(totalMsgs)}</div>
@@ -149,9 +164,9 @@ export default function Overview({ onNavigate }) {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={40} stroke="var(--muted)" />
-              <YAxis tick={{ fontSize: 11 }} stroke="var(--muted)" tickFormatter={fmt} />
-              <Tooltip formatter={(v) => fmt(v) + " msg/s"} />
+              <XAxis dataKey="t" tick={{ fontSize: 11, fill: "var(--muted)" }} minTickGap={40} stroke="var(--border)" />
+              <YAxis tick={{ fontSize: 11, fill: "var(--muted)" }} stroke="var(--border)" tickFormatter={fmt} />
+              <Tooltip formatter={(v) => fmt(v) + " msg/s"} contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} />
               <Area type="monotone" dataKey="mps" stroke="var(--accent)" strokeWidth={2} fill="url(#g)" isAnimationActive={false} />
             </AreaChart>
           </ResponsiveContainer>
@@ -196,7 +211,7 @@ export default function Overview({ onNavigate }) {
 
       <div className="ov-cards" style={{ marginTop: "1rem" }}>
         <NavCard title="Query workspace" onGo={() => onNavigate?.("query")} desc="Run q across live targets; rows render as a grid." />
-        <NavCard title="Trading terminal" onGo={() => onNavigate?.("trading")} desc="Market metrics, greeks, forecasts, paper orders." />
+        <NavCard title="Markets" onGo={() => onNavigate?.("markets")} desc="Market metrics, candlestick drilldown, calendar-horizon forecast." />
         <NavCard title="Live metrics" onGo={() => onNavigate?.("metrics")} desc="Streaming row counts and transit lag per shard." />
       </div>
     </div>

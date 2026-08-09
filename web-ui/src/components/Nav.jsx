@@ -30,7 +30,10 @@ const GROUPS = [
   {
     label: "Trading",
     items: [
-      { id: "trading", label: "Trading", mark: "TR" },
+      { id: "markets", label: "Markets", mark: "MK" },
+      { id: "orders", label: "Orders", mark: "OR" },
+      { id: "portfolio", label: "Portfolio", mark: "PF" },
+      { id: "bot", label: "Bot", mark: "BT" },
       { id: "execution", label: "Execution", mark: "EX" },
     ],
   },
@@ -46,8 +49,15 @@ const GROUPS = [
     label: "Manage",
     items: [
       { id: "tickhouses", label: "TickHouses", mark: "TH" },
+      { id: "autoscale", label: "Autoscaling", mark: "AS" },
       { id: "fleet", label: "Fleet", mark: "FL" },
       { id: "audit", label: "Audit log", mark: "AU" },
+    ],
+  },
+  {
+    label: "Sales",
+    items: [
+      { id: "migration", label: "Migration assessment", mark: "MG" },
     ],
   },
 ];

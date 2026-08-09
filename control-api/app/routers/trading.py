@@ -17,6 +17,7 @@ from .. import greeks as gk
 from .. import market as mkt
 from .. import oms
 from .. import portfolio as pf
+from .. import risk_check
 from ..db import get_session, log_event
 from ..models import Order, Position, User
 from .auth import CurrentUser, get_current_user, require_tenant_scope
@@ -82,6 +83,19 @@ class OrderBody(BaseModel):
     ref_price: float | None = None  # current market price shown in the UI
 
 
+def _fold_fill_into_position(session: Session, tenant_id: int, symbol: str,
+                             side: str, qty: float, price: float) -> None:
+    pos = session.exec(select(Position).where(Position.tenant_id == tenant_id,
+                                              Position.symbol == symbol)).first()
+    if pos is None:
+        pos = Position(tenant_id=tenant_id, symbol=symbol, qty=0.0, avg_price=0.0)
+    new_qty, new_avg, realized = oms.apply_to_position(pos.qty, pos.avg_price, side, qty, price)
+    pos.qty, pos.avg_price = new_qty, new_avg
+    pos.realized_pnl += realized
+    pos.updated_at = datetime.utcnow()
+    session.add(pos)
+
+
 @router.post("/orders")
 def place_order(body: OrderBody, user: CurrentUser = Depends(require_trading),
                 session: Session = Depends(get_session)):
@@ -89,32 +103,51 @@ def place_order(body: OrderBody, user: CurrentUser = Depends(require_trading),
         raise HTTPException(status_code=400, detail="side must be buy or sell")
     if body.qty <= 0:
         raise HTTPException(status_code=400, detail="qty must be positive")
+    symbol = body.symbol.upper()
+
+    block_reason = risk_check.check_pretrade(symbol)
+    if block_reason:
+        raise HTTPException(status_code=400, detail=block_reason)
+
+    # A market order always trades now. A limit order only trades now if it's
+    # marketable (crosses the current reference price) - otherwise it rests as
+    # a working order until /orders/match crosses it, or it's cancelled. There
+    # is no order book here, so a marketable limit fills at its limit price
+    # (the conservative assumption: never worse than what was asked for).
+    marketable = body.order_type != "limit" or (
+        body.ref_price is not None and body.limit_price is not None
+        and oms.crosses(body.side, body.limit_price, body.ref_price)
+    )
+
+    if not marketable:
+        if body.limit_price is None:
+            raise HTTPException(status_code=400, detail="limit order needs a limit price")
+        order = Order(tenant_id=user.tenant_id, user_email=user.email, symbol=symbol,
+                      side=body.side.lower(), qty=body.qty, order_type=body.order_type,
+                      limit_price=body.limit_price, status="new", route=_PAPER.route_name)
+        session.add(order)
+        session.commit()
+        session.refresh(order)
+        log_event(session, user.email, "order_placed",
+                  f"{body.side} {body.qty} {symbol}",
+                  detail=f"working limit@{body.limit_price}", tenant_id=user.tenant_id)
+        return _order_api(order)
+
     try:
         fill = _PAPER.fill(body.side, body.qty, body.order_type, body.ref_price, body.limit_price)
     except oms.OrderError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    order = Order(tenant_id=user.tenant_id, user_email=user.email, symbol=body.symbol.upper(),
+    order = Order(tenant_id=user.tenant_id, user_email=user.email, symbol=symbol,
                   side=body.side.lower(), qty=body.qty, order_type=body.order_type,
                   limit_price=body.limit_price, status="filled", route=fill.route,
                   fill_price=fill.price)
     session.add(order)
-
-    # fold the fill into the tenant's position
-    pos = session.exec(select(Position).where(Position.tenant_id == user.tenant_id,
-                                              Position.symbol == order.symbol)).first()
-    if pos is None:
-        pos = Position(tenant_id=user.tenant_id, symbol=order.symbol, qty=0.0, avg_price=0.0)
-    new_qty, new_avg, realized = oms.apply_to_position(pos.qty, pos.avg_price,
-                                                       body.side, body.qty, fill.price)
-    pos.qty, pos.avg_price = new_qty, new_avg
-    pos.realized_pnl += realized
-    pos.updated_at = datetime.utcnow()
-    session.add(pos)
+    _fold_fill_into_position(session, user.tenant_id, symbol, body.side, body.qty, fill.price)
     session.commit()
     session.refresh(order)
     log_event(session, user.email, "order_placed",
-              f"{body.side} {body.qty} {order.symbol}",
+              f"{body.side} {body.qty} {symbol}",
               detail=f"{fill.route}@{fill.price}", tenant_id=user.tenant_id)
     return _order_api(order)
 
@@ -125,6 +158,49 @@ def list_orders(user: CurrentUser = Depends(require_tenant_scope),
     rows = session.exec(select(Order).where(Order.tenant_id == user.tenant_id)
                         .order_by(Order.created_at.desc())).all()
     return [_order_api(o) for o in rows]
+
+
+class MatchBody(BaseModel):
+    symbol: str
+    price: float
+
+
+@router.post("/orders/match")
+def match_working_orders(body: MatchBody, user: CurrentUser = Depends(require_tenant_scope),
+                         session: Session = Depends(get_session)):
+    """Cross any working (status=new) limit orders for `symbol` against a
+    fresh market price. Called opportunistically by the UI whenever it has a
+    live price for the symbol it's showing - there's no separate matching
+    engine process, so a resting order only ever gets a chance to fill when
+    something asks about that symbol's price. Re-checks risk at match time
+    too, since exposure can have moved since the order was placed."""
+    symbol = body.symbol.upper()
+    working = session.exec(select(Order).where(
+        Order.tenant_id == user.tenant_id, Order.symbol == symbol, Order.status == "new",
+    )).all()
+    if not working:
+        return {"filled": []}
+
+    block_reason = risk_check.check_pretrade(symbol)
+    filled = []
+    for o in working:
+        if o.limit_price is None or not oms.crosses(o.side, o.limit_price, body.price):
+            continue
+        if block_reason:
+            continue  # leave it working; risk gate blocks the fill, not the order
+        o.status = "filled"
+        o.fill_price = o.limit_price
+        session.add(o)
+        _fold_fill_into_position(session, user.tenant_id, symbol, o.side, o.qty, o.limit_price)
+        filled.append(o)
+    session.commit()
+    for o in filled:
+        session.refresh(o)
+        log_event(session, user.email, "order_matched", f"{o.side} {o.qty} {symbol}",
+                  detail=f"limit@{o.limit_price}", tenant_id=user.tenant_id)
+    return {"filled": [_order_api(o) for o in filled],
+            "blocked_by_risk": bool(block_reason) and any(
+                oms.crosses(o.side, o.limit_price, body.price) for o in working if o.limit_price is not None)}
 
 
 @router.post("/orders/{order_id}/cancel")

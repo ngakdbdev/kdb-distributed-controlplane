@@ -63,9 +63,20 @@
   h
   }
 
+/ On a failed call, drop the cached handle before returning the fallback so
+/ the NEXT fetch re-hopens instead of reusing a handle left stale by a
+/ restart on the other end (.gw.h only hopens when the key is absent from
+/ .gw.conn - without this, one restart on the remote side wedges that
+/ shard/tier as permanently "down" until the gateway itself is restarted).
 .gw.fetch:{[shard;tier;expr;fallback]
   h:.gw.h[shard;tier];
-  $[null h; fallback; @[h;(expr;::);{[fb;e] fb}[fallback]]]
+  $[null h; fallback;
+    @[h;(expr;::);{[shard;tier;h;fb;e]
+        key_:` sv shard,tier;
+        .gw.conn:key_ _ .gw.conn;
+        @[hclose;h;()];
+        fb
+      }[shard;tier;h;fallback]]]
   }
 
 .gw.bySym:{[tbl;sym]

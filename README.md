@@ -65,7 +65,7 @@ with real numbers. See `demokit/README.md` for flags and `DEMO.md` for the
 presenter script. The measurement core is unit-tested (`pytest demokit`) so the
 numbers are honest even though they can only be produced on a live deployment.
 
-## Deploying to the cloud (GCP / AWS / Azure)
+## Deploying to the cloud (GCP / AWS / Azure) or Kubernetes
 
 Each cloud has a parallel module under `deploy/` with the same five steps
 (provision → networking → docker → deploy → teardown) and its own README:
@@ -75,6 +75,14 @@ Each cloud has a parallel module under `deploy/` with the same five steps
   F2 FPGA** path (`ENABLE_FPGA=1`) that only provisions the FPGA-capable box.
 - `deploy/azure/` — accelerated networking + proximity placement; **no FPGA
   path**, because Azure's NP FPGA family is being retired (May 2027).
+
+For Kubernetes (EKS/AKS/GKE/on-prem), see `helm/kdb-control-plane/` — a matching set of
+`values-aws.yaml` / `values-azure.yaml` / `values-gcp.yaml` overlays live alongside the chart.
+
+**Before running any of the above**, work through `docs/README.md` — a pre-deployment checklist
+(IAM/RBAC least-privilege policies, the secret-rotation checklist, KX licensing paths, database
+decisions, DNS/TLS) with one detailed guide per target: `docs/predeploy-aws.md`,
+`docs/predeploy-gcp.md`, `docs/predeploy-azure.md`, `docs/predeploy-kubernetes.md`.
 
 On FPGA generally: no cloud FPGA instance accelerates kdb+ out of the box. The
 FPGA is inert until you build and load a custom bitstream (AWS AFI / Azure

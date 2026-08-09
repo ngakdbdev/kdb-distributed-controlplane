@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import StatusBadge from "../components/StatusBadge.jsx";
+import SymbolPicker from "../components/SymbolPicker.jsx";
 
 export default function Connectors() {
   const [connectors, setConnectors] = useState([]);
@@ -35,6 +36,18 @@ export default function Connectors() {
     }
   }
 
+  async function saveSymbols(c, symbols) {
+    setBusyId(c.id);
+    try {
+      await api.setConnectorSymbols(c.id, symbols);
+      await refresh();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div className="page">
       <h2>Feed connectors</h2>
@@ -46,21 +59,8 @@ export default function Connectors() {
       {error && <div className="error">{error}</div>}
       <div className="connector-grid">
         {connectors.map((c) => (
-          <div className="card connector-card" key={c.id}>
-            <div className="connector-header">
-              <h3>{c.name}</h3>
-              <StatusBadge status={c.live_status} />
-            </div>
-            <p className="muted">{c.description}</p>
-            <div className="connector-meta">kind: {c.kind}</div>
-            <button
-              className={c.enabled ? "danger" : "primary"}
-              disabled={busyId === c.id}
-              onClick={() => toggle(c)}
-            >
-              {c.enabled ? "Disable" : "Enable"}
-            </button>
-          </div>
+          <ConnectorCard key={c.id} connector={c} busy={busyId === c.id}
+                        onToggle={() => toggle(c)} onSaveSymbols={(syms) => saveSymbols(c, syms)} />
         ))}
       </div>
 
@@ -82,6 +82,51 @@ export default function Connectors() {
             <p className="muted">Needs: {p.requires}</p>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function ConnectorCard({ connector: c, busy, onToggle, onSaveSymbols }) {
+  const [symbols, setSymbols] = useState(c.symbols || []);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => { setSymbols(c.symbols || []); setDirty(false); }, [c.symbols]);
+
+  function change(v) {
+    setSymbols(v);
+    setDirty(true);
+  }
+
+  return (
+    <div className="card connector-card">
+      <div className="connector-header">
+        <h3>{c.name}</h3>
+        <StatusBadge status={c.live_status} />
+      </div>
+      <p className="muted">{c.description}</p>
+      <div className="connector-meta">kind: {c.kind}</div>
+
+      <div className="wizard-section-label">Symbol group</div>
+      <SymbolPicker value={symbols} onChange={change} placeholder="empty = full universe" />
+      <div className="muted" style={{ fontSize: "0.78rem", marginTop: "0.3rem" }}>
+        {symbols.length === 0
+          ? "Feeding its full built-in universe (default)."
+          : `Scoped to ${symbols.length} symbol${symbols.length === 1 ? "" : "s"}.`}
+        {c.enabled && " Saving while enabled restarts the feed to apply it (a few seconds of gap)."}
+      </div>
+
+      <div className="form-row" style={{ marginTop: "0.6rem" }}>
+        <button
+          className={c.enabled ? "danger" : "primary"}
+          disabled={busy}
+          onClick={onToggle}
+        >
+          {c.enabled ? "Disable" : "Enable"}
+        </button>
+        <button disabled={busy || !dirty} onClick={() => onSaveSymbols(symbols)}>
+          Save symbol group
+        </button>
       </div>
     </div>
   );

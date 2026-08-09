@@ -4,6 +4,8 @@ import { COPYRIGHT } from "./brand.js";
 import { roleFromToken } from "./jwt.js";
 import AuditLog from "./pages/AuditLog.jsx";
 import Alerts from "./pages/Alerts.jsx";
+import Autoscale from "./pages/Autoscale.jsx";
+import Bot from "./pages/Bot.jsx";
 import Overview from "./pages/Overview.jsx";
 import Tickerplants from "./pages/Tickerplants.jsx";
 import Connectors from "./pages/Connectors.jsx";
@@ -12,11 +14,15 @@ import Export from "./pages/Export.jsx";
 import Fleet from "./pages/Fleet.jsx";
 import TickHouses from "./pages/TickHouses.jsx";
 import Login from "./pages/Login.jsx";
+import Markets from "./pages/Markets.jsx";
 import Metrics from "./pages/Metrics.jsx";
+import Migration from "./pages/Migration.jsx";
 import ModelSettings from "./pages/ModelSettings.jsx";
+import Orders from "./pages/Orders.jsx";
+import Portfolio from "./pages/Portfolio.jsx";
 import Query from "./pages/Query.jsx";
 import QueryAnalysis from "./pages/QueryAnalysis.jsx";
-import Trading from "./pages/Trading.jsx";
+import RecoveryWatch from "./components/RecoveryWatch.jsx";
 import Subscribers from "./pages/Subscribers.jsx";
 import Topology from "./pages/Topology.jsx";
 
@@ -29,14 +35,19 @@ const PAGES = {
   query: Query,
   "query-analysis": QueryAnalysis,
   "model-settings": ModelSettings,
-  trading: Trading,
+  markets: Markets,
+  orders: Orders,
+  portfolio: Portfolio,
+  bot: Bot,
   execution: Execution,
   connectors: Connectors,
   subscribers: Subscribers,
   tickhouses: TickHouses,
+  autoscale: Autoscale,
   fleet: Fleet,
   export: Export,
   audit: AuditLog,
+  migration: Migration,
 };
 
 // The SSO callback redirects to <ui>/#access_token=...&token_type=bearer.
@@ -54,6 +65,11 @@ function captureSsoToken() {
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(() => captureSsoToken() || !!localStorage.getItem("kcp_token"));
   const [active, setActive] = useState("overview");
+  // Params carried across a deep-link nav call (e.g. Markets' "Buy AAPL"
+  // button jumping to Orders with {symbol: "AAPL", side: "buy"} prefilled).
+  // Cleared right after the target page mounts so a later in-page symbol
+  // change on Orders doesn't get stomped by a stale deep-link on remount.
+  const [navParams, setNavParams] = useState(null);
   // Decoded straight from the JWT (see jwt.js) - works uniformly for
   // password, LDAP, and SSO login, all of which mint the same token shape.
   // UI-only: hides a tab a non-admin can't use anyway. The real boundary is
@@ -64,6 +80,11 @@ export default function App() {
   useEffect(() => {
     if (!loggedIn && captureSsoToken()) setLoggedIn(true);
   }, [loggedIn]);
+
+  function navigate(id, params) {
+    setActive(id);
+    setNavParams(params || null);
+  }
 
   function logout() {
     localStorage.removeItem("kcp_token");
@@ -79,15 +100,16 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Nav active={active} onChange={setActive} onLogout={logout} isPlatformAdmin={isPlatformAdmin} />
+      <Nav active={active} onChange={navigate} onLogout={logout} isPlatformAdmin={isPlatformAdmin} />
       <div className="app-content-col">
         <main className="app-main">
-          <Page onNavigate={setActive} />
+          <Page onNavigate={navigate} initial={navParams} />
         </main>
         <footer className="app-footer">
           <span>{COPYRIGHT}</span>
         </footer>
       </div>
+      <RecoveryWatch />
     </div>
   );
 }

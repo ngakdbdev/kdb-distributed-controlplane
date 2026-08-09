@@ -117,6 +117,28 @@ class KubernetesOrchestrator:
             self._scale(service, 1)
         return True
 
+    def set_env(self, service: str, env_overrides: dict) -> bool:
+        """Patch env vars on the first container of a Deployment and let
+        Kubernetes roll it out - the k8s analogue of docker_backend's
+        recreate-in-place (used for a connector's symbol-group scope)."""
+        dep = self._get_deployment(service)
+        if dep is None:
+            log.warning("set_env requested for unknown service %s", service)
+            return False
+        try:
+            containers = dep.spec.template.spec.containers
+            existing = {e.name: e.value for e in (containers[0].env or []) if e.value is not None}
+            existing.update(env_overrides)
+            env_patch = [{"name": k, "value": str(v)} for k, v in existing.items()]
+            body = {"spec": {"template": {"spec": {"containers": [
+                {"name": containers[0].name, "env": env_patch}
+            ]}}}}
+            self.apps.patch_namespaced_deployment(service, self.namespace, body)
+            return True
+        except ApiException as exc:
+            log.warning("set_env for %s failed: %s", service, exc)
+            return False
+
     def logs(self, service: str, tail: int = 200) -> Optional[str]:
         if not self.available:
             return None

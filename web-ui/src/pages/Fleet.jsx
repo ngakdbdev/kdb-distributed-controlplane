@@ -4,6 +4,27 @@ import StatusBadge from "../components/StatusBadge.jsx";
 
 const ENVIRONMENTS = ["aws", "azure", "gcp", "onprem"];
 
+// Matches fleet_agent/README.md's "Running it" section exactly - these are
+// the real env vars config.py reads (fleet_agent/config.py:33-36), not
+// invented ones. AWS/Azure/GCP run against that cluster's own Kubernetes
+// context via helm/kubectl (no cloud SDK, no key - see backends.py's
+// HelmBackend); on-prem drives docker compose directly.
+function fleetAgentInstallCommand(token) {
+  const backend = token.environment === "onprem" ? "compose" : "helm";
+  const controlPlaneUrl = `${window.location.origin}/api`;
+  const lines = [
+    `export CONTROL_PLANE_URL=${controlPlaneUrl}`,
+    `export ENROLLMENT_TOKEN=${token.enrollment_token}`,
+    `export AGENT_ENVIRONMENT=${token.environment}`,
+    `export AGENT_BACKEND=${backend}`,
+  ];
+  if (backend === "helm") {
+    lines.push("export HELM_RELEASE=kdb-control-plane", "export HELM_CHART=helm/kdb-control-plane");
+  }
+  lines.push("python -m fleet_agent  # from a checkout of this repo; see fleet_agent/README.md");
+  return lines.join("\n");
+}
+
 export default function Fleet() {
   const [agents, setAgents] = useState([]);
   const [error, setError] = useState("");
@@ -27,10 +48,13 @@ export default function Fleet() {
     <div className="page">
       <h2>Fleet &amp; environments</h2>
       <p className="muted">
-        Each environment is an agent running in your own AWS, Azure, GCP, or on-prem cluster. Register one
-        to get a one-time enrollment token, install the agent there, then provision ticker plant components
-        into it by choosing a shard count &mdash; the agent reconciles the data plane in place
-        (<code>helm upgrade --set shardCount=N</code>) and reports back here.
+        Each environment is an agent running <strong>in your own</strong> AWS, Azure, GCP, or on-prem cluster
+        &mdash; this control plane never sees or stores your cloud credentials. Register one to get a
+        one-time enrollment token, run the agent there with the copy-paste command below, then provision
+        ticker plant components into it by choosing a shard count &mdash; the agent reconciles the data plane
+        in place (<code>helm upgrade --set shardCount=N</code> on AWS/Azure/GCP, <code>docker compose</code>
+        on-prem) and reports back here. The agent calls out to this control plane on a heartbeat; this
+        control plane never dials in.
       </p>
       {error && <div className="error">{error}</div>}
 
@@ -38,16 +62,25 @@ export default function Fleet() {
         onRegistered={(res) => { setNewToken(res); refresh(); }}
       />
 
-      {newToken && (
-        <div className="card" style={{ borderColor: "var(--accent, #3a7)" }}>
+      {newToken && !newToken.error && (
+        <div className="card highlight">
           <h3>Agent “{newToken.name}” registered ({newToken.environment})</h3>
           <p className="muted">
-            One-time enrollment token &mdash; hand this to whoever installs the agent in the target cluster.
-            It is single-use and expires the moment the agent enrolls.
+            One-time enrollment token &mdash; single-use, expires the moment the agent enrolls. Run this
+            <strong> inside the target {newToken.environment === "onprem" ? "on-prem" : newToken.environment.toUpperCase()} cluster</strong>
+            (a service account bound to that namespace, so <code>helm</code>/<code>kubectl</code> use the
+            ambient cluster context &mdash; no cloud SDK or key needed here):
           </p>
-          <pre className="token-box">{newToken.enrollment_token}</pre>
+          <pre className="token-box">{fleetAgentInstallCommand(newToken)}</pre>
+          <button className="chip" onClick={() => navigator.clipboard?.writeText(fleetAgentInstallCommand(newToken))}>
+            Copy command
+          </button>
           <button onClick={() => setNewToken(null)}>Dismiss</button>
         </div>
+      )}
+      {newToken?.error && (
+        <div className="card"><div className="error">{newToken.error}</div>
+          <button onClick={() => setNewToken(null)}>Dismiss</button></div>
       )}
 
       <div className="agent-list">

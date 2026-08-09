@@ -11,12 +11,15 @@ lives in-cluster). Targets/host resolution here come from env + topology.
 """
 import os
 import re
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from pydantic import BaseModel
 
+from .. import export_jobs
 from .. import llm_runtime_config
 from .. import nl2q as nl2q_mod
+from .. import parquet_export
 from .. import q_codegen
 from .. import query_advisor
 from .. import query_profile
@@ -81,10 +84,14 @@ class RunBody(BaseModel):
     allow_write: bool = False
 
 
-def _run_one(target_id: str, query: str, limit: int, allow_write: bool) -> dict:
+def _run_one(target_id: str, query: str, limit: int, allow_write: bool,
+             max_allowed: int = qs.MAX_ROW_LIMIT) -> dict:
     """Run against a single target; returns {target, ok, grid|error, elapsed_ms,
     connect_ms, query_ms}. The last two split elapsed_ms into "getting a
-    connection open" vs "the query itself" - see query_profile.py."""
+    connection open" vs "the query itself" - see query_profile.py.
+    `max_allowed` defaults to the interactive workspace's ceiling; the
+    background bulk-export path (_fetch_grid below) passes a much higher one
+    - see query_service.clamp_limit."""
     import time
 
     # Gateway is a router, not a physical table host; for plain market-table
@@ -105,7 +112,7 @@ def _run_one(target_id: str, query: str, limit: int, allow_write: bool) -> dict:
         else:
             shard_targets = all_shard_targets
         skipped_targets = [t for t in all_shard_targets if t not in shard_targets]
-        results = [_run_one(t, query, limit, allow_write) for t in shard_targets]
+        results = [_run_one(t, query, limit, allow_write, max_allowed) for t in shard_targets]
         labeled = [(r["target"], r["grid"]) for r in results if r["ok"]]
         if not labeled:
             return {
@@ -146,7 +153,7 @@ def _run_one(target_id: str, query: str, limit: int, allow_write: bool) -> dict:
                 "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
     t1 = time.perf_counter()
     try:
-        grid = qs.run_query(query, conn, limit=limit, allow_write=allow_write)
+        grid = qs.run_query(query, conn, limit=limit, allow_write=allow_write, max_allowed=max_allowed)
         t2 = time.perf_counter()
         return {"target": target_id, "ok": True, "grid": grid,
                 "elapsed_ms": round((t2 - t0) * 1000, 1),
@@ -161,6 +168,28 @@ def _run_one(target_id: str, query: str, limit: int, allow_write: bool) -> dict:
             conn.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+def _fetch_grid(targets: list[str], query: str, limit: int) -> tuple[list[str], list[list]]:
+    """Run a (read-only) query across one or more targets and return a plain
+    (columns, rows) grid - the same per-target routing/federation `_run_one`
+    already implements for the interactive /run endpoint, reused here for the
+    background export job so both paths can never disagree about what a
+    given target set + query actually returns. Always read-only (no
+    allow_write path for a background bulk pull), and always uses the bulk
+    row ceiling (export_jobs.BULK_ROW_LIMIT_MAX), not the interactive one -
+    this is the entire reason the background path exists."""
+    for t in targets:
+        _resolve(t)
+    max_allowed = export_jobs.BULK_ROW_LIMIT_MAX
+    limit = min(limit, max_allowed)
+    results = [_run_one(t, query, limit, False, max_allowed) for t in targets]
+    labeled = [(r["target"], r["grid"]) for r in results if r["ok"]]
+    if not labeled:
+        raise HTTPException(status_code=502, detail="all targets failed: " +
+                            "; ".join(f"{r['target']}: {r.get('error')}" for r in results))
+    combined = labeled[0][1] if len(labeled) == 1 else qs.combine_results(labeled, add_provenance=True, limit=limit)
+    return combined["columns"], combined["rows"]
 
 
 @router.post("/run")
@@ -219,6 +248,105 @@ def run(body: RunBody, user: CurrentUser = Depends(require_tenant_scope)):
                                "error": r.get("error"), "elapsed_ms": r["elapsed_ms"]}
                               for r in results]
     return combined
+
+
+class ParquetExportBody(BaseModel):
+    columns: list[str]
+    rows: list[list]
+    filename: str | None = None
+
+
+@router.post("/export/parquet")
+def export_parquet(body: ParquetExportBody, user: CurrentUser = Depends(require_tenant_scope)):
+    """Download the CURRENT result grid - whatever's already on screen in the
+    query workspace - as a real Parquet file. Deliberately takes the grid the
+    UI already fetched rather than re-running the query, so what you download
+    always matches what you're looking at (including any client-side
+    federation/merge across targets), not a fresh, possibly-different read.
+    See parquet_export.py for the type-inference rules and the 10GB local cap
+    (shared with the background S3/ADLS export path) - past that, use
+    /query/export/background instead, which streams to a temp file and
+    uploads rather than holding the whole thing in one response body.
+    """
+    if not body.columns:
+        raise HTTPException(status_code=400, detail="no columns to export")
+    if not body.rows:
+        raise HTTPException(status_code=400, detail="no rows to export")
+
+    try:
+        data = parquet_export.write_parquet_bytes(body.columns, body.rows)
+    except parquet_export.ExportTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    filename = body.filename or f"query-result-{stamp}.parquet"
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+class BackgroundExportDestination(BaseModel):
+    provider: str          # "s3" | "adls"
+    bucket: str | None = None    # s3
+    key: str | None = None       # s3
+    region: str | None = None    # s3, optional
+    container: str | None = None  # adls
+    path: str | None = None       # adls
+
+
+class BackgroundExportBody(BaseModel):
+    target: str = "gateway"
+    targets: list[str] | None = None
+    query: str
+    limit: int = export_jobs.BULK_ROW_LIMIT_MAX
+    destination: BackgroundExportDestination
+
+
+@router.post("/export/background")
+def start_background_export(body: BackgroundExportBody, background_tasks: BackgroundTasks,
+                             user: CurrentUser = Depends(require_tenant_scope)):
+    """Kick off a bulk export to S3/ADLS as a background job and return
+    immediately with a job id to poll - see export_jobs.py for why this
+    exists (the interactive /run path is capped at query_service.MAX_ROW_LIMIT
+    and runs synchronously in the request; this path is for pulls larger than
+    that, without holding the HTTP connection open while it runs, and without
+    ever holding the whole result in one response body the way the local
+    Parquet download does). Read-only, same as every other query path here -
+    there is no write variant of a background export.
+    """
+    ok, reason = qs.check_readonly(body.query)
+    if not ok:
+        raise HTTPException(status_code=400, detail=reason)
+    targets = body.targets or [body.target]
+    for t in targets:
+        _resolve(t)
+    if body.destination.provider not in ("s3", "adls"):
+        raise HTTPException(status_code=400, detail="destination.provider must be 's3' or 'adls'")
+    if body.destination.provider == "s3" and not body.destination.key:
+        raise HTTPException(status_code=400, detail="s3 destination needs a key")
+    if body.destination.provider == "adls" and not body.destination.path:
+        raise HTTPException(status_code=400, detail="adls destination needs a path")
+
+    job = export_jobs.create_job(actor=user.email, query=body.query, targets=targets,
+                                 destination=body.destination.model_dump())
+    background_tasks.add_task(export_jobs.run_export_job, job.id,
+                              lambda: _fetch_grid(targets, body.query, body.limit))
+    return job.to_api()
+
+
+@router.get("/export/jobs/{job_id}")
+def get_background_export(job_id: str, user: CurrentUser = Depends(require_tenant_scope)):
+    job = export_jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="export job not found")
+    return job.to_api()
+
+
+@router.get("/export/jobs")
+def list_background_exports(limit: int = 20, user: CurrentUser = Depends(require_tenant_scope)):
+    return {"jobs": export_jobs.list_jobs(actor=user.email, limit=limit)}
 
 
 class Nl2qBody(BaseModel):

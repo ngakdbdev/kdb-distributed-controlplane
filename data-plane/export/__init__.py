@@ -1,7 +1,7 @@
 """
 export - pull data out of the kdb+ side (HDB history or a live shard's RDB/IDB)
-and land it in a cloud lakehouse/warehouse: Snowflake, Databricks, or Microsoft
-Fabric.
+and land it in object storage or a warehouse: S3, ADLS, Snowflake, Databricks,
+or Microsoft Fabric.
 
 Design (mirrors the providers framework):
 
@@ -21,8 +21,10 @@ from .sinks.parquet import ParquetSink
 from .sinks.snowflake import SnowflakeSink
 from .sinks.databricks import DatabricksSink
 from .sinks.fabric import FabricSink
+from .sinks.s3 import S3Sink
+from .sinks.adls import AdlsSink
 
-_ALL = [ParquetSink, SnowflakeSink, DatabricksSink, FabricSink]
+_ALL = [ParquetSink, S3Sink, AdlsSink, SnowflakeSink, DatabricksSink, FabricSink]
 
 SINKS = {s.name: s for s in _ALL}
 

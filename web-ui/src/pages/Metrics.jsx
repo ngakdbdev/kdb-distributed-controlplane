@@ -1,16 +1,40 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { api, metricsSocket } from "../api.js";
+import Sparkline from "../components/Sparkline.jsx";
 
 const MAX_POINTS = 60;
+const TOOLTIP_STYLE = {
+  background: "#161b26", border: "1px solid #232938", borderRadius: 10,
+  color: "#eef1f7", fontSize: "0.82rem", boxShadow: "0 12px 28px rgba(0,0,0,.4)",
+};
+const AXIS_TICK = { fontSize: 11, fill: "var(--muted)" };
 
 export default function Metrics() {
   const [history, setHistory] = useState([]);
   const [latest, setLatest] = useState(null);
   const [connected, setConnected] = useState(false);
+  const [msgsPerSec, setMsgsPerSec] = useState(0);
+  const [totalMsgs, setTotalMsgs] = useState(0);
   const wsRef = useRef(null);
+  // tpRecv (see data-plane/q/tick.q .u.stats) is a monotonically increasing
+  // counter since that tickerplant started - the q code's own comment says
+  // "the control plane polls this and derives per-second rates from deltas
+  // between polls," which nothing actually did until now. Tracked in a ref
+  // (not state) purely as "previous sample" bookkeeping for the rate calc -
+  // it should never itself trigger a render.
+  const prevMsgRef = useRef(null);
+  // Rolling pool of REAL observed per-hop lag samples (feed->tp->rdb->gateway,
+  // never the flush-lag stage) - every websocket tick contributes whatever
+  // transitLag rows it carried, capped so this stays a "recent window" rather
+  // than growing forever. Percentiles below are computed straight from this,
+  // not synthesized - kdb+ shops care about tail latency (p99/p99.9), not the
+  // average, so that's what a serious dashboard should lead with.
+  const lagSamplesRef = useRef([]);
+  const LAG_SAMPLE_CAP = 2000;
+  const [latencyDist, setLatencyDist] = useState({ p50: 0, p90: 0, p99: 0, p999: 0, max: 0, n: 0 });
 
   useEffect(() => {
     api.metricsSnapshot().then(setLatest).catch(() => {});
@@ -18,6 +42,35 @@ export default function Metrics() {
     const ws = metricsSocket((snapshot) => {
       setConnected(true);
       setLatest(snapshot);
+
+      const total = (snapshot.componentMetrics || []).reduce((sum, row) => sum + (Number(row.tpRecv) || 0), 0);
+      const now = Date.now();
+      let rate = 0;
+      const prevSample = prevMsgRef.current;
+      if (prevSample && total >= prevSample.total) {
+        const elapsedSec = (now - prevSample.time) / 1000;
+        if (elapsedSec > 0) rate = (total - prevSample.total) / elapsedSec;
+      }
+      // a shrinking total means a tickerplant restarted and its in-memory
+      // counter reset to 0 - report 0 for that tick rather than a bogus
+      // negative rate; the next tick picks the new baseline up cleanly.
+      prevMsgRef.current = { total, time: now };
+      setMsgsPerSec(rate);
+      setTotalMsgs(total);
+
+      const liveRowsForSampling = (snapshot.transitLag || []).filter((row) => row.stage !== "tp_to_wdb_flush");
+      const newLags = liveRowsForSampling.map((row) => Number(row.lagMs ?? row.avgMs)).filter(Number.isFinite);
+      if (newLags.length) {
+        const pool = [...lagSamplesRef.current, ...newLags];
+        lagSamplesRef.current = pool.length > LAG_SAMPLE_CAP ? pool.slice(pool.length - LAG_SAMPLE_CAP) : pool;
+        const sorted = [...lagSamplesRef.current].sort((a, b) => a - b);
+        setLatencyDist({
+          p50: percentile(sorted, 0.50), p90: percentile(sorted, 0.90),
+          p99: percentile(sorted, 0.99), p999: percentile(sorted, 0.999),
+          max: sorted[sorted.length - 1] ?? 0, n: sorted.length,
+        });
+      }
+
       setHistory((prev) => {
         const liveRows = (snapshot.transitLag || []).filter((row) => row.stage !== "tp_to_wdb_flush");
         const lagStats = summarizeLag(liveRows);
@@ -27,6 +80,7 @@ export default function Metrics() {
           risk: snapshot.rowCounts?.risk ?? 0,
           lagMax: lagStats.max,
           lagAvg: lagStats.avg,
+          msgsPerSec: Math.round(rate),
         };
         const next = [...prev, point];
         return next.length > MAX_POINTS ? next.slice(next.length - MAX_POINTS) : next;
@@ -65,42 +119,122 @@ export default function Metrics() {
         {connected ? "● live" : "○ reconnecting..."} - streamed from the sharded gateway every second.
       </p>
 
+      <div className="hero-stat">
+        <div className="hero-stat-main">
+          <div className="hero-stat-label">Messages ingested / sec</div>
+          <div className="hero-stat-value">{fmtMetric(msgsPerSec, 0)}</div>
+          <span className={`hero-stat-delta ${msgsPerSec > 0 ? "up" : "flat"}`}>
+            {msgsPerSec > 0 ? "▲" : "•"} live tickerplant receive rate, all shards
+          </span>
+        </div>
+        <div className="hero-stat-spark">
+          <Sparkline data={history.map((h) => h.msgsPerSec)} width={160} height={48} strokeWidth={2.5} />
+        </div>
+      </div>
       <div className="kpi-row">
-        <div className="kpi accent"><div className="kpi-label">Tracked scopes</div><div className="kpi-value">{scopeCount}</div><div className="kpi-sub">Adaptive grouping from live gateway rows</div></div>
+        <div className="kpi">
+          <div className="kpi-label">Total messages ingested</div>
+          <div className="kpi-value">{fmtCompact(totalMsgs)}</div>
+          <div className="kpi-sub">Cumulative since each tickerplant started</div>
+        </div>
+        <div className="kpi"><div className="kpi-label">Tracked scopes</div><div className="kpi-value">{scopeCount}</div><div className="kpi-sub">Adaptive grouping from live gateway rows</div></div>
+        <div className={`kpi ${pressure.length ? "bad" : "ok"}`}><div className="kpi-label">Pressure scopes</div><div className="kpi-value">{pressure.length}</div><div className="kpi-sub">Queues, lag, or downstream disconnects</div></div>
+      </div>
+      <div className="kpi-row">
         <div className="kpi"><div className="kpi-label">Max transit lag</div><div className="kpi-value">{fmtMetric(lagStats.max)}<span className="kpi-unit">ms</span></div><div className="kpi-sub">Live feed → TP → RDB → gateway hops only</div></div>
         <div className="kpi"><div className="kpi-label">Avg transit lag</div><div className="kpi-value">{fmtMetric(lagStats.avg)}<span className="kpi-unit">ms</span></div><div className="kpi-sub">Mean live delay across sampled hops</div></div>
         <div className="kpi" title="Time since wdb's last durable flush - wdb only flushes rows older than its flush interval by design, so this normally sawtooths up toward that interval (2 min default) and resets on each flush. Not a live-query latency signal.">
           <div className="kpi-label">Flush lag</div><div className="kpi-value">{fmtMetric(flushLagStats.max / 1000, 1)}<span className="kpi-unit">s</span></div><div className="kpi-sub">Durability only - expected up to the flush interval</div>
         </div>
-        <div className="kpi"><div className="kpi-label">Pressure scopes</div><div className="kpi-value">{pressure.length}</div><div className="kpi-sub">Queues, lag, or downstream disconnects</div></div>
+      </div>
+
+      <div className="card highlight">
+        <h3>Ingest throughput (messages / sec)</h3>
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart data={history}>
+            <defs>
+              <linearGradient id="msgFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35} />
+                <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+            <XAxis dataKey="t" tick={AXIS_TICK} minTickGap={30} stroke="var(--border)" />
+            <YAxis tick={AXIS_TICK} unit="/s" stroke="var(--border)" />
+            <Tooltip formatter={(value) => `${Number(value).toLocaleString()} msg/s`} contentStyle={TOOLTIP_STYLE} />
+            <Line type="monotone" dataKey="msgsPerSec" name="messages/sec" stroke="var(--accent)" dot={false}
+                  strokeWidth={2.5} fill="url(#msgFill)" activeDot={{ r: 4 }} />
+          </LineChart>
+        </ResponsiveContainer>
       </div>
 
       <div className="card">
         <h3>Row counts (trade + risk, both shards)</h3>
+        <p className="muted">Cumulative rows landed in the RDB since it started - a flat line means that feed is idle, not broken.</p>
         <ResponsiveContainer width="100%" height={260}>
-          <LineChart data={history}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-            <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={30} />
-            <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip />
-            <Line type="monotone" dataKey="trade" stroke="var(--accent)" dot={false} strokeWidth={2} />
-            <Line type="monotone" dataKey="risk" stroke="#ff8a4f" dot={false} strokeWidth={2} />
+          <LineChart data={history} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id="tradeFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.28} />
+                <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+            <XAxis dataKey="t" tick={AXIS_TICK} minTickGap={30} stroke="var(--border)" />
+            <YAxis tick={AXIS_TICK} stroke="var(--border)" />
+            <Tooltip contentStyle={TOOLTIP_STYLE} />
+            <Legend verticalAlign="top" height={28} iconType="line" wrapperStyle={{ fontSize: "0.82rem", color: "var(--text-dim)" }} />
+            <Line type="monotone" dataKey="trade" name="trade rows" stroke="var(--accent)" dot={false}
+                  strokeWidth={2.5} fill="url(#tradeFill)" activeDot={{ r: 4 }} />
+            <Line type="monotone" dataKey="risk" name="risk rows" stroke="#ff8a4f" dot={false}
+                  strokeWidth={2} activeDot={{ r: 4 }} />
           </LineChart>
         </ResponsiveContainer>
       </div>
 
       <div className="card">
         <h3>Transit lag pulse</h3>
+        <p className="muted">Max vs. average per-hop lag over time, live feed hops only (excludes the durability-bounded flush stage).</p>
         <ResponsiveContainer width="100%" height={220}>
-          <LineChart data={history}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-            <XAxis dataKey="t" tick={{ fontSize: 11 }} minTickGap={30} />
-            <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip />
-            <Line type="monotone" dataKey="lagMax" stroke="#dc2626" dot={false} strokeWidth={2} />
-            <Line type="monotone" dataKey="lagAvg" stroke="#0f766e" dot={false} strokeWidth={2} />
+          <LineChart data={history} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+            <XAxis dataKey="t" tick={AXIS_TICK} minTickGap={30} stroke="var(--border)" />
+            <YAxis tick={AXIS_TICK} unit="ms" stroke="var(--border)" />
+            <Tooltip formatter={(value) => `${Number(value).toFixed(2)} ms`} contentStyle={TOOLTIP_STYLE} />
+            <Legend verticalAlign="top" height={28} iconType="line" wrapperStyle={{ fontSize: "0.82rem", color: "var(--text-dim)" }} />
+            <Line type="monotone" dataKey="lagMax" name="max lag" stroke="var(--danger)" dot={false} strokeWidth={2.2} activeDot={{ r: 4 }} />
+            <Line type="monotone" dataKey="lagAvg" name="avg lag" stroke="#2dd4bf" dot={false} strokeWidth={2} strokeDasharray="5 3" activeDot={{ r: 4 }} />
           </LineChart>
         </ResponsiveContainer>
+      </div>
+
+      <div className="card">
+        <div className="section-head">
+          <h3>Latency distribution (feed → TP → RDB → gateway)</h3>
+          <span className="muted" style={{ fontSize: "0.78rem" }}>{latencyDist.n} recent hop samples</span>
+        </div>
+        <p className="muted">
+          Tail latency, not the average - a p99.9 spike hiding behind a fine-looking mean is exactly what an
+          average-only dashboard misses.
+        </p>
+        {latencyDist.n === 0 ? (
+          <p className="muted">No lag samples yet - start the feed connectors to generate traffic.</p>
+        ) : (
+          <div className="latency-hist">
+            {[["p50", latencyDist.p50], ["p90", latencyDist.p90], ["p99", latencyDist.p99],
+              ["p99.9", latencyDist.p999], ["max", latencyDist.max]].map(([label, value]) => (
+              <div className="latency-hist-row" key={label}>
+                <span className="latency-hist-label">{label}</span>
+                <span className="latency-hist-bar-track">
+                  <span className="latency-hist-bar" style={{
+                    width: `${Math.min(100, (value / Math.max(1, latencyDist.max)) * 100)}%`,
+                  }} />
+                </span>
+                <span className="latency-hist-value">{fmtMetric(value)} ms</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="card">
@@ -235,6 +369,12 @@ export default function Metrics() {
   );
 }
 
+function percentile(sortedAsc, p) {
+  if (!sortedAsc.length) return 0;
+  const idx = Math.min(sortedAsc.length - 1, Math.floor(p * sortedAsc.length));
+  return sortedAsc[idx];
+}
+
 function summarizeLag(rows) {
   const lags = rows.map((row) => Number(row.lagMs ?? row.avgMs)).filter((value) => Number.isFinite(value));
   if (!lags.length) return { avg: 0, max: 0 };
@@ -291,4 +431,9 @@ function scopeLabel(value) {
 function fmtMetric(value, digits = 2) {
   if (value == null || Number.isNaN(value)) return "0";
   return Number(value).toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+
+function fmtCompact(value) {
+  if (value == null || Number.isNaN(value)) return "0";
+  return Number(value).toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
 }

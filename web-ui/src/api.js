@@ -75,6 +75,10 @@ export const api = {
   listExportSinks: () => request("/export/sinks"),
 
   // TickHouse (declarative tick clusters)
+  analyzeMigration: (files) => request("/migration/analyze", { method: "POST", body: JSON.stringify({ files }) }),
+  migrationTcoRates: () => request("/migration/tco/rates"),
+  migrationTco: (body) => request("/migration/tco", { method: "POST", body: JSON.stringify(body) }),
+
   tickhouseMeta: () => request("/tickhouses/meta"),
   previewTickhouse: (body) => request("/tickhouses/preview", { method: "POST", body: JSON.stringify(body) }),
   createTickhouse: (body) => request("/tickhouses", { method: "POST", body: JSON.stringify(body) }),
@@ -89,6 +93,20 @@ export const api = {
   queryTargets: () => request("/query/targets"),
   queryTables: (target) => request(`/query/tables?target=${encodeURIComponent(target)}`),
   runQuery: (body) => request("/query/run", { method: "POST", body: JSON.stringify(body) }),
+  // Binary response (a real .parquet file), not JSON - can't go through the
+  // shared request() helper above, which always parses the body as JSON.
+  exportParquet: async (columns, rows, filename) => {
+    const res = await fetch(`${BASE}/query/export/parquet`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ columns, rows, filename }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`${res.status} ${res.statusText}: ${body}`);
+    }
+    return res.blob();
+  },
   nl2q: (text, target) =>
     request("/query/nl2q", { method: "POST", body: JSON.stringify({ text, target }) }, LLM_TIMEOUT_MS),
   codegen: (text, target) =>
@@ -96,6 +114,12 @@ export const api = {
   analyzeQuery: (q, target) =>
     request("/query/analyze", { method: "POST", body: JSON.stringify({ q, target }) }, LLM_TIMEOUT_MS),
   queryHistory: (limit = 50) => request(`/query/history?limit=${limit}`),
+
+  // Background export to S3/ADLS - for pulls too large for the local Parquet
+  // download (capped at 10GB, see control-api/app/parquet_export.py).
+  startBackgroundExport: (body) => request("/query/export/background", { method: "POST", body: JSON.stringify(body) }),
+  getExportJob: (id) => request(`/query/export/jobs/${id}`),
+  listExportJobs: (limit = 20) => request(`/query/export/jobs?limit=${limit}`),
 
   // Model settings (platform admin only - backend enforces via require_platform_admin)
   getLLMConfig: () => request("/admin/llm-config"),
@@ -110,12 +134,17 @@ export const api = {
   tradingPermission: () => request("/trading/permission"),
   placeOrder: (body) => request("/trading/orders", { method: "POST", body: JSON.stringify(body) }),
   listOrders: () => request("/trading/orders"),
+  cancelOrder: (id) => request(`/trading/orders/${id}/cancel`, { method: "POST" }),
+  matchOrders: (symbol, price) =>
+    request("/trading/orders/match", { method: "POST", body: JSON.stringify({ symbol, price }) }),
   getPositions: (marks) => request(`/trading/positions${marks ? `?marks=${encodeURIComponent(marks)}` : ""}`),
   computeGreeks: (body) => request("/trading/greeks", { method: "POST", body: JSON.stringify(body) }),
   marketSummary: (body) => request("/trading/market", { method: "POST", body: JSON.stringify(body) }),
   forecast: (body) => request("/trading/forecast", { method: "POST", body: JSON.stringify(body) }),
   grantTrading: (email, can) => request("/trading/grant", { method: "POST", body: JSON.stringify({ email, can_trade: can }) }),
   toggleConnector: (id) => request(`/connectors/${id}/toggle`, { method: "POST" }),
+  setConnectorSymbols: (id, symbols) =>
+    request(`/connectors/${id}/symbols`, { method: "PUT", body: JSON.stringify({ symbols }) }),
 
   listSubscribers: () => request("/subscribers"),
   addSubscriber: (sub) => request("/subscribers", { method: "POST", body: JSON.stringify(sub) }),

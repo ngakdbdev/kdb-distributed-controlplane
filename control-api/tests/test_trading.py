@@ -9,6 +9,23 @@ from app import greeks as gk
 from app import portfolio as pf
 from app import market as mkt
 from app import oms
+from app import risk_check
+from app.routers import trading as trading_router
+
+# captured before the autouse fixture below can patch it, so the direct
+# risk_check unit tests (which want the REAL function, not the test-friendly
+# stub) can restore it for their own duration.
+_REAL_CHECK_PRETRADE = risk_check.check_pretrade
+
+
+@pytest.fixture(autouse=True)
+def no_real_risk_feed(monkeypatch):
+    """The endpoint tests below run against the real app/DB but there's no
+    live gateway/risk feed reachable in the test sandbox - and even where
+    there is one (e.g. run inside the deployed container), a real BREACH row
+    for a test symbol would make these flaky. Default every test to "not
+    blocked"; individual tests override this to exercise the block path."""
+    monkeypatch.setattr(trading_router.risk_check, "check_pretrade", lambda symbol: None)
 
 
 # ---- greeks (Black-Scholes) ----------------------------------------------
@@ -94,6 +111,42 @@ def test_broker_router_refuses():
     with pytest.raises(oms.OrderRoutingNotConfigured):
         oms.BrokerRouter().fill("buy", 10, "market", 100, None)
 
+def test_crosses_buy_limit():
+    assert oms.crosses("buy", limit_price=100, market_price=99)    # market at/below -> crosses
+    assert oms.crosses("buy", limit_price=100, market_price=100)
+    assert not oms.crosses("buy", limit_price=100, market_price=101)
+
+def test_crosses_sell_limit():
+    assert oms.crosses("sell", limit_price=100, market_price=101)  # market at/above -> crosses
+    assert not oms.crosses("sell", limit_price=100, market_price=99)
+
+
+# ---- pre-trade risk check --------------------------------------------------
+
+def test_risk_check_passes_when_no_breach(monkeypatch):
+    monkeypatch.setattr(risk_check, "check_pretrade", _REAL_CHECK_PRETRADE)
+    # run_query needs a real conn shape; patch it directly for this pure unit test
+    monkeypatch.setattr(risk_check.qs, "run_query", lambda q, conn, limit: {
+        "columns": ["time", "sym", "riskType", "limit", "exposure", "status", "shard"],
+        "rows": [[1, "AAPL", "VAR", 1000000, 500000, "OK", "s0"]],
+    })
+    assert risk_check.check_pretrade("AAPL", connect=lambda: object()) is None
+
+def test_risk_check_blocks_on_breach(monkeypatch):
+    monkeypatch.setattr(risk_check, "check_pretrade", _REAL_CHECK_PRETRADE)
+    monkeypatch.setattr(risk_check.qs, "run_query", lambda q, conn, limit: {
+        "columns": ["time", "sym", "riskType", "limit", "exposure", "status", "shard"],
+        "rows": [[1, "AAPL", "VAR", 1000000, 1200000, "BREACH", "s0"]],
+    })
+    reason = risk_check.check_pretrade("AAPL", connect=lambda: object())
+    assert reason and "BREACH" in reason
+
+def test_risk_check_fails_open_when_feed_unreachable(monkeypatch):
+    monkeypatch.setattr(risk_check, "check_pretrade", _REAL_CHECK_PRETRADE)
+    def _boom():
+        raise ConnectionRefusedError("no gateway")
+    assert risk_check.check_pretrade("AAPL", connect=_boom) is None
+
 
 # ---- endpoints ------------------------------------------------------------
 
@@ -132,6 +185,69 @@ def test_market_order_without_ref_price_rejected(client, tadmin):
     r = client.post("/trading/orders", headers=tadmin,
                     json={"symbol": "AAPL", "side": "buy", "qty": 10, "order_type": "market"})
     assert r.status_code == 400
+
+
+def test_non_marketable_limit_order_rests_and_is_cancellable(client, tadmin):
+    # buy limit well below the market -> doesn't cross, so it should rest
+    r = client.post("/trading/orders", headers=tadmin,
+                    json={"symbol": "MSFT", "side": "buy", "qty": 50, "order_type": "limit",
+                          "limit_price": 100.0, "ref_price": 300.0})
+    assert r.status_code == 200, r.text
+    o = r.json()
+    assert o["status"] == "new" and o["fill_price"] is None
+
+    # resting, so cancel is now reachable (this was dead code before the fix)
+    c = client.post(f"/trading/orders/{o['id']}/cancel", headers=tadmin)
+    assert c.status_code == 200 and c.json()["status"] == "cancelled"
+
+    # cancelling twice is rejected - it's no longer "new"
+    c2 = client.post(f"/trading/orders/{o['id']}/cancel", headers=tadmin)
+    assert c2.status_code == 400
+
+
+def test_marketable_limit_order_fills_immediately(client, tadmin):
+    # sell limit at/below the market -> crosses immediately
+    r = client.post("/trading/orders", headers=tadmin,
+                    json={"symbol": "MSFT", "side": "sell", "qty": 10, "order_type": "limit",
+                          "limit_price": 290.0, "ref_price": 300.0})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "filled" and r.json()["fill_price"] == 290.0
+
+
+def test_match_endpoint_fills_a_crossed_resting_order(client, tadmin):
+    r = client.post("/trading/orders", headers=tadmin,
+                    json={"symbol": "NVDA", "side": "buy", "qty": 20, "order_type": "limit",
+                          "limit_price": 100.0, "ref_price": 150.0})
+    order_id = r.json()["id"]
+    assert r.json()["status"] == "new"
+
+    # market hasn't moved yet - no fill
+    m1 = client.post("/trading/orders/match", headers=tadmin,
+                     json={"symbol": "NVDA", "price": 150.0})
+    assert m1.json()["filled"] == []
+
+    # market drops through the limit - now it crosses
+    m2 = client.post("/trading/orders/match", headers=tadmin,
+                     json={"symbol": "NVDA", "price": 99.0})
+    filled_ids = [o["id"] for o in m2.json()["filled"]]
+    assert order_id in filled_ids
+
+    orders = {o["id"]: o for o in client.get("/trading/orders", headers=tadmin).json()}
+    assert orders[order_id]["status"] == "filled" and orders[order_id]["fill_price"] == 100.0
+
+    pos = client.get("/trading/positions?marks=NVDA:110", headers=tadmin).json()
+    nvda = next(p for p in pos["positions"] if p["symbol"] == "NVDA")
+    assert nvda["qty"] == 20
+
+
+def test_order_blocked_by_pretrade_risk_breach(client, tadmin, monkeypatch):
+    monkeypatch.setattr(trading_router.risk_check, "check_pretrade",
+                        lambda symbol: f"pre-trade risk check failed: {symbol} is in BREACH")
+    r = client.post("/trading/orders", headers=tadmin,
+                    json={"symbol": "TSLA", "side": "buy", "qty": 10,
+                          "order_type": "market", "ref_price": 200.0})
+    assert r.status_code == 400
+    assert "BREACH" in r.json()["detail"]
 
 
 def test_greeks_endpoint(client, tadmin):

@@ -30,8 +30,24 @@ def _tp_targets():
 
 
 def _scalar(v):
+    # qpython wraps a q temporal scalar (e.g. .u.stats[]'s lastTs) in
+    # QTemporal, holding a numpy.datetime64/timedelta64 - neither is JSON
+    # serializable, and FastAPI's encoder has no fallback for them (confirmed
+    # live: this 500'd the whole /tickerplants endpoint before this fix).
+    # str() on QTemporal already renders the correct calendar value - unlike
+    # the ad-hoc query path (see query_service.py), qpython does the q-epoch
+    # conversion itself here because the value arrives with type metadata
+    # attached, not as a bare int64 column.
+    try:
+        from qpython.qtemporal import QTemporal
+        if isinstance(v, QTemporal):
+            return str(v)
+    except ImportError:
+        pass
     try:
         import numpy as np
+        if isinstance(v, (np.datetime64, np.timedelta64)):
+            return str(v)
         if isinstance(v, np.generic):
             v = v.item()
     except Exception:  # noqa: BLE001

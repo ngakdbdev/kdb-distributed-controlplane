@@ -217,6 +217,10 @@ def validate_spec(spec: TickHouseSpec) -> list:
             problems.append(f"missing required component: {req}")
     if spec.idb_enabled and "idb" not in have:
         problems.append("idb_enabled is set but no idb component is present")
+    if spec.location in CLOUDS:
+        for f in config_fields(spec.location):
+            if not str((spec.target_config or {}).get(f, "")).strip():
+                problems.append(f"target_config.{f} is required for {spec.location}")
     eod_hour = spec.eod_config.get("eod_hour_utc", 0)
     if not (isinstance(eod_hour, int) and 0 <= eod_hour <= 23):
         problems.append("eod_config.eod_hour_utc must be an integer 0-23 (UTC hour the trading day rolls over)")

@@ -49,10 +49,17 @@ export default function Execution({ onNavigate }) {
 
       {error && <div className="error">{error}</div>}
 
+      <div className="hero-stat">
+        <div className="hero-stat-main">
+          <div className="hero-stat-label">Fill rate, last {summary?.count ?? 0} orders</div>
+          <div className="hero-stat-value">{fmtPct(summary?.fillRate ?? 0)}<span className="kpi-unit">%</span></div>
+          <span className={`hero-stat-delta ${(summary?.fillRate ?? 0) >= 90 ? "up" : (summary?.fillRate ?? 0) >= 70 ? "flat" : "down"}`}>
+            {(summary?.rejectRate ?? 0).toFixed ? fmtPct(summary?.rejectRate ?? 0) : 0}% rejected
+          </span>
+        </div>
+      </div>
+
       <div className="metric-cards">
-        <Metric label="Orders (50)" value={summary?.count ?? 0} />
-        <Metric label="Fill rate" value={`${fmtPct(summary?.fillRate ?? 0)}%`} cls={summary?.fillRate >= 90 ? "up" : summary?.fillRate >= 70 ? "" : "down"} />
-        <Metric label="Reject rate" value={`${fmtPct(summary?.rejectRate ?? 0)}%`} cls={summary?.rejectRate > 10 ? "down" : ""} />
         <Metric label="Pending" value={summary?.pending ?? 0} cls={summary?.pending > 10 ? "down" : ""} />
         <Metric label="Buys / Sells" value={`${summary?.buys ?? 0} / ${summary?.sells ?? 0}`} />
         <Metric label="Latest" value={summary?.latestAt || "—"} />

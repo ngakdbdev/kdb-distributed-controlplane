@@ -6,6 +6,8 @@ qpython3==1.0.1
 numpy<2
 
 # --- per-sink extras (install the one(s) you need) ---
+# s3:         boto3
+# adls:       azure-storage-blob  azure-identity (only needed for DefaultAzureCredential, not a connection string)
 # snowflake:  snowflake-connector-python[pandas]
 # databricks: databricks-sql-connector  databricks-sdk
 # fabric:     azure-identity  azure-storage-file-datalake

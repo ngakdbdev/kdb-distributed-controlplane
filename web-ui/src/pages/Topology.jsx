@@ -69,6 +69,8 @@ export default function Topology({ onNavigate }) {
   const { shards, other } = groupByShard(status);
   const shardIds = Object.keys(shards).sort();
   const nothing = Object.keys(status).length === 0;
+  const allSvc = Object.entries(status);
+  const runningCount = allSvc.filter(([, s]) => s === "running").length;
 
   return (
     <div className="page">
@@ -82,6 +84,21 @@ export default function Topology({ onNavigate }) {
       </p>
       {error && <div className="error">{error}</div>}
 
+      {!nothing && (
+        <div className="kpi-row">
+          <div className={`kpi ${runningCount === allSvc.length ? "ok" : "bad"}`}>
+            <div className="kpi-label">Fleet health</div>
+            <div className="kpi-value">{runningCount}/{allSvc.length}</div>
+            <div className="kpi-sub">processes running</div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-label">Shards</div>
+            <div className="kpi-value">{shardIds.length}</div>
+            <div className="kpi-sub">tp → wdb → rdb → idb, each</div>
+          </div>
+        </div>
+      )}
+
       {nothing && (
         <div className="card empty-cta">
           <p>No processes are reporting yet. This view populates once a cluster is running —
@@ -92,12 +109,19 @@ export default function Topology({ onNavigate }) {
 
       {shardIds.length > 0 && (
         <div className="shard-grid">
-          {shardIds.map((sid) => (
-            <div className="shard-card" key={sid}>
-              <h3>Shard s{sid}</h3>
-              {shards[sid].slice().sort(sortTier).map((svc) => <ServiceRow svc={svc} key={svc} />)}
-            </div>
-          ))}
+          {shardIds.map((sid) => {
+            const svcs = shards[sid];
+            const up = svcs.filter((s) => status[s] === "running").length;
+            return (
+              <div className="shard-card" key={sid}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <h3 style={{ margin: 0 }}>Shard s{sid}</h3>
+                  <span className={`tp-pill ${up === svcs.length ? "ok" : up === 0 ? "bad" : "warn"}`}>{up}/{svcs.length} up</span>
+                </div>
+                {svcs.slice().sort(sortTier).map((svc) => <ServiceRow svc={svc} key={svc} />)}
+              </div>
+            );
+          })}
         </div>
       )}
 
