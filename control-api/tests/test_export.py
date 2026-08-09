@@ -23,8 +23,10 @@ def test_export_sinks_catalog(client, tadmin):
     r = client.get("/export/sinks", headers=tadmin)
     assert r.status_code == 200, r.text
     cat = {s["name"]: s for s in r.json()}
-    assert set(cat) == {"parquet", "snowflake", "databricks", "fabric"}
+    assert set(cat) == {"parquet", "s3", "adls", "snowflake", "databricks", "fabric"}
     assert cat["parquet"]["offline"] is True
+    assert cat["s3"]["offline"] is False
+    assert cat["adls"]["offline"] is False
     assert cat["snowflake"]["offline"] is False
     assert all(s["requires"] for s in cat.values())
 

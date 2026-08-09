@@ -115,6 +115,12 @@ export const api = {
     request("/query/analyze", { method: "POST", body: JSON.stringify({ q, target }) }, LLM_TIMEOUT_MS),
   queryHistory: (limit = 50) => request(`/query/history?limit=${limit}`),
 
+  // Background export to S3/ADLS - for pulls too large for the local Parquet
+  // download (capped at 10GB, see control-api/app/parquet_export.py).
+  startBackgroundExport: (body) => request("/query/export/background", { method: "POST", body: JSON.stringify(body) }),
+  getExportJob: (id) => request(`/query/export/jobs/${id}`),
+  listExportJobs: (limit = 20) => request(`/query/export/jobs?limit=${limit}`),
+
   // Model settings (platform admin only - backend enforces via require_platform_admin)
   getLLMConfig: () => request("/admin/llm-config"),
   updateLLMConfig: (body) => request("/admin/llm-config", { method: "PUT", body: JSON.stringify(body) }),

@@ -336,7 +336,7 @@ export default function Query() {
 
           {error && <div className="error query-error">{error}</div>}
           {analysis && <AnalysisPanel analysis={analysis} onApply={(q) => { setText(q); setAnalysis(null); }} />}
-          {result && <ResultView result={result} />}
+          {result && <ResultView result={result} selectedTargets={selected} />}
         </div>
       </div>
     </div>
@@ -392,12 +392,27 @@ function formatQueryError(message, targets) {
   return message;
 }
 
-function ResultView({ result }) {
+const EXPORT_POLL_MS = 1500;
+
+function ResultView({ result, selectedTargets }) {
   const { columns, rows, row_count, truncated, elapsed_ms, kind, per_target, warning,
-          routed_shards, skipped_shards } = result;
+          routed_shards, skipped_shards, query: resultQuery } = result;
   const shown = useMemo(() => rows || [], [rows]);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
+  const [destMode, setDestMode] = useState("local"); // local | s3 | adls
+  const [dest, setDest] = useState({ bucket: "", key: "", region: "", container: "", path: "" });
+  const [job, setJob] = useState(null);
+  const [jobError, setJobError] = useState("");
+  const [starting, setStarting] = useState(false);
+
+  useEffect(() => {
+    if (!job || job.status === "succeeded" || job.status === "failed") return;
+    const id = setInterval(async () => {
+      try { setJob(await api.getExportJob(job.id)); } catch { /* keep last known state */ }
+    }, EXPORT_POLL_MS);
+    return () => clearInterval(id);
+  }, [job]);
 
   async function downloadParquet() {
     setExporting(true); setExportError("");
@@ -410,9 +425,32 @@ function ResultView({ result }) {
       a.href = url; a.download = filename; document.body.appendChild(a); a.click();
       a.remove(); URL.revokeObjectURL(url);
     } catch (err) {
-      setExportError(String(err).replace(/^Error:\s*/, ""));
+      const msg = String(err).replace(/^Error:\s*/, "");
+      if (msg.startsWith("413")) {
+        setExportError("Result is over the 10GB local-download limit — switch the destination below to S3 or ADLS instead.");
+        setDestMode("s3");
+      } else {
+        setExportError(msg);
+      }
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function startBackground() {
+    setStarting(true); setJobError(""); setJob(null);
+    try {
+      const destination = destMode === "s3"
+        ? { provider: "s3", bucket: dest.bucket, key: dest.key, region: dest.region || undefined }
+        : { provider: "adls", container: dest.container, path: dest.path };
+      const created = await api.startBackgroundExport({
+        targets: selectedTargets, query: resultQuery, destination,
+      });
+      setJob(created);
+    } catch (err) {
+      setJobError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setStarting(false);
     }
   }
 
@@ -430,13 +468,57 @@ function ResultView({ result }) {
       <div className="query-result-meta muted">
         {row_count} row{row_count === 1 ? "" : "s"} · {kind}{elapsed_ms != null ? ` · ${elapsed_ms} ms` : ""}
         {truncated && <span className="truncated"> · showing first {shown.length}</span>}
-        {shown.length > 0 && (
-          <button className="chip" style={{ marginLeft: "0.6rem" }} disabled={exporting} onClick={downloadParquet} title="Downloads exactly the rows shown here, as a real .parquet file">
-            {exporting ? "Exporting…" : "⬇ Download Parquet"}
-          </button>
-        )}
       </div>
-      {exportError && <div className="error query-error">{exportError}</div>}
+
+      {shown.length > 0 && (
+        <div className="export-panel">
+          <div className="chip-list">
+            {["local", "s3", "adls"].map((m) => (
+              <button key={m} className={`chip ${destMode === m ? "generate" : ""}`} onClick={() => setDestMode(m)}>
+                {m === "local" ? "Local download" : m === "s3" ? "Amazon S3" : "Azure ADLS"}
+              </button>
+            ))}
+          </div>
+
+          {destMode === "local" && (
+            <button className="chip" style={{ marginTop: "0.5rem" }} disabled={exporting} onClick={downloadParquet}
+                    title="Downloads exactly the rows shown here, as a real .parquet file (10GB limit)">
+              {exporting ? "Exporting…" : "⬇ Download Parquet"}
+            </button>
+          )}
+
+          {destMode === "s3" && (
+            <div className="form-row wrap" style={{ marginTop: "0.5rem" }}>
+              <input placeholder="bucket" value={dest.bucket} onChange={(e) => setDest((d) => ({ ...d, bucket: e.target.value }))} style={{ width: "10rem" }} />
+              <input placeholder="key, e.g. exports/trade.parquet" value={dest.key} onChange={(e) => setDest((d) => ({ ...d, key: e.target.value }))} style={{ width: "16rem" }} />
+              <input placeholder="region (optional)" value={dest.region} onChange={(e) => setDest((d) => ({ ...d, region: e.target.value }))} style={{ width: "8rem" }} />
+              <button className="primary" disabled={starting || !dest.bucket || !dest.key} onClick={startBackground}>
+                {starting ? "Starting…" : "Start background export →"}
+              </button>
+            </div>
+          )}
+          {destMode === "adls" && (
+            <div className="form-row wrap" style={{ marginTop: "0.5rem" }}>
+              <input placeholder="container" value={dest.container} onChange={(e) => setDest((d) => ({ ...d, container: e.target.value }))} style={{ width: "10rem" }} />
+              <input placeholder="path, e.g. exports/trade.parquet" value={dest.path} onChange={(e) => setDest((d) => ({ ...d, path: e.target.value }))} style={{ width: "16rem" }} />
+              <button className="primary" disabled={starting || !dest.container || !dest.path} onClick={startBackground}>
+                {starting ? "Starting…" : "Start background export →"}
+              </button>
+            </div>
+          )}
+          {(destMode === "s3" || destMode === "adls") && (
+            <p className="muted" style={{ fontSize: "0.78rem", margin: "0.4rem 0 0" }}>
+              Re-runs this query in the background against a much higher row ceiling than the interactive grid
+              uses (see the deployment's EXPORT_BULK_ROW_LIMIT_MAX), and reports real upload progress once writing
+              finishes. Credentials come from the server's own config, never entered here.
+            </p>
+          )}
+          {exportError && <div className="error query-error">{exportError}</div>}
+          {jobError && <div className="error query-error">{jobError}</div>}
+          {job && <ExportJobPanel job={job} />}
+        </div>
+      )}
+
       {routed_shards && skipped_shards && skipped_shards.length > 0 && (
         <div className="query-routing muted" title="intelligent routing: shards with no matching symbols were skipped">
           routed to {routed_shards.join(", ")} · skipped {skipped_shards.join(", ")}
@@ -454,6 +536,59 @@ function ResultView({ result }) {
         </table>
       </div>
       {shown.length === 0 && <div className="muted">No rows.</div>}
+    </div>
+  );
+}
+
+const STAGE_ORDER = ["queued", "querying", "writing", "uploading", "done"];
+
+// Progress here follows the same rule as everywhere else in this app: only
+// "uploading" ever shows a numeric percentage, because that's the one stage
+// where the underlying SDK (boto3 / azure-storage-blob) reports real
+// transferred bytes as it goes (see export_jobs.py's module docstring).
+// Every earlier stage shows elapsed time only - never a guessed percentage.
+function ExportJobPanel({ job }) {
+  const stageIdx = STAGE_ORDER.indexOf(job.stage);
+  const pct = job.bytes_total ? Math.min(100, Math.round((job.bytes_done / job.bytes_total) * 100)) : null;
+  return (
+    <div className="export-job-panel">
+      <div className="export-job-head">
+        <span className={`status-pill ${job.status === "succeeded" ? "ok" : job.status === "failed" ? "bad" : "warn"}`}>
+          {job.status}
+        </span>
+        <span className="mono">{job.stage}</span>
+        <span className="muted">{job.elapsed_sec}s elapsed</span>
+      </div>
+
+      {job.status !== "failed" && (
+        <div className="sync-steps" style={{ margin: "0.5rem 0" }}>
+          {STAGE_ORDER.slice(0, 4).map((_, i) => (
+            <span key={i} className={`sync-step ${i < stageIdx || job.status === "succeeded" ? "done" : i === stageIdx ? "active" : ""}`} />
+          ))}
+        </div>
+      )}
+
+      {job.row_count != null && <div className="muted">{job.row_count.toLocaleString()} rows pulled</div>}
+
+      {job.stage === "uploading" && pct != null && (
+        <div style={{ marginTop: "0.4rem" }}>
+          <div className="latency-hist-bar-track"><span className="latency-hist-bar" style={{ width: `${pct}%` }} /></div>
+          <div className="muted" style={{ fontSize: "0.78rem", marginTop: "0.2rem" }}>
+            {pct}% · {(job.bytes_done / (1024 ** 2)).toFixed(1)} / {(job.bytes_total / (1024 ** 2)).toFixed(1)} MB uploaded
+          </div>
+        </div>
+      )}
+
+      {job.gateway_pressure?.elevated && (
+        <div className="ops-banner warn" style={{ marginTop: "0.5rem" }}>
+          <div>{job.gateway_pressure.summary}</div>
+        </div>
+      )}
+
+      {job.status === "succeeded" && job.result && (
+        <div className="fill-msg">Uploaded to <span className="mono">{job.result.uri}</span> ({(job.result.bytes / (1024 ** 2)).toFixed(1)} MB)</div>
+      )}
+      {job.status === "failed" && <div className="error query-error">{job.error}</div>}
     </div>
   );
 }

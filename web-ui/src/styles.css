@@ -403,6 +403,11 @@ kbd {
 .sym-shard-row { display: grid; grid-template-columns: 7rem 1fr auto; gap: 0.5rem; align-items: start; }
 .sym-shard-label { align-self: start; }
 
+/* ---- query result export (local / S3 / ADLS) ---- */
+.export-panel { margin: 0.75rem 0; padding: 0.75rem 0.9rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.export-job-panel { margin-top: 0.75rem; padding: 0.7rem 0.85rem; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.export-job-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+
 /* ---- shard sync status (Autoscaling page) ---- */
 .sync-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.85rem; margin-top: 0.75rem; }
 .sync-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); padding: 0.9rem 1rem; }

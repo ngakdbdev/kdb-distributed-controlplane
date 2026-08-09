@@ -280,3 +280,63 @@ def test_export_parquet_rejects_empty_grid(client, tadmin):
 def test_export_parquet_requires_auth(client):
     r = client.post("/query/export/parquet", json={"columns": ["x"], "rows": [[1]]})
     assert r.status_code in (401, 403)
+
+
+def test_export_parquet_rejects_over_10gb(client, tadmin, monkeypatch):
+    from app.routers import query as query_module
+
+    def _too_big(columns, rows):
+        raise query_module.parquet_export.ExportTooLarge(11 * 1024**3)
+
+    monkeypatch.setattr(query_module.parquet_export, "write_parquet_bytes", _too_big)
+    r = client.post("/query/export/parquet", json={"columns": ["x"], "rows": [[1]]}, headers=tadmin)
+    assert r.status_code == 413
+    assert "S3/ADLS" in r.json()["detail"]
+
+
+# ---- background export (S3/ADLS) - validation only; the actual job run is --
+# ---- covered by test_export_jobs.py with fakes, no live q/cloud needed -----
+
+def test_background_export_rejects_bad_provider(client, tadmin):
+    r = client.post("/query/export/background", json={
+        "target": "gateway", "query": "select from trade",
+        "destination": {"provider": "gcs", "bucket": "x"},
+    }, headers=tadmin)
+    assert r.status_code == 400
+    assert "provider" in r.json()["detail"]
+
+
+def test_background_export_rejects_s3_without_key(client, tadmin):
+    r = client.post("/query/export/background", json={
+        "target": "gateway", "query": "select from trade",
+        "destination": {"provider": "s3", "bucket": "x"},
+    }, headers=tadmin)
+    assert r.status_code == 400
+    assert "key" in r.json()["detail"]
+
+
+def test_background_export_rejects_write_query(client, tadmin):
+    r = client.post("/query/export/background", json={
+        "target": "gateway", "query": "`t set 1",
+        "destination": {"provider": "s3", "bucket": "x", "key": "y.parquet"},
+    }, headers=tadmin)
+    assert r.status_code == 400
+    assert "read-only" in r.json()["detail"]
+
+
+def test_background_export_rejects_unknown_target(client, tadmin):
+    r = client.post("/query/export/background", json={
+        "target": "not-a-real-target", "query": "select from trade",
+        "destination": {"provider": "s3", "bucket": "x", "key": "y.parquet"},
+    }, headers=tadmin)
+    assert r.status_code == 404
+
+
+def test_export_jobs_requires_auth(client):
+    assert client.get("/query/export/jobs").status_code in (401, 403)
+    assert client.get("/query/export/jobs/nonexistent").status_code in (401, 403)
+
+
+def test_get_export_job_not_found(client, tadmin):
+    r = client.get("/query/export/jobs/nonexistent-id", headers=tadmin)
+    assert r.status_code == 404
