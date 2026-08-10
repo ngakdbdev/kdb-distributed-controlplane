@@ -3,7 +3,11 @@
 #   python scripts/gen_topology.py --shards <N> --compose docker-compose.yml --shards-json data-plane/shards.json
 # Add --eod-hour <0-23> / --idb-retention-days <N> to change the trading-day
 # rollover hour (UTC, default midnight) or how long idb keeps a sealed day in
-# memory before evicting it (default 5) - both per-TickHouse knobs.
+# memory before evicting it (default 5), or --kdb-threads <N|auto> to change
+# the secondary threads (-s) rdb/wdb/hdb reserve (default "auto" - each
+# container sizes it from its own visible CPU count at boot via
+# kdb-entrypoint.sh; override per-tier at deploy time with the RDB_THREADS /
+# WDB_THREADS / HDB_THREADS env vars) - all per-TickHouse knobs.
 name: kdb-control-plane
 
 x-kdb-build: &kdb-build
@@ -44,6 +48,13 @@ services:
               "-hdbhost", "hdb-s0", "-hdbport", "5060", "-p", "5040"]
     environment:
       <<: *kdb-env
+      # secondary threads (-s), injected by kdb-entrypoint.sh - see KDB_THREADS
+      # there. "auto" sizes it from THIS container's visible CPUs at boot
+      # instead of a number baked in at compose-generation time on a
+      # possibly different box. wdb has no parallel recovery routine today
+      # (unlike rdb's .rdb.loadWarm) so the reserved threads sit idle for
+      # now - harmless, and ready if one's added later.
+      KDB_THREADS: "${WDB_THREADS:-auto}"
     restart: unless-stopped
     depends_on: [tp-s0]
     volumes:
@@ -57,6 +68,12 @@ services:
     command: ["rdb.q", "-shard", "s0", "-tphost", "tp-s0", "-tpport", "5010", "-dbdir", "/data/db", "-p", "5020"]
     environment:
       <<: *kdb-env
+      # secondary threads (-s), injected by kdb-entrypoint.sh - see KDB_THREADS
+      # there. "auto" sizes it from THIS container's visible CPUs at boot.
+      # rdb.q scales active threads back down to 1 once .rdb.loadWarm (the
+      # parallel warm-start recovery read) finishes, so the full ceiling is
+      # only held for the recovery window, not the process's whole life.
+      KDB_THREADS: "${RDB_THREADS:-auto}"
     restart: unless-stopped
     depends_on: [tp-s0]
     volumes:
@@ -82,6 +99,10 @@ services:
     command: ["hdb.q", "-shard", "s0", "-hdbdir", "/data/hdb", "-reloadsec", "60", "-p", "5060"]
     environment:
       <<: *kdb-env
+      # see rdb-s0's KDB_THREADS comment above. hdb's periodic reload
+      # (system"l dir") is a single built-in mmap call, not peach-driven, so
+      # like wdb this just reserves CPU-sized capacity for future use.
+      KDB_THREADS: "${HDB_THREADS:-auto}"
     restart: unless-stopped
     depends_on: [wdb-s0]
     volumes:
@@ -109,6 +130,13 @@ services:
               "-hdbhost", "hdb-s1", "-hdbport", "5060", "-p", "5040"]
     environment:
       <<: *kdb-env
+      # secondary threads (-s), injected by kdb-entrypoint.sh - see KDB_THREADS
+      # there. "auto" sizes it from THIS container's visible CPUs at boot
+      # instead of a number baked in at compose-generation time on a
+      # possibly different box. wdb has no parallel recovery routine today
+      # (unlike rdb's .rdb.loadWarm) so the reserved threads sit idle for
+      # now - harmless, and ready if one's added later.
+      KDB_THREADS: "${WDB_THREADS:-auto}"
     restart: unless-stopped
     depends_on: [tp-s1]
     volumes:
@@ -122,6 +150,12 @@ services:
     command: ["rdb.q", "-shard", "s1", "-tphost", "tp-s1", "-tpport", "5010", "-dbdir", "/data/db", "-p", "5020"]
     environment:
       <<: *kdb-env
+      # secondary threads (-s), injected by kdb-entrypoint.sh - see KDB_THREADS
+      # there. "auto" sizes it from THIS container's visible CPUs at boot.
+      # rdb.q scales active threads back down to 1 once .rdb.loadWarm (the
+      # parallel warm-start recovery read) finishes, so the full ceiling is
+      # only held for the recovery window, not the process's whole life.
+      KDB_THREADS: "${RDB_THREADS:-auto}"
     restart: unless-stopped
     depends_on: [tp-s1]
     volumes:
@@ -147,6 +181,10 @@ services:
     command: ["hdb.q", "-shard", "s1", "-hdbdir", "/data/hdb", "-reloadsec", "60", "-p", "5060"]
     environment:
       <<: *kdb-env
+      # see rdb-s1's KDB_THREADS comment above. hdb's periodic reload
+      # (system"l dir") is a single built-in mmap call, not peach-driven, so
+      # like wdb this just reserves CPU-sized capacity for future use.
+      KDB_THREADS: "${HDB_THREADS:-auto}"
     restart: unless-stopped
     depends_on: [wdb-s1]
     volumes:

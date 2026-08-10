@@ -69,6 +69,40 @@ fi
 
 export QHOME
 
+# Adaptive secondary threads (kdb+ -s): rdb/wdb/hdb opt in by setting
+# KDB_THREADS (see docker-compose.yml) instead of baking a thread count into
+# the image at compose-generation time - that number would be wrong the
+# moment this stack is deployed onto a bigger or smaller box than whoever
+# ran gen_topology.py. "auto" sizes it from THIS container's own visible
+# CPU count at boot; 0 opts out; a positive integer pins an explicit count.
+# Services that never set KDB_THREADS (tp, gateway, idb) are untouched -
+# they don't peach, so reserving secondary threads for them would only cost
+# memory/thread overhead for no benefit.
+if [ -n "$KDB_THREADS" ]; then
+  if [ "$KDB_THREADS" = "auto" ]; then
+    n=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
+    n=$((n - 1))                    # leave a core for the main thread
+    [ "$n" -lt 1 ] && n=1
+    # cap at 4: confirmed empirically against this KX-X build/licence -
+    # asking q for more than its licensed secondary-thread max makes it
+    # print "Max number of secondary threads 4" and exit immediately
+    # (crash-loops under restart:unless-stopped). Bump this only after
+    # confirming a higher licensed max on the box you're deploying to.
+    [ "$n" -gt 4 ] && n=4
+    KDB_THREADS="$n"
+  fi
+  if [ "$KDB_THREADS" != "0" ]; then
+    has_s_flag=0
+    for a in "$@"; do
+      if [ "$a" = "-s" ]; then has_s_flag=1; fi
+    done
+    if [ "$has_s_flag" = 0 ]; then
+      echo "kdb-entrypoint: adaptive threads -> -s $KDB_THREADS" >&2
+      set -- "$@" "-s" "$KDB_THREADS"
+    fi
+  fi
+fi
+
 # KDB-X can load license directly from KDB_LICENSE_B64. Do not force QLIC in
 # that mode, because a file-based QLIC can override and fail this runtime path.
 if [ -z "$KDB_LICENSE_B64" ]; then
