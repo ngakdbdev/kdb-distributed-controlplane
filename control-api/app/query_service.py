@@ -19,7 +19,7 @@ from __future__ import annotations
 import datetime as _dt
 import re
 
-from qpython.qcollection import QDictionary
+from qpython.qcollection import QDictionary, QKeyedTable
 
 DEFAULT_ROW_LIMIT = 1000
 MAX_ROW_LIMIT = 10000
@@ -142,8 +142,37 @@ def shape_result(result, limit: int = DEFAULT_ROW_LIMIT, max_allowed: int = MAX_
     # qpython QTable / numpy structured array -> dict of columns
     if hasattr(result, "dtype") and getattr(result.dtype, "names", None):
         result = _columns_from_structured(result)
+    elif hasattr(result, "dtype") and hasattr(result, "tolist") and getattr(result, "ndim", 0) >= 1:
+        # A plain (non-structured) numpy array - e.g. `cols\`trade` returns a
+        # bare symbol vector, not a Python list/tuple. Without this it fell
+        # through every branch below to the scalar fallback and got
+        # stringified whole (confirmed against a live cluster: `cols\`trade`
+        # rendered as the literal text "[b'time' b'sym' ...]" instead of a
+        # proper vector grid, one row per column name). .tolist() hands back
+        # plain Python objects (bytes, for q symbols) that the list/tuple
+        # branch below and _jsonable already know how to decode. A 0-d array
+        # (ndim 0, a true scalar) is deliberately excluded - tolist() on
+        # THAT returns the bare scalar, not a one-item list, and the
+        # existing scalar path below (via .item()) already handles it fine.
+        result = result.tolist()
 
-    # qpython keyed-table / dictionary
+    # qpython's own keyed-table class - what `select ... by ... from t`
+    # actually comes back as. NOT a QDictionary subclass (confirmed against
+    # qpython's source: `class QKeyedTable(object)`, entirely separate from
+    # `class QDictionary(object)`) despite being structurally identical
+    # (.keys/.values, each a QTable) - so without this check every grouped
+    # query fell straight through every branch below to the scalar
+    # fallback, stringifying the whole object instead of shaping it into a
+    # proper grid. Confirmed live: `select count i by sym from trade`
+    # rendered as one row of literal repr text ("[(b'AAPL',) ...]![(3810,)
+    # ...]") instead of a sym|count table.
+    if isinstance(result, QKeyedTable):
+        kcols = {f"k_{n}": v for n, v in _columns_from_structured(result.keys).items()}
+        vcols = {str(n): v for n, v in _columns_from_structured(result.values).items()}
+        return shape_result({**kcols, **vcols}, limit=limit, max_allowed=max_allowed)
+
+    # qpython dictionary - covers a keyed table built by hand (e.g. in a
+    # test) as keys/values structured arrays, and a plain q dict otherwise
     if isinstance(result, QDictionary):
         keys = getattr(result, "keys", None)
         vals = getattr(result, "values", None)
@@ -184,6 +213,33 @@ def shape_result(result, limit: int = DEFAULT_ROW_LIMIT, max_allowed: int = MAX_
             "row_count": 1, "truncated": False, "kind": "scalar"}
 
 
+_SELECT_RE = re.compile(r"^\s*select\b", re.IGNORECASE)
+_ALREADY_TAKEN_RE = re.compile(r"^\s*-?\d+\s*#")
+
+
+def _cap_result_rows(query: str, cap: int) -> str:
+    """Push the row cap DOWN into the q query itself for a plain `select`,
+    instead of pulling the FULL result over IPC and only truncating it for
+    display afterward. Confirmed live: `select from trade` against a 16M+
+    row shard hung the whole request for 30s+ (past every client/server
+    timeout) even though the UI's `limit` field claimed to cap it - the
+    limit was only ever applied client-side, after the entire table had
+    already been fetched.
+
+    `N#(select ...)` is the standard q idiom - takes the first N rows of a
+    plain result, or the first N keys of a `by`-grouped one (a different but
+    still bounded, still useful meaning of "limit" for a grouped query).
+    Skipped when the caller already prefixed their own take (respect that
+    explicit choice, don't double-wrap) or the query isn't a plain textual
+    `select` - exec/update/delete/insert/functional-form (`?[...]`) queries
+    have their own semantics; wrapping those isn't safe.
+    """
+    q = query.strip()
+    if _ALREADY_TAKEN_RE.match(q) or not _SELECT_RE.match(q):
+        return query
+    return f"{cap}#({q})"
+
+
 def run_query(query: str, conn, limit: int = DEFAULT_ROW_LIMIT,
               allow_write: bool = False, max_allowed: int = MAX_ROW_LIMIT) -> dict:
     """Validate + execute + shape. `conn` is callable(query)->q result (a real
@@ -193,7 +249,12 @@ def run_query(query: str, conn, limit: int = DEFAULT_ROW_LIMIT,
         ok, reason = check_readonly(query)
         if not ok:
             raise ValueError(reason)
-    result = conn(query)
+    limit = clamp_limit(limit, max_allowed)
+    # cap+1, not cap: shape_result's own truncated/row_count math (below)
+    # already works off however many rows actually came back, so fetching
+    # one extra is what lets it correctly report "truncated" instead of
+    # silently looking like an exact, complete result of exactly `limit` rows
+    result = conn(_cap_result_rows(query, limit + 1))
     payload = shape_result(result, limit=limit, max_allowed=max_allowed)
     payload["query"] = query
     return payload

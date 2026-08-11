@@ -167,9 +167,37 @@ export const api = {
     request(`/fleet/agents/${agentId}/commands?limit=${limit}`),
 };
 
+// Auto-reconnects with backoff (1s, 2s, 4s, ... capped at 15s, reset once a
+// connection actually opens) - a plain `new WebSocket` here had NO retry at
+// all: any transient disruption (a backend redeploy, a brief gateway hiccup,
+// a container restart cycling through Docker DNS) closed the socket once and
+// left every dashboard using it permanently stuck showing "offline"/stale
+// data until a manual page reload, even minutes after the backend recovered
+// - confirmed live. Returns an object shaped like the WebSocket subset every
+// caller here actually uses (assign .onclose/.onerror, call .close()) so no
+// call site needs to change.
 export function metricsSocket(onMessage) {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${window.location.host}/api/metrics/stream`);
-  ws.onmessage = (evt) => onMessage(JSON.parse(evt.data));
-  return ws;
+  const url = `${proto}://${window.location.host}/api/metrics/stream`;
+  const handle = { onclose: null, onerror: null };
+  let ws = null;
+  let closedByCaller = false;
+  let retryMs = 1000;
+
+  function connect() {
+    ws = new WebSocket(url);
+    ws.onmessage = (evt) => onMessage(JSON.parse(evt.data));
+    ws.onopen = () => { retryMs = 1000; };
+    ws.onerror = (evt) => handle.onerror?.(evt);
+    ws.onclose = (evt) => {
+      handle.onclose?.(evt);
+      if (closedByCaller) return;
+      setTimeout(connect, retryMs);
+      retryMs = Math.min(retryMs * 2, 15000);
+    };
+  }
+  connect();
+
+  handle.close = () => { closedByCaller = true; ws.close(); };
+  return handle;
 }

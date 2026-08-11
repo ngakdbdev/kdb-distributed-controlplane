@@ -110,3 +110,19 @@ export function paletteColor(index) {
   const colors = ["#4c8bff", "#2dd4bf", "#f6465d", "#f2a93c", "#8b7bff", "#16c784"];
   return colors[index % colors.length];
 }
+
+/** Splits a fetchTradeTape() result into { SYM: [{time,price,size}] } - one
+ * batched query covers a whole basket, this fans the rows back out per
+ * symbol. Shared by Markets (watchlist) and Bot (multi-symbol monitoring). */
+export function groupBySymbol(res, fallbackSymbols) {
+  const cols = res.columns || [];
+  const ti = cols.indexOf("time"), si = cols.indexOf("sym"), pi = cols.indexOf("price"), zi = cols.indexOf("size");
+  const out = {};
+  for (const sym of fallbackSymbols) out[sym] = [];
+  for (const row of res.rows || []) {
+    const sym = si >= 0 ? row[si] : fallbackSymbols[0];
+    if (!sym) continue;
+    (out[sym] = out[sym] || []).push({ time: ti >= 0 ? row[ti] : null, price: pi >= 0 ? Number(row[pi]) : null, size: zi >= 0 ? Number(row[zi]) : null });
+  }
+  return out;
+}

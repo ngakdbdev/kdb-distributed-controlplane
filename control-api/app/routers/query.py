@@ -125,6 +125,7 @@ def _run_one(target_id: str, query: str, limit: int, allow_write: bool,
                 "routed_shards": shard_targets if routed else None,
             }
         grid = qs.combine_results(labeled, add_provenance=True, limit=limit)
+        grid["query"] = query
         grid["kind"] = "gateway-federated"
         grid["routed_shards"] = shard_targets if routed else None
         grid["skipped_shards"] = skipped_targets if routed else []
