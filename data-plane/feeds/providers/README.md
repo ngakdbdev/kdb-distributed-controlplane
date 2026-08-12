@@ -13,6 +13,8 @@ row and publishes through the real `ShardedPublisher` — routed across shards b
 | Finnhub | **live** (ws) | free API key (`FINNHUB_API_KEY`) — real-time US trades |
 | Twelve Data | **live** (ws) | API key (`TWELVEDATA_API_KEY`) — global incl. NSE/BSE (paid plan for global) |
 | Polygon.io | **live** (ws) | API key (`POLYGON_API_KEY`) — US, real-time on paid tiers |
+| Coinbase | **live** (ws) | no key — public feed, real-time crypto spot trades (pairs like `BTC-USD`) |
+| Kraken | **live** (ws) | no key — public feed, real-time crypto spot trades (pairs like `BTC/USD`) |
 | Yahoo Finance | **live** (poll) | no key — **UNOFFICIAL** endpoint: delayed, rate-limited, ToS-restricted, not for production |
 | Alpha Vantage | **live** (poll) | free API key (`ALPHAVANTAGE_API_KEY`) — official; free tier ~25 calls/day |
 | NYSE (Pillar) | licensed | NYSE data agreement + entitlements + feed connectivity + Pillar handler |
@@ -23,6 +25,14 @@ row and publishes through the real `ShardedPublisher` — routed across shards b
 Websocket adapters (ws) stream trades; polling adapters (poll) fetch delayed
 quotes on an interval. Yahoo has no official API — it uses the same unofficial
 endpoint yfinance does, so treat it as demo-grade, not production.
+
+**Coinbase/Kraken and the `size` column**: the shared `trade` schema types
+`size` as a whole-number long (built for equity share counts). Crypto trade
+quantities are fractional (0.01 BTC is an entirely ordinary trade), so
+sub-1 quantities round to 0 rather than silently truncating in a way that
+misrepresents larger trades - a real, disclosed precision loss until the
+schema grows a proper lot-size/decimals-per-symbol concept, not something
+a feed adapter should paper over on its own.
 
 **Live** adapters you can run today with a key. **Licensed** adapters are coded
 to the real SDK/protocol shape but refuse with a clear "here's what it needs"

@@ -21,6 +21,8 @@ class FakeOrchestrator:
         self.statuses = dict(statuses)
         self.start_result = {}          # service -> status after start()
         self.starts = []                # log of start() calls
+        self.oom = set()                # services whose last exit was OOM
+        self.oom_queries = []           # log of oom_killed() calls
 
     def status(self, service):
         return self.statuses.get(service, "not_found")
@@ -29,6 +31,10 @@ class FakeOrchestrator:
         self.starts.append(service)
         self.statuses[service] = self.start_result.get(service, "running")
         return True
+
+    def oom_killed(self, service):
+        self.oom_queries.append(service)
+        return service in self.oom
 
 
 class FakeClock:
@@ -124,6 +130,30 @@ def test_classify_flapping_when_tp_up():
     assert R.classify("rdb-s0", sm, ft) == R.FLAPPING
 
 
+def test_classify_flapping_with_oom_is_oom_crash_loop():
+    ft = _ft()
+    for _ in range(3):
+        ft.record_restart("rdb-s1")
+    sm = {"rdb-s1": "exited", "tp-s1": "running"}
+    assert R.classify("rdb-s1", sm, ft, oom=True) == R.OOM_CRASH_LOOP
+
+def test_classify_flapping_without_oom_stays_plain_flapping():
+    # regression guard: oom=False (the default) must not change existing
+    # flapping behavior
+    ft = _ft()
+    for _ in range(3):
+        ft.record_restart("rdb-s1")
+    sm = {"rdb-s1": "exited", "tp-s1": "running"}
+    assert R.classify("rdb-s1", sm, ft, oom=False) == R.FLAPPING
+
+def test_classify_not_yet_flapping_ignores_oom():
+    # a single OOM exit isn't a pattern on its own - only matters once
+    # already past the flap threshold
+    ft = _ft()
+    ft.record_restart("rdb-s1")   # only 1, below default threshold of 3
+    sm = {"rdb-s1": "exited", "tp-s1": "running"}
+    assert R.classify("rdb-s1", sm, ft, oom=True) == R.CONTAINER_DOWN
+
 def test_classify_dependency_down_beats_flapping():
     # root cause is the tp being down; don't escalate the dependent
     ft = _ft()
@@ -170,6 +200,28 @@ def test_escalate_opens_cooldown_and_does_not_restart():
     assert res["outcome"] == "escalated"
     assert ft.in_cooldown("gateway")
     assert orch.starts == []
+
+
+def test_escalate_oom_does_not_restart_and_names_the_real_fix():
+    orch = FakeOrchestrator({"rdb-s1": "exited"})
+    ft = _ft()
+    for _ in range(3):
+        ft.record_restart("rdb-s1")
+    res = R.escalate_oom(orch, "rdb-s1", {"flap": ft, "status_map": orch.statuses})
+    assert res["outcome"] == "escalated" and res["runbook"] == "escalate_oom"
+    assert orch.starts == []
+    assert "troubleshooting.md" in res["detail"]   # points at the actual fix, not just "flapping"
+
+def test_escalate_oom_cooldown_is_a_multiple_of_the_plain_flap_cooldown():
+    clk = FakeClock()
+    ft = flap_mod.FlapTracker(window_sec=100, threshold=3, cooldown_sec=300, clock=clk)
+    for _ in range(3):
+        ft.record_restart("rdb-s1")
+    R.escalate_oom(FakeOrchestrator({}), "rdb-s1", {"flap": ft, "status_map": {}})
+    clk.advance(300 + 1)              # past the PLAIN flap cooldown...
+    assert ft.in_cooldown("rdb-s1")   # ...but still cooling down under the OOM one
+    clk.advance(300 * R.OOM_COOLDOWN_MULTIPLIER)
+    assert not ft.in_cooldown("rdb-s1")
 
 
 # --------------------------------------------------------------- check_and_heal loop
@@ -234,6 +286,50 @@ def test_repeated_crashes_trip_flapping_then_cooldown(wd):
     orch.statuses["gateway"] = "exited"
     wd.check_and_heal(orch, ft, services=services, recovery_delay_sec=0)
     assert orch.starts.count("gateway") == restarts_before
+
+
+def test_heal_oom_flapping_service_escalates_oom_not_plain_flap(wd):
+    clk = FakeClock()
+    orch = FakeOrchestrator({"rdb-s1": "exited", "tp-s1": "running"})
+    orch.oom.add("rdb-s1")
+    ft = flap_mod.FlapTracker(window_sec=1000, threshold=3, cooldown_sec=300, clock=clk)
+    services = ["tp-s1", "rdb-s1"]   # tp-s1 must be present+running, or rdb-s1
+                                      # classifies as dependency_down instead
+    for _ in range(3):
+        orch.statuses["rdb-s1"] = "exited"
+        wd.check_and_heal(orch, ft, services=services, recovery_delay_sec=0)
+    restarts_before = orch.starts.count("rdb-s1")
+    # 4th pass: flapping + oom -> escalate_oom, not another restart
+    orch.statuses["rdb-s1"] = "exited"
+    wd.check_and_heal(orch, ft, services=services, recovery_delay_sec=0)
+    assert orch.starts.count("rdb-s1") == restarts_before
+    assert ft.in_cooldown("rdb-s1")
+    # the OOM-specific cooldown outlasts a plain flap's - past 300s (the
+    # tracker's base cooldown), rdb-s1 must still be cooling down
+    clk.advance(301)
+    assert ft.in_cooldown("rdb-s1")
+
+def test_heal_does_not_query_oom_before_flapping_threshold(wd):
+    # confirms the "only ask once already at risk" behavior in watchdog.py -
+    # not wasting an orchestrator call for a service's first-ever down event
+    orch = FakeOrchestrator({"rdb-s1": "exited", "tp-s1": "running"})
+    ft = flap_mod.FlapTracker(window_sec=1000, threshold=3, cooldown_sec=300, clock=FakeClock())
+    wd.check_and_heal(orch, ft, services=["tp-s1", "rdb-s1"], recovery_delay_sec=0)
+    assert orch.oom_queries == []   # only 1 restart recorded so far - below threshold
+
+def test_heal_queries_oom_once_flapping_starts(wd):
+    # matches test_repeated_crashes_trip_flapping_then_cooldown's pattern:
+    # each of the first `threshold` passes still classifies as a plain
+    # container_down (the restart that pass performs is what brings the
+    # count up to threshold, checked at the START of the NEXT pass) - so it
+    # takes threshold+1 passes before flapping (and therefore an OOM query)
+    # actually fires.
+    orch = FakeOrchestrator({"rdb-s1": "exited", "tp-s1": "running"})
+    ft = flap_mod.FlapTracker(window_sec=1000, threshold=3, cooldown_sec=300, clock=FakeClock())
+    for _ in range(4):
+        orch.statuses["rdb-s1"] = "exited"
+        wd.check_and_heal(orch, ft, services=["tp-s1", "rdb-s1"], recovery_delay_sec=0)
+    assert "rdb-s1" in orch.oom_queries
 
 
 def test_health_probe_catches_running_but_wedged(wd):

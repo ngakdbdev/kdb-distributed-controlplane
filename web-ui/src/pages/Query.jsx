@@ -29,7 +29,10 @@ function nl2q(input) {
   const forM = s.match(/(?:for|symbol|sym)\s+([a-z]{1,6})\b/);
   if (!sym && forM) sym = forM[1].toUpperCase();
   const whereParts = [];
-  if (sym) whereParts.push(`sym=\`${sym}`);
+  // `$"..."` cast, not a bare backtick token - safe even if this ever
+  // captures a symbol with a hyphen/slash in it (see tradingCore.js's qSym
+  // for why a bare `SYM literal breaks on those characters).
+  if (sym) whereParts.push(`sym=\`$"${sym}"`);
   // comparison against an aggregate ("price greater than avg price") - a
   // where-phrase, not a top-level aggregation. kdb+ evaluates where-phrases
   // left to right, so appending this after the sym filter above scopes the

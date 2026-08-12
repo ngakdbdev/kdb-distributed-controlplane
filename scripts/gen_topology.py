@@ -57,7 +57,8 @@ def shards_json(n: int) -> str:
     return json.dumps(topology.shards_json(n), indent=2) + "\n"
 
 
-def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_threads: str) -> str:
+def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_threads: str,
+                         rdb_retention_min: int, hdb_retention_days: int) -> str:
     out = []
     for s in topology.shards(n):
         sid = s.id
@@ -76,8 +77,13 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
 
   wdb-{sid}:
     build: *kdb-build
+    # -retentionmin: how long the chained RDB keeps live data in memory,
+    # independent of -flushmin (how often wdb flushes ITS OWN buffer to
+    # disk) - see wdb.q's own comment on .wdb.retentionIntv. Must be >=
+    # flushmin; wdb.q enforces that itself if misconfigured.
     command: ["wdb.q", "-shard", "{sid}", "-tphost", "tp-{sid}", "-tpport", "{TP}",
-              "-flushmin", "2", "-dbdir", "/data/db", "-hdbdir", "/data/hdb",
+              "-flushmin", "2", "-retentionmin", "{rdb_retention_min}",
+              "-dbdir", "/data/db", "-hdbdir", "/data/hdb",
               "-idbhost", "idb-{sid}", "-idbport", "{IDB}",
               "-hdbhost", "hdb-{sid}", "-hdbport", "{HDB}", "-p", "{WDB}"]
     environment:
@@ -130,7 +136,11 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
 
   hdb-{sid}:
     build: *kdb-build
-    command: ["hdb.q", "-shard", "{sid}", "-hdbdir", "/data/hdb", "-reloadsec", "60", "-p", "{HDB}"]
+    # -retentiondays 0 (default) = keep every sealed day forever - purging
+    # HDB history is destructive (no cold-storage archive step, just
+    # delete) and opt-in only. See hdb.q's .hdb.purgeOld comment.
+    command: ["hdb.q", "-shard", "{sid}", "-hdbdir", "/data/hdb", "-reloadsec", "60",
+              "-retentiondays", "{hdb_retention_days}", "-p", "{HDB}"]
     environment:
       <<: *kdb-env
       # see rdb-{sid}'s KDB_THREADS comment above. hdb's periodic reload
@@ -242,6 +252,114 @@ def _feeds_service(n: int) -> str:
       - ./data-plane/feeds/symbols:/symbols:ro
     depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
     restart: on-failure
+
+  # Coinbase live provider (opt-in) - fully public feed, no API key needed.
+  # Symbols are Coinbase's own pair format (BTC-USD, not BTC/USD or BTCUSD).
+  #   docker compose --profile providers up -d coinbase-feed
+  coinbase-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "coinbase", "--symbols", "${{COINBASE_SYMBOLS:-BTC-USD,ETH-USD,SOL-USD}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
+
+  # Kraken live provider (opt-in) - fully public feed, no API key needed.
+  # Symbols are Kraken's own pair format (BTC/USD, not BTC-USD or BTCUSD).
+  #   docker compose --profile providers up -d kraken-feed
+  kraken-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "kraken", "--symbols", "${{KRAKEN_SYMBOLS:-BTC/USD,ETH/USD,SOL/USD}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
+
+  # Binance live provider (opt-in) - fully public feed, no API key needed.
+  # Highest-volume free crypto feed available - symbols are Binance's own
+  # concatenated pairs (BTCUSDT, not BTC-USDT or BTC/USDT).
+  #   docker compose --profile providers up -d binance-feed
+  binance-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "binance", "--symbols", "${{BINANCE_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
+
+  # Binance L2 order-book depth (opt-in) - real bid/ask deltas, far higher
+  # message rate per symbol than trade prints. Keep BINANCE_DEPTH_SYMBOLS
+  # SHORT (a handful of liquid pairs) - unlike binance-feed above, "all" here
+  # would be genuinely excessive load. Rows land in the same `trade` table,
+  # tagged venue=binance-depth / side=BID|ASK so they're never confused with
+  # real trade prints (see providers/normalize.py's binance_depth).
+  #   docker compose --profile providers up -d binance-depth-feed
+  binance-depth-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "binance-depth", "--symbols", "${{BINANCE_DEPTH_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
+
+  # Bybit live provider (opt-in) - fully public feed, no API key needed.
+  # Symbols are Bybit's own concatenated pairs (BTCUSDT).
+  #   docker compose --profile providers up -d bybit-feed
+  bybit-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "bybit", "--symbols", "${{BYBIT_SYMBOLS:-BTCUSDT,ETHUSDT,SOLUSDT}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
+
+  # OKX live provider (opt-in) - fully public feed, no API key needed.
+  # Symbols are OKX's own hyphenated pairs (BTC-USDT).
+  #   docker compose --profile providers up -d okx-feed
+  okx-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "okx", "--symbols", "${{OKX_SYMBOLS:-BTC-USDT,ETH-USDT,SOL-USDT}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
+
+  # Yahoo Finance live provider (opt-in) - no API key, but see
+  # providers/yahoo.py's own caveat: unofficial endpoint, delayed/polled
+  # quotes, not for production. Widest asset-class spread of any provider
+  # here with zero setup: equities, ETFs, indices, and FX in one feed.
+  #   docker compose --profile providers up -d yahoo-feed
+  yahoo-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "yahoo", "--symbols", "${{YAHOO_SYMBOLS:-AAPL,MSFT,SPY,QQQ,^GSPC,^DJI,EURUSD=X,GBPUSD=X,GC=F,CL=F}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+      PROVIDER_SYMBOLS_FILE: "${{PROVIDER_SYMBOLS_FILE:-}}"
+    volumes:
+      - ./data-plane/feeds/symbols:/symbols:ro
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
 """
 
 
@@ -289,6 +407,9 @@ def _control_plane_services(n: int) -> str:
       EXPORT_BULK_ROW_LIMIT_MAX: "${{EXPORT_BULK_ROW_LIMIT_MAX:-5000000}}"
       EXPORT_GATEWAY_PRESSURE_QUEUE_THRESHOLD: "${{EXPORT_GATEWAY_PRESSURE_QUEUE_THRESHOLD:-200000}}"
       EXPORT_GATEWAY_PRESSURE_LAG_THRESHOLD: "${{EXPORT_GATEWAY_PRESSURE_LAG_THRESHOLD:-1000}}"
+      RISK_GATE_FAIL_OPEN: "${{RISK_GATE_FAIL_OPEN:-false}}"
+      QUERY_BUDGET_MS_PER_WINDOW: "${{QUERY_BUDGET_MS_PER_WINDOW:-0}}"
+      QUERY_BUDGET_WINDOW_HOURS: "${{QUERY_BUDGET_WINDOW_HOURS:-1}}"
     volumes:
       - control-api-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -353,18 +474,23 @@ def _volumes(n: int) -> str:
     return "\n".join(vols)
 
 
-def compose(n: int, eod_hour: int = 0, idb_retention_days: int = 5, kdb_threads: str = "auto") -> str:
+def compose(n: int, eod_hour: int = 0, idb_retention_days: int = 5, kdb_threads: str = "auto",
+           rdb_retention_min: int = 2, hdb_retention_days: int = 0) -> str:
     header = """\
 # GENERATED by scripts/gen_topology.py - do not edit by hand.
 # Regenerate for a different shard count with:
 #   python scripts/gen_topology.py --shards <N> --compose docker-compose.yml --shards-json data-plane/shards.json
 # Add --eod-hour <0-23> / --idb-retention-days <N> to change the trading-day
 # rollover hour (UTC, default midnight) or how long idb keeps a sealed day in
-# memory before evicting it (default 5), or --kdb-threads <N|auto> to change
+# memory before evicting it (default 5), --kdb-threads <N|auto> to change
 # the secondary threads (-s) rdb/wdb/hdb reserve (default "auto" - each
 # container sizes it from its own visible CPU count at boot via
 # kdb-entrypoint.sh; override per-tier at deploy time with the RDB_THREADS /
-# WDB_THREADS / HDB_THREADS env vars) - all per-TickHouse knobs.
+# WDB_THREADS / HDB_THREADS env vars), --rdb-retention-min <N> to change how
+# long the chained RDB keeps live data in memory (default 2, independent of
+# the flush cadence - see wdb.q), or --hdb-retention-days <N> to purge
+# sealed history older than N days (default 0 = keep forever; destructive
+# and opt-in, see hdb.q's .hdb.purgeOld) - all per-TickHouse knobs.
 name: kdb-control-plane
 
 x-kdb-build: &kdb-build
@@ -380,7 +506,8 @@ services:
 """
     return (
         header
-        + _data_plane_services(n, eod_hour, idb_retention_days, kdb_threads) + "\n"
+        + _data_plane_services(n, eod_hour, idb_retention_days, kdb_threads,
+                               rdb_retention_min, hdb_retention_days) + "\n"
         + _gateway_service(n) + "\n"
         + _feeds_service(n) + "\n"
         + _control_plane_services(n) + "\n"
@@ -400,6 +527,12 @@ def main():
     p.add_argument("--kdb-threads", default="auto",
                     help="secondary threads (-s) given to rdb/wdb/hdb: an integer, or 'auto' (default) to size "
                          "from each container's own visible CPU count at boot - see kdb-entrypoint.sh")
+    p.add_argument("--rdb-retention-min", type=int, default=2,
+                    help="minutes of live data the chained RDB keeps in memory (default 2) - independent of "
+                         "wdb's own flush cadence, see wdb.q's .wdb.retentionIntv")
+    p.add_argument("--hdb-retention-days", type=int, default=0,
+                    help="purge sealed HDB history older than N days (default 0 = keep forever - destructive "
+                         "and opt-in, see hdb.q's .hdb.purgeOld)")
     p.add_argument("--print", action="store_true", help="print shards.json to stdout")
     args = p.parse_args()
 
@@ -411,7 +544,8 @@ def main():
         print(f"wrote {args.shards_json} ({args.shards} shards)")
     if args.compose:
         with open(args.compose, "w") as f:
-            f.write(compose(args.shards, args.eod_hour, args.idb_retention_days, args.kdb_threads))
+            f.write(compose(args.shards, args.eod_hour, args.idb_retention_days, args.kdb_threads,
+                            args.rdb_retention_min, args.hdb_retention_days))
         print(f"wrote {args.compose} ({args.shards} shards)")
     if args.print or not (args.shards_json or args.compose):
         sys.stdout.write(shards_json(args.shards))

@@ -25,10 +25,12 @@ class FakePublisher:
 
 def test_catalog_lists_all_providers_with_correct_tiers():
     cat = {p["name"]: p for p in catalog()}
-    assert set(cat) == {"finnhub", "twelvedata", "polygon", "yahoo", "alphavantage",
-                        "nyse", "lseg", "nse", "bse"}
+    assert set(cat) == {"finnhub", "twelvedata", "polygon", "coinbase", "kraken",
+                        "binance", "binance-depth", "bybit", "okx",
+                        "yahoo", "alphavantage", "nyse", "lseg", "nse", "bse"}
     live = {n for n, p in cat.items() if p["live"]}
-    assert live == {"finnhub", "twelvedata", "polygon", "yahoo", "alphavantage"}
+    assert live == {"finnhub", "twelvedata", "polygon", "coinbase", "kraken",
+                    "binance", "binance-depth", "bybit", "okx", "yahoo", "alphavantage"}
     # every provider advertises what it needs
     assert all(cat[n]["requires"] for n in cat)
 
@@ -64,6 +66,74 @@ def test_polygon_batch_routes_each_symbol_to_its_shard():
     shards = {row[1]: row[6] for row in pub.rows}
     assert shards["AAPL"] == topology.shard_of("AAPL", 2)
     assert shards["TSLA"] == topology.shard_of("TSLA", 2)
+
+
+def test_coinbase_frame_publishes_sharded_trade_row():
+    pub = FakePublisher()
+    prov = get_provider("coinbase")(["BTC-USD"], pub, shard_count=2)
+    n = prov._handle_raw('{"type":"match","product_id":"BTC-USD","price":"45000.0",'
+                         '"size":"1.5","side":"buy","time":"2026-08-11T12:00:00Z"}')
+    assert n == 1
+    assert pub.table == "trade"
+    row = pub.rows[0]
+    assert row[1] == "BTC-USD" and row[2] == 45000.0 and row[4] == "B"
+    assert row[5] == "coinbase"
+
+def test_kraken_frame_publishes_sharded_trade_row():
+    pub = FakePublisher()
+    prov = get_provider("kraken")(["BTC/USD"], pub, shard_count=2)
+    n = prov._handle_raw('{"channel":"trade","type":"update","data":[{"symbol":"BTC/USD",'
+                         '"side":"sell","price":45000.0,"qty":0.5,"timestamp":"2026-08-11T12:00:00Z"}]}')
+    assert n == 1
+    row = pub.rows[0]
+    assert row[1] == "BTC/USD" and row[4] == "S" and row[5] == "kraken"
+
+def test_binance_frame_publishes_sharded_trade_row():
+    pub = FakePublisher()
+    prov = get_provider("binance")(["BTCUSDT"], pub, shard_count=2)
+    n = prov._handle_raw('{"stream":"btcusdt@trade","data":{"e":"trade","s":"BTCUSDT",'
+                         '"p":"45000.0","q":"1.5","T":1701234567000,"m":true}}')
+    assert n == 1
+    row = pub.rows[0]
+    # m=true means the buyer was the maker -> the SELLER was the aggressor -> "S"
+    assert row[1] == "BTCUSDT" and row[2] == 45000.0 and row[4] == "S" and row[5] == "binance"
+
+
+def test_binance_stream_url_lowercases_symbols_for_the_wire():
+    prov = get_provider("binance")(["BTCUSDT", "ETHUSDT"], FakePublisher(), shard_count=2)
+    url = prov._stream_url()
+    assert "btcusdt@trade" in url and "ethusdt@trade" in url
+
+
+def test_bybit_frame_publishes_sharded_trade_row():
+    pub = FakePublisher()
+    prov = get_provider("bybit")(["BTCUSDT"], pub, shard_count=2)
+    n = prov._handle_raw('{"topic":"publicTrade.BTCUSDT","type":"snapshot","ts":1701234567000,'
+                         '"data":[{"T":1701234567000,"s":"BTCUSDT","S":"Sell","v":"0.5","p":"45000.0"}]}')
+    assert n == 1
+    row = pub.rows[0]
+    assert row[1] == "BTCUSDT" and row[2] == 45000.0 and row[4] == "S" and row[5] == "bybit"
+
+
+def test_okx_frame_publishes_sharded_trade_row():
+    pub = FakePublisher()
+    prov = get_provider("okx")(["BTC-USDT"], pub, shard_count=2)
+    n = prov._handle_raw('{"arg":{"channel":"trades","instId":"BTC-USDT"},'
+                         '"data":[{"instId":"BTC-USDT","px":"45000.0","sz":"0.5",'
+                         '"side":"buy","ts":"1701234567000"}]}')
+    assert n == 1
+    row = pub.rows[0]
+    assert row[1] == "BTC-USDT" and row[2] == 45000.0 and row[4] == "B" and row[5] == "okx"
+
+
+def test_crypto_exchanges_dont_need_an_api_key_to_run():
+    # unlike finnhub/twelvedata/polygon (see test_live_ws_providers_need_a_key_to_run
+    # below) - these are fully public feeds, no ProviderError should fire for a
+    # missing key. (Doesn't call run() for real - that would open a real socket;
+    # just confirms the constructor accepts api_key=None same as every other call site.)
+    for name in ("coinbase", "kraken", "binance", "bybit", "okx"):
+        prov = get_provider(name)(["BTC-USD"], FakePublisher(), shard_count=2, api_key=None)
+        assert prov.api_key is None
 
 
 def test_bad_json_frame_is_ignored():

@@ -97,7 +97,14 @@ def check_and_heal(orchestrator, flap, health_probe=None, services=None,
                 continue
             # running but the process reports unhealthy -> fall through to heal
 
-        signature = classify(service, status_map, flap, healthy=healthy)
+        # Only worth asking the orchestrator for OOM state once a service is
+        # already at risk of flapping - a healthy/first-time-down service
+        # doesn't need it, and it's an extra API call per check otherwise.
+        oom = False
+        if flap.is_flapping(service) and hasattr(orchestrator, "oom_killed"):
+            oom = orchestrator.oom_killed(service)
+
+        signature = classify(service, status_map, flap, healthy=healthy, oom=oom)
         if signature == HEALTHY:
             continue
 

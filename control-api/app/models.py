@@ -210,6 +210,24 @@ class AuditEvent(SQLModel, table=True):
     outcome: str = "success"                                    # "success" / "failure"
 
 
+class QueryCostEvent(SQLModel, table=True):
+    """One row per query-workspace execution, for per-tenant query cost
+    governance (app/query_cost.py) - budgets, throttling, showback.
+
+    Deliberately a SEPARATE, persisted table from query_profile.py's
+    in-memory ring buffer: that buffer is "what's been slow recently" for a
+    support engineer (200 entries, resets on restart, by design - see its
+    own docstring); this is billing/governance data, which has to survive a
+    restart to mean anything as a "budget". Kept minimal (no query text) -
+    query_profile already keeps recent query text for debugging, this table
+    exists purely to sum cost per tenant over a time window."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenant.id", index=True)
+    actor: str
+    elapsed_ms: float
+    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
 # --------------------------------------------------------------------------- tickhouses
 class TickHouse(SQLModel, table=True):
     """A declaratively-defined tick cluster: shards (letter ranges), typed
@@ -260,6 +278,61 @@ class Position(SQLModel, table=True):
     avg_price: float = 0.0
     realized_pnl: float = 0.0
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# --------------------------------------------------------------------------- signal bot
+class BotConfig(SQLModel, table=True):
+    """One tenant's server-side trade signal engine config (app/signal_engine.py,
+    app/bot_scheduler.py). The promoted, persisted successor to
+    web-ui/src/pages/Bot.jsx's config, which lived only in that browser's
+    localStorage - moving it here is what lets the bot itself move server-side:
+    a background scheduler reads `enabled` tenants on an interval regardless of
+    whether anyone has the page open. One row per tenant (unique tenant_id).
+
+    risk_pct/max_positions/symbols are all re-clamped server-side on write
+    (routers/bot.py) to the same hard caps Bot.jsx enforced client-side
+    (MAX_RISK_PCT/MAX_BASKET/MAX_POSITIONS_CAP in app/signal_engine.py) - that
+    used to be a client-only cap, meaning a direct API call could bypass it;
+    persisting and re-validating server-side closes that gap for real."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenant.id", index=True, unique=True)
+    enabled: bool = False
+    mode: str = "manual"                      # "manual" (curated basket) / "auto" (screens the live universe)
+    symbols_json: str = "[]"                  # manual mode basket, JSON list e.g. '["AAPL","MSFT"]'
+    max_positions: int = 3                    # auto mode - concurrent-position cap
+    paper_capital: float = 10000.0
+    risk_pct: float = 1.0                     # % of paper_capital risked in aggregate across open positions
+    stop_loss_pct: float = 1.5
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_by: str = ""
+
+
+class BotPosition(SQLModel, table=True):
+    """One open position the signal bot itself opened and is actively
+    watching for its exit (stop-loss or trend flip) - separate from Position
+    (a tenant's overall net position, which this still folds into via the
+    same order-fill path) because the bot needs to remember its OWN entry
+    price and stop level per symbol, not just a weighted-average cost."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenant.id", index=True)
+    symbol: str = Field(index=True)
+    qty: float
+    entry_price: float
+    stop_price: float
+    order_id: Optional[int] = Field(default=None, foreign_key="order.id")
+    opened_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class BotLogEntry(SQLModel, table=True):
+    """One decision (or non-decision) the signal bot made, for the activity
+    feed - the persisted successor to Bot.jsx's in-memory `log` state, which
+    reset on every tab close/reload."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenant.id", index=True)
+    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    symbol: Optional[str] = None
+    type: str                                 # open / hold / skip / close-win / close-loss / error
+    reason: str = ""
 
 
 # --------------------------------------------------------------------------- llm config

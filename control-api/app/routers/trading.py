@@ -8,6 +8,7 @@ is a configured seam that refuses (see app/oms.py). Forecasts are illustrative
 statistical projections, not advice (see app/market.py).
 """
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -39,6 +40,57 @@ def require_trading(user: CurrentUser = Depends(get_current_user),
         raise HTTPException(status_code=403,
                             detail="you don't have trading permission (ask an admin to grant it)")
     return user
+
+
+def _check_pretrade_audited(symbol: str, actor: str, tenant_id: Optional[int],
+                            session: Session) -> Optional[str]:
+    """risk_check.check_pretrade, plus: whenever the risk feed was unreachable
+    (degraded=True - the decision used the fail-open/fail-closed policy
+    rather than a verified read, either way), audit it. That's a materially
+    different risk posture than a normal clean check and worth a record
+    regardless of which way the policy resolved it. Takes a plain actor/
+    tenant_id pair (not a CurrentUser) so the server-side signal engine
+    (app/signal_engine.py), which has no HTTP request/JWT, can go through the
+    exact same gate a human order does."""
+    result = risk_check.check_pretrade(symbol)
+    if result.degraded:
+        log_event(
+            session, actor=actor, action="risk_gate_degraded", target=symbol,
+            detail=result.block_reason or "risk feed unreachable - failed open, order proceeded",
+            outcome="blocked" if result.block_reason else "fail_open",
+            tenant_id=tenant_id,
+        )
+    return result.block_reason
+
+
+def place_market_order_internal(session: Session, tenant_id: int, actor: str, symbol: str,
+                                 side: str, qty: float, ref_price: float,
+                                 check_risk: bool = True) -> Order:
+    """The market-order fill path (risk gate -> paper fill -> fold into
+    position -> audit log), factored out so both the HTTP /orders endpoint
+    below and the server-side signal engine (app/signal_engine.py) place
+    orders through the identical path - a bot-placed order is never allowed
+    to skip the same pre-trade risk check a human's would go through. Raises
+    oms.OrderError (not HTTPException - this has no HTTP context) if the
+    risk gate blocks it or the fill itself fails. `check_risk=False` is only
+    for callers (place_order below) that already ran the gate a moment ago -
+    it avoids double-querying the risk feed and double-logging a degraded
+    check, not a way to skip the gate itself."""
+    if check_risk:
+        block_reason = _check_pretrade_audited(symbol, actor, tenant_id, session)
+        if block_reason:
+            raise oms.OrderError(block_reason)
+    fill = _PAPER.fill(side, qty, "market", ref_price, None)
+    order = Order(tenant_id=tenant_id, user_email=actor, symbol=symbol, side=side.lower(),
+                  qty=qty, order_type="market", status="filled", route=fill.route,
+                  fill_price=fill.price)
+    session.add(order)
+    _fold_fill_into_position(session, tenant_id, symbol, side, qty, fill.price)
+    session.commit()
+    session.refresh(order)
+    log_event(session, actor, "order_placed", f"{side} {qty} {symbol}",
+              detail=f"{fill.route}@{fill.price}", tenant_id=tenant_id)
+    return order
 
 
 # ---- permission (so the UI can show/hide the order ticket) ---------------
@@ -105,7 +157,7 @@ def place_order(body: OrderBody, user: CurrentUser = Depends(require_trading),
         raise HTTPException(status_code=400, detail="qty must be positive")
     symbol = body.symbol.upper()
 
-    block_reason = risk_check.check_pretrade(symbol)
+    block_reason = _check_pretrade_audited(symbol, user.email, user.tenant_id, session)
     if block_reason:
         raise HTTPException(status_code=400, detail=block_reason)
 
@@ -131,6 +183,20 @@ def place_order(body: OrderBody, user: CurrentUser = Depends(require_trading),
         log_event(session, user.email, "order_placed",
                   f"{body.side} {body.qty} {symbol}",
                   detail=f"working limit@{body.limit_price}", tenant_id=user.tenant_id)
+        return _order_api(order)
+
+    # A marketable limit fills at its own limit price, not the reference
+    # price - place_market_order_internal always fills at ref_price, which is
+    # only correct for a plain market order, so that path is reused only for
+    # the common (order_type == "market") case and the limit-fill kept here.
+    # check_risk=False: the gate already ran a few lines up in this function.
+    if body.order_type == "market":
+        try:
+            order = place_market_order_internal(
+                session, user.tenant_id, user.email, symbol, body.side, body.qty, body.ref_price,
+                check_risk=False)
+        except oms.OrderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         return _order_api(order)
 
     try:
@@ -181,7 +247,7 @@ def match_working_orders(body: MatchBody, user: CurrentUser = Depends(require_te
     if not working:
         return {"filled": []}
 
-    block_reason = risk_check.check_pretrade(symbol)
+    block_reason = _check_pretrade_audited(symbol, user.email, user.tenant_id, session)
     filled = []
     for o in working:
         if o.limit_price is None or not oms.crosses(o.side, o.limit_price, body.price):

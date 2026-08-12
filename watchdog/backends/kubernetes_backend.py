@@ -23,6 +23,7 @@ class KubernetesOrchestrator:
                 log.error("no usable Kubernetes config found: %s", exc)
                 self.available = False
         self.apps = client.AppsV1Api() if self.available else None
+        self.core = client.CoreV1Api() if self.available else None
 
     def _get_deployment(self, service: str):
         if not self.available:
@@ -44,6 +45,29 @@ class KubernetesOrchestrator:
         if desired == 0:
             return "exited"
         return "running" if available >= desired else "restarting"
+
+    def oom_killed(self, service: str) -> bool:
+        """Whether any pod backing this deployment most recently terminated
+        with reason OOMKilled. False on any lookup failure - this only gates
+        a longer cooldown, never a heal action, so failing closed just falls
+        back to the plain flapping runbook, never blocks a real restart."""
+        dep = self._get_deployment(service)
+        if dep is None or not self.available:
+            return False
+        try:
+            selector = dep.spec.selector.match_labels or {}
+            if not selector:
+                return False
+            label_selector = ",".join(f"{k}={v}" for k, v in selector.items())
+            pods = self.core.list_namespaced_pod(self.namespace, label_selector=label_selector)
+            for pod in pods.items:
+                for cs in (pod.status.container_statuses or []):
+                    term = cs.last_state.terminated if cs.last_state else None
+                    if term is not None and term.reason == "OOMKilled":
+                        return True
+        except ApiException as exc:
+            log.warning("error checking OOM status for %s: %s", service, exc)
+        return False
 
     def start(self, service: str) -> bool:
         dep = self._get_deployment(service)

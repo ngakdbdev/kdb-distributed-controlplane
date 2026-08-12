@@ -157,7 +157,9 @@ class ComposeBackend:
         rc, out = _run([self.python, "scripts/gen_topology.py", "--shards", str(n),
                         "--compose", "docker-compose.yml", "--shards-json", "data-plane/shards.json",
                         "--eod-hour", str(eod.get("eod_hour_utc", 0)),
-                        "--idb-retention-days", str(eod.get("idb_retention_days", 5))],
+                        "--idb-retention-days", str(eod.get("idb_retention_days", 5)),
+                        "--rdb-retention-min", str(eod.get("rdb_retention_min", 2)),
+                        "--hdb-retention-days", str(eod.get("hdb_retention_days", 0))],
                        cwd=self.project_dir)
         steps.append(f"gen_topology --shards {n}")
         if rc != 0:

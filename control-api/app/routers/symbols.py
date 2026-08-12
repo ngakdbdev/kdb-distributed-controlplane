@@ -1,7 +1,7 @@
 """
 symbols.py (router) - the symbol reference the pickers use (shard assignment,
-query filters). Seeded across major markets; extend with a live provider lookup
-for full coverage (see app/symbols.py note).
+query filters). Seeded across major markets, plus whatever app/symbol_discovery.py's
+background poll loop has found actually trading (see app/symbols.py).
 """
 from fastapi import APIRouter, Depends
 
@@ -20,4 +20,5 @@ def list_markets(user: CurrentUser = Depends(require_tenant_scope)):
 def search(q: str = "", market: str = "", limit: int = 25,
            user: CurrentUser = Depends(require_tenant_scope)):
     return {"symbols": symref.search(q, market=market or None, limit=limit),
-            "note": "seed reference across major markets; extend via live provider lookup"}
+            "note": (f"{len(symref.SYMBOLS)} seeded across major markets + "
+                    f"{symref.live_count()} discovered live from incoming trade data")}

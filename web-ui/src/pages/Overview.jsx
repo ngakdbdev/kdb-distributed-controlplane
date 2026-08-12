@@ -41,11 +41,13 @@ export default function Overview({ onNavigate }) {
     api.listTickhouses().then(setClusters).catch(() => setClusters([]));
     api.listConnectors().then(setFeeds).catch(() => setFeeds([]));
     const id = setInterval(pull, REFRESH_MS);
-    const pullPressure = () => api.metricsSnapshot().then((snap) => setPressure(summarizePressure(snap))).catch(() => {});
-    pullPressure();
-    const pressureId = setInterval(pullPressure, REFRESH_MS);
+    // Pressure comes from the SAME websocket snapshot below (s.componentMetrics),
+    // not a separate REST poll - a second independent /metrics/snapshot call
+    // every second was computing the identical gateway snapshot twice over,
+    // doubling real gateway IPC load for no benefit.
     const ws = metricsSocket((s) => {
       setConnected(true);
+      setPressure(summarizePressure(s));
       const trade = s.rowCounts?.trade ?? 0, risk = s.rowCounts?.risk ?? 0;
       setTotals({ trade, risk });
       const now = Date.now();
@@ -62,7 +64,7 @@ export default function Overview({ onNavigate }) {
     });
     ws.onclose = () => setConnected(false);
     ws.onerror = () => setConnected(false);
-    return () => { clearInterval(id); clearInterval(pressureId); ws.close(); };
+    return () => { clearInterval(id); ws.close(); };
   }, []);
 
   const svc = Object.entries(topo);
@@ -218,11 +220,23 @@ export default function Overview({ onNavigate }) {
   );
 }
 
+// tp.q's REAL slow-subscriber discard threshold (SLOW_SUB_MAX_BYTES, see
+// tick.q / docs/tickerplant-administration.md) defaults to 50MB, held for
+// several consecutive checks before anything is actually dropped. A queue
+// depth of a few KB is completely normal, healthy jitter on a live-
+// streaming system - alerting on ANY nonzero value (the old behavior here)
+// meant this banner was "active" essentially always, which trains people to
+// ignore it right when it matters. ELEVATED_BYTES is an early-warning
+// fraction of the real threshold: high enough that it doesn't fire on
+// ordinary jitter, low enough to give real notice before anything is
+// actually shed.
+const ELEVATED_BYTES = 2 * 1024 * 1024; // 2MB - ~4% of the real 50MB drop threshold
+
 function summarizePressure(snapshot) {
   const rows = (snapshot?.componentMetrics || []).filter((row) => {
     const queue = Number(row.tpQueue || 0);
     const lag = Number(row.tpSubLag || 0);
-    return queue > 0 || lag > 0 || row.rdbConnected === false || row.wdbConnected === false;
+    return queue > ELEVATED_BYTES || lag > ELEVATED_BYTES || row.rdbConnected === false || row.wdbConnected === false;
   });
   if (!rows.length) return { elevated: false, rows: [], summary: "No active load shedding or subscriber pressure." };
   const labels = rows.map((row) => row.shard).join(", ");
@@ -231,7 +245,7 @@ function summarizePressure(snapshot) {
   return {
     elevated: true,
     rows,
-    summary: `${labels} under pressure: queue depth ${fmt(maxQueue, 0)}, subscriber lag ${fmt(maxLag, 0)}.`,
+    summary: `${labels} under pressure: queue depth ${fmt(maxQueue, 0)}B, subscriber lag ${fmt(maxLag, 0)}B (real drop threshold is 50MB).`,
   };
 }
 

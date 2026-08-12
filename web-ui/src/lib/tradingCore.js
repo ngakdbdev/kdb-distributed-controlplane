@@ -16,6 +16,16 @@ export function changePct(prices) {
   return first ? ((last - first) / first) * 100 : 0;
 }
 
+// `$"..."` casts a string to a q symbol - the only safe way to embed an
+// arbitrary symbol as a literal. A bare backtick token (`ETH-USD) is NOT
+// safe: kdb+ parses the hyphen as subtraction (`ETH minus a variable USD),
+// which throws "'USD" for any symbol containing a hyphen or, worse, silently
+// truncates at a "/" (q's comment marker) for something like BTC/USD -
+// confirmed live once crypto symbols started flowing through this table.
+function qSym(sym) {
+  return `\`$"${sym}"`;
+}
+
 /** Real trade prints for one or more symbols, routed across shard RDBs when possible. */
 export async function fetchTradeTape(symbols, limit = 1200) {
   const uniqueSymbols = [...new Set((symbols || []).filter(Boolean).map((sym) => sym.toUpperCase()))];
@@ -24,8 +34,8 @@ export async function fetchTradeTape(symbols, limit = 1200) {
   const targets = rdbTargets.length ? rdbTargets : ["gateway"];
   const sourceLabel = rdbTargets.length ? `${rdbTargets.length} RDB shards` : "gateway";
   const query = uniqueSymbols.length === 1
-    ? `select time, price, size from trade where sym=\`${uniqueSymbols[0]}`
-    : `select time, sym, price, size from trade where sym in ${uniqueSymbols.map((sym) => `\`${sym}`).join("")}`;
+    ? `select time, price, size from trade where sym=${qSym(uniqueSymbols[0])}`
+    : `select time, sym, price, size from trade where sym in (${uniqueSymbols.map(qSym).join(";")})`;
   const res = await api.runQuery({ targets, query, limit });
   return { res, sourceLabel };
 }

@@ -47,3 +47,65 @@ def test_symbol_search_endpoint(client, tadmin):
 
 def test_symbols_requires_auth(client):
     assert client.get("/symbols/search").status_code in (401, 403)
+
+
+# ---- live symbol discovery (app/symbol_discovery.py) ----------------------
+# Uses symbols namespaced ZZTEST* so these tests can't collide with anything
+# a real feed might ever publish, or with the seed - symref._live_symbols is
+# process-global (module state persists for the whole pytest run), so tests
+# here must never pick a symbol another test file's assertions could see.
+
+def test_merge_live_symbols_infers_crypto_market_from_pair_format():
+    added = symref.merge_live_symbols(["ZZTEST-USD"])
+    assert added == {"ZZTEST-USD"}
+    hit = next(r for r in symref.search("ZZTEST-USD") if r["symbol"] == "ZZTEST-USD")
+    assert hit["market"] == "CRYPTO" and hit["currency"] == "USD" and hit["source"] == "live"
+
+
+def test_merge_live_symbols_concatenated_pair_format():
+    # Binance/Bybit's own wire format has no separator at all (BTCUSDT)
+    symref.merge_live_symbols(["ZZTESTUSDT"])
+    hit = next(r for r in symref.search("ZZTESTUSDT") if r["symbol"] == "ZZTESTUSDT")
+    assert hit["market"] == "CRYPTO" and hit["currency"] == "USDT"
+
+
+def test_merge_live_symbols_slash_pair_format():
+    symref.merge_live_symbols(["ZZTEST2/EUR"])
+    hit = next(r for r in symref.search("ZZTEST2/EUR") if r["symbol"] == "ZZTEST2/EUR")
+    assert hit["market"] == "CRYPTO" and hit["currency"] == "EUR"
+
+
+def test_merge_live_symbols_is_idempotent_and_never_duplicates():
+    symref.merge_live_symbols(["ZZTEST3-USD"])
+    added_again = symref.merge_live_symbols(["ZZTEST3-USD"])
+    assert added_again == set()
+    hits = [r for r in symref.search("ZZTEST3-USD") if r["symbol"] == "ZZTEST3-USD"]
+    assert len(hits) == 1
+
+
+def test_merge_live_symbols_never_shadows_the_seed():
+    added = symref.merge_live_symbols(["AAPL"])  # already in the seed
+    assert added == set()
+    hits = [r for r in symref.search("AAPL") if r["symbol"] == "AAPL"]
+    assert len(hits) == 1 and hits[0]["source"] == "seed"
+
+
+def test_live_symbols_appear_in_markets_listing():
+    symref.merge_live_symbols(["ZZTEST4-USD"])
+    names = {mk["market"] for mk in symref.markets()}
+    assert "CRYPTO" in names
+
+
+def test_symbol_discovery_run_once_merges_from_universe_scan(monkeypatch):
+    from app import symbol_discovery
+    monkeypatch.setattr(symbol_discovery.signal_engine, "fetch_universe_symbols",
+                        lambda connect=None: ["ZZTEST5-USD"])
+    symbol_discovery.run_once()
+    assert any(r["symbol"] == "ZZTEST5-USD" for r in symref.search("ZZTEST5-USD"))
+
+
+def test_symbol_discovery_run_once_survives_scan_failure(monkeypatch):
+    from app import symbol_discovery
+    monkeypatch.setattr(symbol_discovery.signal_engine, "fetch_universe_symbols",
+                        lambda connect=None: (_ for _ in ()).throw(ConnectionRefusedError("down")))
+    symbol_discovery.run_once()  # must not raise

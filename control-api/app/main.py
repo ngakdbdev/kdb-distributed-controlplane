@@ -3,9 +3,11 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import bot_scheduler
+from . import symbol_discovery
 from .db import init_db
 from . import licensing
-from .routers import (audit, auth, auth_ldap, auth_sso, connectors, export, fleet,
+from .routers import (audit, auth, auth_ldap, auth_sso, bot, connectors, export, fleet,
                       license as license_router, llm_config, metrics, migration, query, subscribers,
                       symbols, tenants, tickhouse, tickerplants, topology, trading)
 
@@ -44,6 +46,7 @@ app.include_router(query.router)
 app.include_router(tickerplants.router)
 app.include_router(symbols.router)
 app.include_router(trading.router)
+app.include_router(bot.router)
 app.include_router(llm_config.router)
 app.include_router(migration.router)
 
@@ -52,6 +55,14 @@ app.include_router(migration.router)
 def on_startup():
     init_db()
     _check_license()
+    bot_scheduler.start()
+    symbol_discovery.start()
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    bot_scheduler.stop()
+    symbol_discovery.stop()
 
 
 def _check_license():

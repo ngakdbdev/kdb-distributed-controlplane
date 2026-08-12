@@ -43,7 +43,8 @@ control-api/          FastAPI control plane: auth, topology, metrics, query, con
                        trading (paper), audit, background export jobs
 watchdog/              Self-healing service - deterministic runbooks, independent of the control API
 web-ui/                React dashboard (Vite), dark Trading-212-inspired design system
-docs/                  Pre-deployment guides (one per target) - read before deploy/ or helm/
+docs/                  Developer/usage/admin/troubleshooting/deployment guides, plus
+                       pre-deployment checklists (one per target) - read before deploy/ or helm/
 deploy/gcp|aws|azure/ per-cloud provisioning, networking, docker install, deploy, and teardown scripts
 helm/kdb-control-plane/ Kubernetes chart + per-cloud values-aws/azure/gcp.yaml overlays
 reference/              KX's own public tick.q reference (submodule, read-only, not a build dependency - see reference/README.md)
@@ -176,7 +177,11 @@ For Kubernetes (EKS/AKS/GKE/on-prem), see `helm/kdb-control-plane/` — a matchi
 **Before running any of the above**, work through `docs/README.md` — a pre-deployment checklist
 (IAM/RBAC least-privilege policies, the secret-rotation checklist, KX licensing paths, database
 decisions, DNS/TLS) with one detailed guide per target: `docs/predeploy-aws.md`,
-`docs/predeploy-gcp.md`, `docs/predeploy-azure.md`, `docs/predeploy-kubernetes.md`.
+`docs/predeploy-gcp.md`, `docs/predeploy-azure.md`, `docs/predeploy-kubernetes.md`. For the actual
+step-by-step commands (and what "done" looks like) once you're past that checklist, see
+`docs/deployment-process.md`. Operating the platform day to day: `docs/tickerplant-administration.md`
+and `docs/troubleshooting.md`. Extending the codebase: `docs/developer-guide.md`. What every UI page
+actually does: `docs/platform-usage.md`.
 
 On FPGA generally: no cloud FPGA instance accelerates kdb+ out of the box. The
 FPGA is inert until you build and load a custom bitstream (AWS AFI / Azure

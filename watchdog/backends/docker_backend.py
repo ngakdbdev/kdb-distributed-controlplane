@@ -37,6 +37,22 @@ class Orchestrator:
         c.reload()
         return c.status
 
+    def oom_killed(self, service: str) -> bool:
+        """Whether this container's most recent exit was an OOM kill - the
+        docker daemon tracks this directly (State.OOMKilled), no guessing
+        from exit codes needed. False (not True) on any lookup failure -
+        this only gates a longer cooldown, never a heal action, so failing
+        closed here just means falling back to the plain flapping runbook,
+        never blocking a real restart attempt."""
+        c = self._find(service)
+        if c is None:
+            return False
+        try:
+            c.reload()
+            return bool(c.attrs.get("State", {}).get("OOMKilled", False))
+        except DockerException:
+            return False
+
     def start(self, service: str) -> bool:
         c = self._find(service)
         if c is None:

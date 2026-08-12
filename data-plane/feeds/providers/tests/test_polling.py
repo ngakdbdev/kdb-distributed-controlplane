@@ -62,6 +62,20 @@ def test_alphavantage_needs_key():
     assert prov.run_once() == 0
 
 
+def test_yahoo_stale_crumb_cleared_on_401_for_next_poll():
+    """A 401/403 mid-run means the crumb/cookie went stale - it must be
+    dropped so the NEXT poll re-runs the handshake instead of repeating the
+    same failure forever."""
+    import urllib.error
+
+    prov = get_provider("yahoo")(["AAPL"], FakePublisher(), shard_count=2,
+                                 fetch=lambda url: (_ for _ in ()).throw(
+                                     urllib.error.HTTPError(url, 401, "unauthorized", {}, None)))
+    prov._crumb = "stale-crumb"
+    assert prov.run_once() == 0             # logged, not raised (run_once swallows it)
+    assert prov._crumb is None              # cleared for the next poll's handshake
+
+
 def test_polling_run_once_tolerates_fetch_failure():
     def boom(url):
         raise RuntimeError("network down")

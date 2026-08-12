@@ -142,6 +142,15 @@ export const api = {
   marketSummary: (body) => request("/trading/market", { method: "POST", body: JSON.stringify(body) }),
   forecast: (body) => request("/trading/forecast", { method: "POST", body: JSON.stringify(body) }),
   grantTrading: (email, can) => request("/trading/grant", { method: "POST", body: JSON.stringify({ email, can_trade: can }) }),
+
+  // Server-side signal bot (control-api/app/routers/bot.py) - runs on the
+  // server (app/bot_scheduler.py), not in this browser tab; these just
+  // read/control its state.
+  getBotConfig: () => request("/bot/config"),
+  putBotConfig: (body) => request("/bot/config", { method: "PUT", body: JSON.stringify(body) }),
+  getBotPositions: () => request("/bot/positions"),
+  getBotLog: (limit = 60) => request(`/bot/log?limit=${limit}`),
+  closeBotPosition: (symbol) => request(`/bot/positions/${encodeURIComponent(symbol)}/close`, { method: "POST" }),
   toggleConnector: (id) => request(`/connectors/${id}/toggle`, { method: "POST" }),
   setConnectorSymbols: (id, symbols) =>
     request(`/connectors/${id}/symbols`, { method: "PUT", body: JSON.stringify({ symbols }) }),

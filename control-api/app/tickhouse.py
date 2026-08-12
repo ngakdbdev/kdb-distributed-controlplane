@@ -132,7 +132,16 @@ class ShardRange:
         return f"s{self.lo.lower()}{self.hi.lower()}"
 
 
-DEFAULT_EOD_CONFIG = {"eod_hour_utc": 0, "idb_retention_days": 5}
+DEFAULT_EOD_CONFIG = {
+    "eod_hour_utc": 0, "idb_retention_days": 5,
+    # rdb_retention_min: minutes of live data the chained RDB keeps in
+    # memory - independent of how often wdb flushes its own buffer to disk
+    # (see data-plane/q/wdb.q's .wdb.retentionIntv). hdb_retention_days: 0
+    # (default) keeps sealed history forever - purging it is destructive
+    # (no cold-storage archive step, just delete) and opt-in only, see
+    # hdb.q's .hdb.purgeOld.
+    "rdb_retention_min": 2, "hdb_retention_days": 0,
+}
 
 
 @dataclass
@@ -227,6 +236,12 @@ def validate_spec(spec: TickHouseSpec) -> list:
     retention = spec.eod_config.get("idb_retention_days", 5)
     if not (isinstance(retention, int) and retention >= 1):
         problems.append("eod_config.idb_retention_days must be a positive integer")
+    rdb_retention = spec.eod_config.get("rdb_retention_min", 2)
+    if not (isinstance(rdb_retention, int) and rdb_retention >= 1):
+        problems.append("eod_config.rdb_retention_min must be a positive integer")
+    hdb_retention = spec.eod_config.get("hdb_retention_days", 0)
+    if not (isinstance(hdb_retention, int) and hdb_retention >= 0):
+        problems.append("eod_config.hdb_retention_days must be 0 (keep forever) or a positive integer")
     return problems
 
 

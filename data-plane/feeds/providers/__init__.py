@@ -9,8 +9,10 @@ a real feed drops in behind the same on/off toggle the Connectors tab uses.
 
 Two tiers:
 
-* LIVE  - Twelve Data, Finnhub, Polygon: real data behind a public API key /
-          free tier. You can actually run these today.
+* LIVE  - Twelve Data, Finnhub, Polygon, Coinbase, Kraken, Binance, Bybit,
+          OKX: real data behind a public API key / free tier, or (the crypto
+          exchanges - their market-data feeds are all fully public) no key
+          at all. You can actually run these today.
 * LICENSED - NYSE (Pillar), LSEG (Refinitiv Real-Time / RDP), NSE, BSE: coded
           to the real SDK/protocol shape, but they only connect once you plug
           in your market-data agreement, entitlements, and connectivity. Until
@@ -21,6 +23,12 @@ Two tiers:
 from .finnhub import FinnhubProvider
 from .twelvedata import TwelveDataProvider
 from .polygon import PolygonProvider
+from .coinbase import CoinbaseProvider
+from .kraken import KrakenProvider
+from .binance import BinanceProvider
+from .binance_depth import BinanceDepthProvider
+from .bybit import BybitProvider
+from .okx import OKXProvider
 from .yahoo import YahooFinanceProvider
 from .alphavantage import AlphaVantageProvider
 from .nyse import NYSEProvider
@@ -30,6 +38,7 @@ from .bse import BSEProvider
 
 _ALL = [
     FinnhubProvider, TwelveDataProvider, PolygonProvider,
+    CoinbaseProvider, KrakenProvider, BinanceProvider, BinanceDepthProvider, BybitProvider, OKXProvider,
     YahooFinanceProvider, AlphaVantageProvider,
     NYSEProvider, LSEGProvider, NSEProvider, BSEProvider,
 ]

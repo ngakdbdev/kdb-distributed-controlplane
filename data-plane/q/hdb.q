@@ -19,10 +19,17 @@ args:.Q.opt .z.x
 shardId:first .u.getarg[args;`shard;enlist "A_M"]
 hdbDir:first .u.getarg[args;`hdbdir;enlist "./hdb"]
 reloadSec:"I"$first .u.getarg[args;`reloadsec;enlist "60"]
+/ 0 (default) = keep every sealed day forever. Purging history is a
+/ deliberate, opt-in choice - it's destructive and irreversible (no cold-
+/ storage archive step here, just delete), so it never happens unless
+/ explicitly configured.
+retentionDays:"I"$first .u.getarg[args;`retentiondays;enlist "0"]
 
 .hdb.shard:`$shardId
 .hdb.dir:hdbDir
+.hdb.retentionDays:retentionDays
 .hdb.lastReload:0Np
+.hdb.lastPurge:0Np
 .hdb.lastError:""
 
 .hdb.reload:{
@@ -33,21 +40,45 @@ reloadSec:"I"$first .u.getarg[args;`reloadsec;enlist "60"]
   .hdb.lastReload::.z.p;
   }
 
+/ Deletes on-disk date-partition directories older than retentionDays.
+/ Reads directory NAMES directly (not the currently-loaded table's distinct
+/ dates) so it works even before the first reload has populated anything,
+/ and so a partition that failed to load for some reason still gets purged
+/ on schedule rather than silently surviving forever. Each date partition
+/ is its own directory ("YYYY.MM.DD") per standard kdb+ partitioned-db
+/ layout - `"D"$` parses that shape directly; anything that doesn't parse
+/ as a date (a stray file, a different directory) is left alone.
+.hdb.purgeOld:{
+  if[.hdb.retentionDays=0; :()];
+  cutoff:.z.d - .hdb.retentionDays;
+  names:@[key;hsym `$.hdb.dir;`$()];
+  parsed:{@[{"D"$x};x;0Nd]} each string names;
+  old:names where (not null parsed) and parsed < cutoff;
+  if[not count old; :()];
+  {[dir;n]
+    system "rm -rf ",dir,"/",string n;
+    -1 "[hdb ",string[.hdb.shard],"] purged partition ",string[n]," (older than ",string[.hdb.retentionDays]," day retention)";
+    }[.hdb.dir] each old;
+  .hdb.lastPurge::.z.p;
+  }
+
 .hdb.dates:{
   $[(`trade in tables`.) and (`date in cols trade); distinct exec date from trade; `date$()]
   }
 
 .hdb.health:{
   dates:.hdb.dates[];
-  `status`shard`partitions`oldestDate`newestDate`rowsTrade`rowsRisk`lastReload`lastError!
+  `status`shard`partitions`oldestDate`newestDate`rowsTrade`rowsRisk`lastReload`lastError`retentionDays`lastPurge!
     (`up;.hdb.shard;count dates;
      $[count dates;min dates;0Nd];$[count dates;max dates;0Nd];
      $[`trade in tables`.;count trade;0j];$[`risk in tables`.;count risk;0j];
-     .hdb.lastReload;.hdb.lastError)
+     .hdb.lastReload;.hdb.lastError;.hdb.retentionDays;.hdb.lastPurge)
   }
 
-.z.ts:{.hdb.reload[]}
+.z.ts:{.hdb.purgeOld[]; .hdb.reload[]}
 \t 1000 * reloadSec
 
+.hdb.purgeOld[]
 .hdb.reload[]
--1 "[hdb ",shardId,"] historical db up, serving ",hdbDir,", reload every ",string[reloadSec],"s";
+-1 "[hdb ",shardId,"] historical db up, serving ",hdbDir,", reload every ",string[reloadSec],"s",
+  $[retentionDays>0;", retention ",string[retentionDays]," day(s)";""];
