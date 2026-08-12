@@ -1,196 +1,235 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
-import { buildTimeForecast } from "../lib/timeForecast.js";
-import { fetchTradeTape, fmt } from "../lib/tradingCore.js";
+import SymbolPicker from "../components/SymbolPicker.jsx";
+import { fmt } from "../lib/tradingCore.js";
 
-const POLL_MS = 12000;
-const CONFIG_KEY = "tickforge_bot_config_v1";
-const MAX_RISK_PCT = 1; // hard cap - the ask was "allowed risk is 1% of the capital", enforced here regardless of input
-const LOG_LIMIT = 60;
+const REFRESH_MS = 5000; // this page's own refresh of server state - separate
+                          // from the server's own evaluation interval (12s,
+                          // app/bot_scheduler.py's BOT_POLL_SEC)
 
-function loadConfig() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(CONFIG_KEY) || "null");
-    if (saved) return saved;
-  } catch { /* corrupt/old value - fall through to defaults */ }
-  return { symbol: "AAPL", paperCapital: 10000, riskPct: 1, stopLossPct: 1.5 };
-}
-
-// A paper-trading bot, not a real one: it runs entirely in this browser tab
-// (setInterval, no server-side job), trades against the same synthetic feed
-// and paper OMS as the rest of this app, and forgets its position/log the
-// moment the tab closes or reloads - only the config (symbol/capital/risk%)
-// persists, in localStorage, on this machine. It is NOT connected to any
-// bank account or broker - see the paper-capital note below for why.
+// A paper-trading bot - server-side now: app/signal_engine.py's decision
+// logic runs on an interval in the control-api process itself
+// (app/bot_scheduler.py), not in this browser tab. This page is a thin
+// client over it (control-api/app/routers/bot.py) - it configures the bot,
+// and displays whatever the server has decided, but computes none of the
+// strategy itself. Closing this tab does NOT stop the bot or lose its
+// position/log memory; only the server-side toggle (Stop bot) does that.
 //
-// Strategy: simple momentum-following long-only. On each poll it re-reads
-// the calendar-horizon forecast (lib/timeForecast.js) for the configured
-// symbol; if flat and the trend is up, it opens a long sized so that a move
-// to its stop-loss level would lose no more than riskPct% of the configured
-// paper capital (classic fixed-fractional position sizing); if the trend
-// flips down, or price trades through the stop, it closes the position.
+// Two modes for deciding WHAT to trade:
+//   - manual: you curate a basket (SymbolPicker, add/remove any time).
+//   - auto: every server-side poll, the bot reads the cluster's actual live
+//     symbol universe, ranks candidates by real per-minute drift, and
+//     considers opening the top-ranked up-trending names. That screening
+//     detail isn't a separate table here (it's server-computed, not
+//     client-computed) - it shows up as reasoned entries in the activity
+//     log below instead.
+// Either way, the actual strategy is identical per symbol: momentum-
+// following, long-only, sized so a stop-loss hit costs no more than
+// riskPct% of paper capital - aggregated across every position the bot
+// currently has open, not a fresh 1% per symbol.
 export default function Bot() {
-  const [config, setConfig] = useState(loadConfig);
-  const [enabled, setEnabled] = useState(false);
-  const [position, setPosition] = useState(null); // { qty, entryPrice, stopPrice, orderId }
+  const [config, setConfig] = useState(null);
+  const [draft, setDraft] = useState(null); // editable copy of numeric fields, PUT on blur/change
+  const [positions, setPositions] = useState([]);
   const [log, setLog] = useState([]);
-  const [status, setStatus] = useState("idle");
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const runningRef = useRef(false);
-  const positionRef = useRef(null);
+  const [closingSymbol, setClosingSymbol] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const pollRef = useRef(null);
 
-  useEffect(() => { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); }, [config]);
-  useEffect(() => { positionRef.current = position; }, [position]);
-
-  useEffect(() => {
-    if (!enabled) { setStatus("idle"); return; }
-    setStatus("watching");
-    const tick = () => {
-      if (runningRef.current) return;
-      runningRef.current = true;
-      evaluate().finally(() => { runningRef.current = false; });
-    };
-    tick();
-    const id = setInterval(tick, POLL_MS);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, config.symbol]);
-
-  function appendLog(entry) {
-    setLog((prev) => [{ ...entry, ts: new Date().toISOString() }, ...prev].slice(0, LOG_LIMIT));
-  }
-
-  async function evaluate() {
-    const symbol = config.symbol.toUpperCase();
-    const riskPct = Math.min(MAX_RISK_PCT, Math.max(0, Number(config.riskPct) || 0));
-    const stopLossPct = Math.max(0.1, Number(config.stopLossPct) || 1.5);
+  async function refresh() {
     try {
-      const { res } = await fetchTradeTape([symbol], 400);
-      const cols = res.columns || [];
-      const ti = cols.indexOf("time"), pi = cols.indexOf("price");
-      const rows = (res.rows || []).map((row) => ({ time: ti >= 0 ? row[ti] : null, price: pi >= 0 ? row[pi] : null }));
-      const forecast = buildTimeForecast(rows);
-      const last = forecast.last;
-      if (last == null) {
-        appendLog({ type: "skip", reason: `no recent trades for ${symbol} yet` });
-        return;
-      }
-      setStatus(`last check: ${forecast.trend} @ ${fmt(last)}`);
-
-      const held = positionRef.current;
-      if (!held) {
-        if (forecast.trend === "up") {
-          const stopPrice = last * (1 - stopLossPct / 100);
-          const stopDistance = last - stopPrice;
-          const riskAmount = (Number(config.paperCapital) || 0) * (riskPct / 100);
-          const qty = Math.floor(riskAmount / stopDistance);
-          if (qty < 1) {
-            appendLog({ type: "skip", reason: `risk budget (${fmt(riskAmount)}) too small for a 1-share stop distance of ${fmt(stopDistance)} on ${symbol}` });
-            return;
-          }
-          const order = await api.placeOrder({ symbol, side: "buy", qty, order_type: "market", ref_price: last });
-          const opened = { qty: order.qty ?? qty, entryPrice: order.fill_price ?? last, stopPrice, orderId: order.id };
-          setPosition(opened);
-          appendLog({ type: "open", reason: `momentum up — bought ${opened.qty} @ ${fmt(opened.entryPrice)}, stop ${fmt(stopPrice)} (risking ${fmt(riskAmount)}, ${fmt(riskPct, 2)}% of ${fmt(config.paperCapital)} paper capital)` });
-        } else {
-          appendLog({ type: "hold", reason: `flat, trend is ${forecast.trend} — waiting for momentum up` });
-        }
-      } else {
-        const stopHit = last <= held.stopPrice;
-        const trendFlipped = forecast.trend === "down";
-        if (stopHit || trendFlipped) {
-          const order = await api.placeOrder({ symbol, side: "sell", qty: held.qty, order_type: "market", ref_price: last });
-          const pnl = (order.fill_price ?? last) - held.entryPrice;
-          setPosition(null);
-          appendLog({
-            type: pnl >= 0 ? "close-win" : "close-loss",
-            reason: `${stopHit ? "stop-loss hit" : "trend flipped down"} — sold ${held.qty} @ ${fmt(order.fill_price ?? last)}, P&L ${fmt(pnl * held.qty)}`,
-          });
-        } else {
-          appendLog({ type: "hold", reason: `long ${held.qty} @ ${fmt(held.entryPrice)}, stop ${fmt(held.stopPrice)}, last ${fmt(last)} — holding` });
-        }
-      }
+      const [c, p, l] = await Promise.all([api.getBotConfig(), api.getBotPositions(), api.getBotLog()]);
+      setConfig(c);
+      setDraft((prev) => (prev == null ? c : prev)); // don't clobber in-flight edits with a background refresh
+      setPositions(p);
+      setLog(l);
+      setError("");
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
-      appendLog({ type: "error", reason: String(err).replace(/^Error:\s*/, "") });
+    } finally {
+      setLoading(false);
     }
   }
 
-  const configLocked = enabled || !!position;
+  useEffect(() => {
+    refresh();
+    pollRef.current = setInterval(refresh, REFRESH_MS);
+    return () => clearInterval(pollRef.current);
+  }, []);
+
+  async function saveConfig(patch) {
+    setSaving(true);
+    try {
+      const updated = await api.putBotConfig(patch);
+      setConfig(updated);
+      setDraft(updated);
+      setError("");
+    } catch (err) {
+      setError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function closePositionManually(symbol) {
+    setClosingSymbol(symbol);
+    try {
+      await api.closeBotPosition(symbol);
+      await refresh();
+    } catch (err) {
+      setError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setClosingSymbol(null);
+    }
+  }
+
+  // Adding a symbol is always safe. Removing one the bot currently holds a
+  // position in is not - the server rejects that (see routers/bot.py) so
+  // the position stays monitored; surface that rejection rather than
+  // silently letting the chip disappear from the basket.
+  function handleBasketChange(nextSymbols) {
+    const capped = nextSymbols.slice(0, config?.max_basket || 6).map((s) => s.toUpperCase());
+    saveConfig({ symbols: capped });
+  }
+
+  if (loading) {
+    return <div className="page"><h2>Trading bot <span className="paper-badge">PAPER</span></h2><p className="muted">Loading…</p></div>;
+  }
+
+  const openCount = positions.length;
+  const totalRiskCap = (Number(config.paper_capital) || 0) * (config.risk_pct / 100);
+  const usedRisk = positions.reduce((sum, p) => sum + p.qty * (p.entry_price - p.stop_price), 0);
+  const availableRisk = Math.max(0, totalRiskCap - usedRisk);
+  const fieldsLocked = config.enabled || openCount > 0;
+  const canStart = config.mode === "auto" ? true : (config.symbols || []).length > 0;
+  const lastActivity = log[0]?.ts ? new Date(log[0].ts).toLocaleTimeString() : null;
 
   return (
     <div className="page">
       <h2>Trading bot <span className="paper-badge">PAPER</span></h2>
       <p className="muted">
-        A momentum-following paper bot with a hard <strong>{MAX_RISK_PCT}% capital risk cap</strong> per
-        trade. It runs client-side in this browser tab only — no server-side job, no real broker, no
-        bank account. Closing this tab (or reloading) stops it and forgets its open-position memory;
-        only your configuration below is remembered, on this machine.
+        A momentum-following paper bot with a hard <strong>{config.max_risk_pct}% capital risk cap</strong>,
+        shared across every open position (not a fresh 1% each). It runs server-side on a poll interval -
+        no real broker, no bank account - and keeps running (and watching its stop-losses) whether or not
+        this page is open.
       </p>
       {error && <div className="error">{error}</div>}
 
       <div className="card">
-        <div className="section-head"><h3>Paper capital &amp; risk policy</h3>
-          <span className={`live-pill ${enabled ? "on" : "off"}`}>{enabled ? "● RUNNING" : "○ stopped"}</span>
+        <div className="section-head"><h3>What it trades</h3>
+          <span className={`live-pill ${config.enabled ? "on" : "off"}`}>{config.enabled ? "● RUNNING" : "○ stopped"}</span>
         </div>
-        <p className="muted" style={{ marginTop: 0 }}>
-          "Paper capital" is a number you set yourself — a virtual pot, not connected to any real bank
-          account or brokerage. Position size is calculated so that a stop-loss hit never loses more
-          than your risk % of this pot, capped at {MAX_RISK_PCT}% regardless of what you type below.
-        </p>
+        <div className="chip-list" style={{ marginBottom: "0.75rem" }}>
+          <button className={`chip ${config.mode === "manual" ? "generate" : ""}`} disabled={fieldsLocked}
+                  onClick={() => saveConfig({ mode: "manual" })}>Manual basket</button>
+          <button className={`chip ${config.mode === "auto" ? "generate" : ""}`} disabled={fieldsLocked}
+                  onClick={() => saveConfig({ mode: "auto" })}>Auto-screen universe</button>
+        </div>
+
+        {config.mode === "manual" ? (
+          <>
+            <p className="muted" style={{ marginTop: 0 }}>
+              You choose the basket — add or remove symbols any time the bot isn't holding a position in
+              them. A basket of one behaves just like a single-symbol bot. The bot only ever trades what's here.
+            </p>
+            <div style={{ minWidth: "16rem", marginBottom: "0.75rem" }}>
+              <label className="muted" style={{ display: "block", marginBottom: "0.25rem" }}>Basket (max {config.max_basket})</label>
+              <SymbolPicker value={config.symbols || []} onChange={handleBasketChange} placeholder="add a symbol…" />
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="muted" style={{ marginTop: 0 }}>
+              Every server-side poll, the bot reads the cluster's actual live symbol universe (not a static
+              list), ranks candidates by real recent momentum, and considers opening the top up-trending
+              names — up to the concurrent-position limit below. Whatever it already holds keeps being
+              watched for its exit regardless of ranking; see the activity log for what the last screen found.
+            </p>
+            <label className="muted" style={{ display: "block", marginBottom: "0.75rem" }}>Max concurrent positions
+              <input type="number" min="1" max={config.max_positions_cap} value={draft.max_positions} disabled={fieldsLocked}
+                     onChange={(e) => setDraft((d) => ({ ...d, max_positions: Number(e.target.value) || 1 }))}
+                     onBlur={() => saveConfig({ max_positions: draft.max_positions })}
+                     style={{ width: "5rem", display: "block" }} />
+            </label>
+          </>
+        )}
+
         <div className="form-row wrap">
-          <label className="muted">Symbol
-            <input value={config.symbol} disabled={configLocked}
-                   onChange={(e) => setConfig((c) => ({ ...c, symbol: e.target.value.toUpperCase() }))}
-                   style={{ width: "6rem", textTransform: "uppercase", display: "block" }} />
-          </label>
           <label className="muted">Paper capital
-            <input type="number" min="0" value={config.paperCapital} disabled={configLocked}
-                   onChange={(e) => setConfig((c) => ({ ...c, paperCapital: e.target.value }))}
+            <input type="number" min="0" value={draft.paper_capital} disabled={fieldsLocked}
+                   onChange={(e) => setDraft((d) => ({ ...d, paper_capital: e.target.value }))}
+                   onBlur={() => saveConfig({ paper_capital: Number(draft.paper_capital) || 0 })}
                    style={{ width: "8rem", display: "block" }} />
           </label>
-          <label className="muted">Risk per trade (max {MAX_RISK_PCT}%)
-            <input type="number" min="0" max={MAX_RISK_PCT} step="0.1" value={config.riskPct} disabled={configLocked}
-                   onChange={(e) => setConfig((c) => ({ ...c, riskPct: Math.min(MAX_RISK_PCT, Number(e.target.value) || 0) }))}
+          <label className="muted">Risk (max {config.max_risk_pct}%)
+            <input type="number" min="0" max={config.max_risk_pct} step="0.1" value={draft.risk_pct} disabled={fieldsLocked}
+                   onChange={(e) => setDraft((d) => ({ ...d, risk_pct: e.target.value }))}
+                   onBlur={() => saveConfig({ risk_pct: Number(draft.risk_pct) || 0 })}
                    style={{ width: "6rem", display: "block" }} />
           </label>
           <label className="muted">Stop-loss distance %
-            <input type="number" min="0.1" step="0.1" value={config.stopLossPct} disabled={configLocked}
-                   onChange={(e) => setConfig((c) => ({ ...c, stopLossPct: e.target.value }))}
+            <input type="number" min="0.1" step="0.1" value={draft.stop_loss_pct} disabled={fieldsLocked}
+                   onChange={(e) => setDraft((d) => ({ ...d, stop_loss_pct: e.target.value }))}
+                   onBlur={() => saveConfig({ stop_loss_pct: Number(draft.stop_loss_pct) || 1.5 })}
                    style={{ width: "6rem", display: "block" }} />
           </label>
         </div>
         <div style={{ marginTop: "0.75rem" }}>
-          <button className="primary" style={{ background: enabled ? "var(--danger)" : "var(--success)" }}
-                  onClick={() => setEnabled((v) => !v)}>
-            {enabled ? "Stop bot" : "Start bot"}
+          <button className="primary" style={{ background: config.enabled ? "var(--danger)" : "var(--success)" }}
+                  onClick={() => saveConfig({ enabled: !config.enabled })} disabled={!canStart || saving}>
+            {config.enabled ? "Stop bot" : "Start bot"}
           </button>
           <span className="muted" style={{ marginLeft: "0.75rem" }}>
-            {configLocked && !enabled ? "Close the open position to edit config again." : `polls every ${POLL_MS / 1000}s while running`}
+            {!config.enabled && openCount > 0
+              ? "Stopped with position(s) still open — nothing is watching their stop-loss until you restart or close them manually below."
+              : "evaluated server-side on its own interval, whether or not this page is open"}
           </span>
         </div>
       </div>
 
       <div className="kpi-row">
         <div className="kpi">
-          <div className="kpi-label">Risk per trade</div>
-          <div className="kpi-value">{fmt((Number(config.paperCapital) || 0) * (Math.min(MAX_RISK_PCT, Number(config.riskPct) || 0) / 100))}</div>
-          <div className="kpi-sub">{fmt(Math.min(MAX_RISK_PCT, Number(config.riskPct) || 0), 2)}% of {fmt(config.paperCapital)} paper capital</div>
+          <div className="kpi-label">Risk budget</div>
+          <div className="kpi-value">{fmt(availableRisk)}<span className="kpi-unit">/ {fmt(totalRiskCap)}</span></div>
+          <div className="kpi-sub">available of {fmt(config.risk_pct, 2)}% of {fmt(config.paper_capital)} paper capital</div>
         </div>
-        <div className={`kpi ${position ? "ok" : ""}`}>
-          <div className="kpi-label">Position</div>
-          <div className="kpi-value">{position ? `${position.qty} sh` : "flat"}</div>
-          <div className="kpi-sub">{position ? `entry ${fmt(position.entryPrice)} · stop ${fmt(position.stopPrice)}` : "no open bot position"}</div>
+        <div className={`kpi ${openCount ? "ok" : ""}`}>
+          <div className="kpi-label">Open positions</div>
+          <div className="kpi-value">{openCount}{config.mode === "auto" ? `/${config.max_positions}` : ""}</div>
+          <div className="kpi-sub">{openCount ? positions.map((p) => p.symbol).join(", ") : "flat"}</div>
         </div>
         <div className="kpi">
           <div className="kpi-label">Status</div>
-          <div className="kpi-value" style={{ fontSize: "1.1rem" }}>{status}</div>
-          <div className="kpi-sub">{config.symbol}</div>
+          <div className="kpi-value" style={{ fontSize: "0.95rem" }}>{config.enabled ? "watching" : "idle"}</div>
+          <div className="kpi-sub">{lastActivity ? `last activity ${lastActivity}` : (config.mode === "auto" ? "auto-screening" : (config.symbols || []).join(", ") || "no symbols")}</div>
         </div>
       </div>
 
+      {openCount > 0 && (
+        <div className="card" style={{ padding: "0.4rem 1rem" }}>
+          <h3>Open positions</h3>
+          <table className="data-table">
+            <thead><tr><th>symbol</th><th>qty</th><th>entry</th><th>stop</th><th></th></tr></thead>
+            <tbody>
+              {positions.map((p) => (
+                <tr key={p.symbol}>
+                  <td>{p.symbol}</td><td>{fmt(p.qty)}</td><td>{fmt(p.entry_price)}</td><td>{fmt(p.stop_price)}</td>
+                  <td>
+                    <button className="chip" disabled={closingSymbol === p.symbol} onClick={() => closePositionManually(p.symbol)}>
+                      {closingSymbol === p.symbol ? "Closing…" : "Close"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <div className="card" style={{ padding: "0.4rem 1rem" }}>
-        <h3>Bot activity (this session)</h3>
+        <h3>Bot activity</h3>
         {log.length === 0 ? (
           <p className="muted" style={{ padding: "0.75rem 0.2rem" }}>Start the bot to see its decisions here — including the ones where it decides to do nothing.</p>
         ) : (
@@ -199,10 +238,10 @@ export default function Bot() {
               <div className="activity-row" key={i}>
                 <span className={`activity-icon ${botIconTone(entry.type)}`}>{botIcon(entry.type)}</span>
                 <div className="activity-main">
-                  <div className="activity-title">{botTitle(entry.type)}</div>
+                  <div className="activity-title">{entry.symbol && <span className="mono">{entry.symbol}</span>} {botTitle(entry.type)}</div>
                   <div className="activity-detail">{entry.reason}</div>
                 </div>
-                <span className="activity-time">{new Date(entry.ts).toLocaleTimeString()}</span>
+                <span className="activity-time">{entry.ts ? new Date(entry.ts).toLocaleTimeString() : ""}</span>
               </div>
             ))}
           </div>
@@ -229,7 +268,7 @@ function botIconTone(type) {
 function botTitle(type) {
   if (type === "open") return "Opened long";
   if (type === "close-win") return "Closed — profit";
-  if (type === "close-loss") return "Closed — loss (stop or trend flip)";
+  if (type === "close-loss") return "Closed — loss";
   if (type === "error") return "Error";
   if (type === "skip") return "Skipped";
   return "Holding";

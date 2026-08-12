@@ -100,6 +100,29 @@ def _seed_demo_tenant(session: Session):
         description="Synthetic CRIMS-style risk/reference feed",
         service_name="crims-sim", enabled=False,
     ))
+    # Real market-data providers (data-plane/feeds/providers/) - each one is
+    # ALSO a plain docker-compose service (profiles: ["providers"]) and was
+    # controllable only that way until now; registering them here puts them
+    # on the SAME on/off toggle the Connectors screen already gives
+    # bpipe-sim/crims-sim, via the same generic service_name -> orchestrator
+    # start/stop path (routers/connectors.py has no per-connector special
+    # casing). Symbol-group editing (PUT .../symbols) is NOT wired for these
+    # yet - their symbol list is a compose-time arg (${X_SYMBOLS:-...}), not
+    # a runtime env var a running container can pick up, unlike bpipe-sim/
+    # crims-sim's own BPIPE_SYMBOLS/CRIMS_SYMBOLS.
+    for name, kind, description in (
+        ("finnhub-feed", "equities", "Finnhub live equities feed (needs FINNHUB_API_KEY)"),
+        ("twelvedata-feed", "equities", "Twelve Data live equities feed (needs TWELVEDATA_API_KEY)"),
+        ("coinbase-feed", "crypto", "Coinbase live crypto trades - public feed, no key needed"),
+        ("kraken-feed", "crypto", "Kraken live crypto trades - public feed, no key needed"),
+        ("binance-feed", "crypto", "Binance live crypto trades - public feed, no key needed"),
+        ("bybit-feed", "crypto", "Bybit live crypto trades - public feed, no key needed"),
+        ("okx-feed", "crypto", "OKX live crypto trades - public feed, no key needed"),
+    ):
+        session.add(Connector(
+            tenant_id=tenant.id, name=name, kind=kind, description=description,
+            service_name=name, enabled=False,
+        ))
     session.add(Subscriber(tenant_id=tenant.id, name="demo-dashboard", table="trade", role="read-only"))
     session.add(Subscriber(tenant_id=tenant.id, name="demo-dashboard", table="risk", role="read-only"))
     log.info("seeded demo tenant '%s' with admin %s", tenant.slug, settings.demo_tenant_admin_email)

@@ -5,6 +5,7 @@ without needing pykx or a local q install.
 """
 import logging
 import math
+import threading
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
@@ -20,11 +21,27 @@ log = logging.getLogger("kdb_client")
 
 
 class GatewayClient:
+    """One shared QConnection, reused across calls - and across THREADS: the
+    /metrics/snapshot route is a plain sync `def` (FastAPI runs it in a
+    thread pool) and /metrics/stream additionally polls it every second via
+    asyncio.to_thread, so two callers can easily land on different worker
+    threads at the same moment. qpython's QConnection has no locking of its
+    own - two threads calling self.q(...) concurrently were confirmed live
+    to corrupt its internal state ("QConnection object has no attribute
+    '_writer'", then every subsequent call failing with "gateway not
+    reachable"). self._lock below serializes every call through this one
+    connection; metrics polling is infrequent/low-throughput enough that
+    serializing it costs nothing worth avoiding (unlike a real high-rate
+    feed publisher, where a per-caller connection is worth the extra
+    connections - see providers/binance.py's multi-connection sharding for
+    that tradeoff instead)."""
+
     def __init__(self, host: str, port: int, timeout: float = 5.0):
         self.host = host
         self.port = port
         self.timeout = timeout
         self.q = None
+        self._lock = threading.Lock()
 
     def _ensure_connected(self):
         if self.q is not None:
@@ -37,24 +54,25 @@ class GatewayClient:
             self.q = None
 
     def _call(self, expr, default):
-        self._ensure_connected()
-        if self.q is None:
-            return default
-        try:
-            return self.q(expr)
-        except (QException, QReaderException, ConnectionError, OSError) as exc:
-            log.warning("gateway call failed (%s): %s", expr, exc)
-            # Reset the IPC session and retry once for transient out-of-band messages.
-            self.q = None
+        with self._lock:
             self._ensure_connected()
             if self.q is None:
                 return default
             try:
                 return self.q(expr)
-            except (QException, QReaderException, ConnectionError, OSError) as retry_exc:
-                log.warning("gateway retry failed (%s): %s", expr, retry_exc)
+            except (QException, QReaderException, ConnectionError, OSError) as exc:
+                log.warning("gateway call failed (%s): %s", expr, exc)
+                # Reset the IPC session and retry once for transient out-of-band messages.
                 self.q = None
-                return default
+                self._ensure_connected()
+                if self.q is None:
+                    return default
+                try:
+                    return self.q(expr)
+                except (QException, QReaderException, ConnectionError, OSError) as retry_exc:
+                    log.warning("gateway retry failed (%s): %s", expr, retry_exc)
+                    self.q = None
+                    return default
 
     def _normalize(self, obj):
         if str(obj).startswith("NaT"):

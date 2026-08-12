@@ -79,6 +79,25 @@ def test_render_helm_sets_covers_shards_and_hardware():
     assert "gateway.port=5050" in joined
 
 
+def test_render_helm_sets_covers_retention_policy():
+    payload = _spec_payload()["desired"]
+    payload["eod_config"] = {"eod_hour_utc": 22, "idb_retention_days": 3,
+                             "rdb_retention_min": 15, "hdb_retention_days": 30}
+    joined = "\n".join(tr.render_helm_sets(payload))
+    assert "eod.hourUtc=22" in joined
+    assert "idb.retentionDays=3" in joined
+    assert "rdb.retentionMin=15" in joined
+    assert "hdb.retentionDays=30" in joined
+
+
+def test_render_helm_sets_omits_retention_keys_when_not_configured():
+    # no eod_config at all in the payload - must not KeyError, must not emit
+    # rdb./hdb. sets that would override the chart's own defaults for no reason
+    joined = "\n".join(tr.render_helm_sets(_spec_payload()["desired"]))
+    assert "rdb.retentionMin" not in joined
+    assert "hdb.retentionDays" not in joined
+
+
 def test_render_compose_env():
     env = tr.render_compose_env(_spec_payload()["desired"])
     assert env["SHARD_COUNT"] == "2"

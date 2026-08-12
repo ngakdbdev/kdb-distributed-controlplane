@@ -44,8 +44,15 @@ class FlapTracker:
     def is_flapping(self, service: str) -> bool:
         return self.restart_count(service) >= self.threshold
 
-    def start_cooldown(self, service: str) -> None:
-        self._cooldown_until[service] = self._clock() + self.cooldown
+    def start_cooldown(self, service: str, cooldown_sec: float = None) -> None:
+        """`cooldown_sec` overrides the tracker's default for this one call -
+        an OOM-caused flap (see runbooks.escalate_oom) gets a much longer
+        cooldown than a plain crash-loop, because retrying sooner is
+        provably futile until the underlying data volume changes or someone
+        intervenes; a short retry just wastes restart attempts and thrashes
+        the host for no benefit."""
+        duration = self.cooldown if cooldown_sec is None else cooldown_sec
+        self._cooldown_until[service] = self._clock() + duration
 
     def in_cooldown(self, service: str) -> bool:
         until = self._cooldown_until.get(service)

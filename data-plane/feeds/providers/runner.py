@@ -8,6 +8,10 @@ runner.py - run a market-data provider into the sharded tickerplants.
   FINNHUB_API_KEY=xxx python -m providers.runner \
       --provider finnhub --symbols AAPL,MSFT,GOOGL --shards 2
 
+  # subscribe to EVERY currently-tradable symbol the venue lists (crypto
+  # exchanges only - see fetch_all_symbols() on each provider)
+  python -m providers.runner --provider binance --symbols all --shards 2
+
 Live providers (finnhub/twelvedata/polygon) need their API key via --api-key or
 the matching *_API_KEY env var. Licensed providers (nyse/lseg/nse/bse) will
 explain what they need and exit - they don't fake a connection.
@@ -32,7 +36,8 @@ _ENV_KEYS = {
     "twelvedata": "TWELVEDATA_API_KEY",
     "polygon": "POLYGON_API_KEY",
     "alphavantage": "ALPHAVANTAGE_API_KEY",
-    # yahoo needs no key (unofficial endpoint)
+    # yahoo/coinbase/kraken need no key - yahoo's an unofficial endpoint;
+    # coinbase/kraken's market-data (not trading) feeds are fully public
 }
 
 
@@ -69,7 +74,19 @@ def main(argv=None) -> int:
         print(f"  {exc}")
         return 2
 
-    if args.symbols_file and os.path.exists(args.symbols_file):
+    if args.symbols.strip().lower() == "all":
+        fetch_all = getattr(cls, "fetch_all_symbols", None)
+        if fetch_all is None:
+            print(f"\n  {cls.display_name} doesn't support --symbols all "
+                 f"(no fetch_all_symbols - it has no venue-wide instrument-list endpoint)\n")
+            return 2
+        try:
+            symbols = fetch_all()
+        except Exception as exc:  # noqa: BLE001 - a network/parse failure here should exit cleanly
+            print(f"\n  couldn't fetch {cls.display_name}'s full symbol universe: {exc}\n")
+            return 2
+        print(f"\n  {cls.display_name}: subscribing to all {len(symbols)} currently-tradable symbols\n")
+    elif args.symbols_file and os.path.exists(args.symbols_file):
         with open(args.symbols_file) as _fh:
             symbols = [s.strip() for s in _fh.read().replace("\n", ",").split(",") if s.strip()]
     else:

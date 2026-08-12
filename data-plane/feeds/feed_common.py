@@ -13,10 +13,26 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
+import numpy as np
 from qpython import qconnection
-from qpython.qtype import QException
+from qpython.qcollection import qlist, qtable
+from qpython.qtype import QDOUBLE_LIST, QException, QLONG_LIST, QSYMBOL_LIST, QTIMESTAMP_LIST
 
 import topology
+
+# column order + q vector type for each table's binary publish - must match
+# data-plane/q/schema.q exactly (kdb+ "float" is 64-bit, i.e. qpython's
+# QDOUBLE_LIST; qpython's own QFLOAT_LIST is kdb+'s 32-bit "real", unused here)
+_TABLE_SPECS = {
+    "trade": (
+        ("time", "timestamp"), ("sym", "symbol"), ("price", "float"),
+        ("size", "long"), ("side", "symbol"), ("venue", "symbol"), ("shard", "symbol"),
+    ),
+    "risk": (
+        ("time", "timestamp"), ("sym", "symbol"), ("riskType", "symbol"), ("limit", "float"),
+        ("exposure", "float"), ("status", "symbol"), ("shard", "symbol"),
+    ),
+}
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -58,7 +74,7 @@ class TickerplantConnection:
         if self.q is None:
             self.connect()
         try:
-            self._publish_via_literal(table, rows)
+            self._publish_binary(table, rows)
         except Exception as exc:  # noqa: BLE001 - any failure -> log + reconnect, never die
             self.log.warning("publish to %s:%s failed (%s: %s), reconnecting",
                              self.host, self.port, type(exc).__name__, exc)
@@ -74,94 +90,45 @@ class TickerplantConnection:
         return str(val)
 
     @staticmethod
-    def _qstr(s: str) -> str:
-        return '"' + str(s).replace('\\', '\\\\').replace('"', '\\"') + '"'
+    def _to_datetime64(val) -> np.datetime64:
+        if isinstance(val, datetime):
+            if val.tzinfo is not None:
+                val = val.astimezone(timezone.utc).replace(tzinfo=None)
+        return np.datetime64(val, "ns")
 
-    def _row_literal(self, row: list) -> str:
-        vals = []
-        for i, v in enumerate(row):
-            if i == 0:
-                vals.append(self._qstr(self._fmt_ts(v)))
-            elif isinstance(v, (int,)):
-                vals.append(str(v))
-            elif isinstance(v, (float,)):
-                vals.append(repr(v))
-            else:
-                vals.append(self._qstr(v))
-        return "(" + ";".join(vals) + ")"
-
-    def _publish_via_literal(self, table: str, rows: list) -> None:
+    def _publish_binary(self, table: str, rows: list) -> None:
+        """Send a batch as a real kdb+ table over IPC (type 98h), matching what
+        tick.q's .u.doUpd already fast-paths (`d:$[98h=type data;data;...]`) -
+        no text round-trip, no q-side parsing, just binary deserialize + insert."""
         if not rows:
             return
-        schemas = {
-            "trade": [
-                ("time", "timestamp", lambda v: self._fmt_ts(v)),
-                ("sym", "symbol", str),
-                ("price", "float", float),
-                ("size", "long", int),
-                ("side", "symbol", str),
-                ("venue", "symbol", str),
-                ("shard", "symbol", str),
-            ],
-            "risk": [
-                ("time", "timestamp", lambda v: self._fmt_ts(v)),
-                ("sym", "symbol", str),
-                ("riskType", "symbol", str),
-                ("limit", "float", float),
-                ("exposure", "float", float),
-                ("status", "symbol", str),
-                ("shard", "symbol", str),
-            ],
-        }
-        spec = schemas.get(table)
+        spec = _TABLE_SPECS.get(table)
         if spec is None:
-            raise ValueError(f"unsupported table for literal publish: {table}")
+            raise ValueError(f"unsupported table for binary publish: {table}")
 
         cols = list(zip(*rows))
-        n = len(rows)
-
-        def sym_list(vals):
-            vals = [str(v).replace('"', '\\"') for v in vals]
-            if len(vals) == 1:
-                return f'enlist `$"{vals[0]}"'
-            return "(" + ";".join(f'`$"{v}"' for v in vals) + ")"
-
-        def timestamp_list(vals):
-            values = [self._fmt_ts(v) for v in vals]
-            if len(values) == 1:
-                return f'enlist {values[0]}'
-            return "(" + ";".join(values) + ")"
-
-        def float_list(vals):
-            xs = [repr(float(v)) for v in vals]
-            if len(xs) == 1:
-                return f"enlist {xs[0]}"
-            return "(" + ";".join(xs) + ")"
-
-        def long_list(vals):
-            xs = [str(int(v)) for v in vals]
-            if len(xs) == 1:
-                return f"enlist {xs[0]}j"
-            return "(" + ";".join(xs[:-1] + [xs[-1] + "j"]) + ")"
-
-        col_exprs = []
-        for i, (name, qtype, cast_fn) in enumerate(spec):
-            values = [self._normalize_value(v) for v in cols[i]]
+        col_names = []
+        col_data = []
+        for i, (name, qtype) in enumerate(spec):
+            values = cols[i]  # raw values - _normalize_value's string coercion is for the old text path only
             if qtype == "timestamp":
-                lst = timestamp_list(values)
+                arr = np.array([self._to_datetime64(v) for v in values], dtype="datetime64[ns]")
+                col_data.append(qlist(arr, qtype=QTIMESTAMP_LIST))
             elif qtype == "symbol":
-                lst = sym_list(values)
-            elif qtype == "long":
-                lst = long_list(values)
+                arr = np.array([str(v) for v in values])
+                col_data.append(qlist(arr, qtype=QSYMBOL_LIST))
             elif qtype == "float":
-                lst = float_list(values)
+                arr = np.array(values, dtype=np.float64)
+                col_data.append(qlist(arr, qtype=QDOUBLE_LIST))
+            elif qtype == "long":
+                arr = np.array(values, dtype=np.int64)
+                col_data.append(qlist(arr, qtype=QLONG_LIST))
             else:
                 raise ValueError(f"unsupported qtype: {qtype}")
-            col_exprs.append(f"{name}:{lst}")
+            col_names.append(name)
 
-        expr = f"d:([] {'; '.join(col_exprs)}); .u.upd[`{table};d]"
-        self._last_literal_expr = expr
-        self.q(expr, sync=False)
+        tbl = qtable(col_names, col_data)
+        self.q.sendAsync(".u.upd", np.string_(table), tbl)
 
     def close(self):
         if self.q is not None:
@@ -241,9 +208,19 @@ def build_universe(count: int, symbols_arg: str, symbols_file: str, builtin: lis
         if len(syms) >= count:
             syms = syms[:count]
         else:
+            # Cycle the leading letter A-Z as we pad. topology.shard_of
+            # partitions purely by a symbol's first letter (contiguous
+            # ranges, e.g. A-M/N-Z at SHARD_COUNT=2) - the same table
+            # gateway.q routes with - so an all-"SYN#####" universe dumps
+            # every synthetic symbol on whichever single shard owns "S".
+            # Confirmed live: at SIM_SYMBOL_COUNT=1000 that put ~98% of
+            # traffic on one shard's tickerplant/RDB and destabilized it
+            # under load. Cycling the prefix through all 26 letters spreads
+            # the padding evenly across however many shards are configured.
             i = 1
             while len(syms) < count:
-                syms.append(f"SYN{i:05d}")
+                letter = topology.ALPHABET[(i - 1) % len(topology.ALPHABET)]
+                syms.append(f"{letter}SYN{i:05d}")
                 i += 1
     seen = set()
     return [s for s in syms if not (s in seen or seen.add(s))]

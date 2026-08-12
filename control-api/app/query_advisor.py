@@ -101,6 +101,52 @@ def _parse(raw: str) -> dict:
             "suggestions": suggestions}
 
 
+_SELECT_OR_EXEC_RE = re.compile(r"^\s*(select|exec)\b", re.IGNORECASE)
+_WHERE_OR_BY_RE = re.compile(r"\b(where|by)\b", re.IGNORECASE)
+_BY_RE = re.compile(r"\bby\b", re.IGNORECASE)
+_AGG_FUNC_RE = re.compile(
+    r"\b(avg|sum|count|min|max|first|last|wavg|wsum|med|dev|sdev|var|svar|distinct)\b",
+    re.IGNORECASE,
+)
+
+
+def _scan_risk_tip(query: str) -> str | None:
+    """The other piece of advice we can PROVE rather than guess: a select/exec
+    with a `where` or `by` clause that doesn't narrow by symbol - so
+    query_router.extract_syms() finds nothing to route on - has to scan the
+    ENTIRE table on every shard it reaches before it can filter or group,
+    with cost proportional to total row count regardless of how few rows the
+    query ultimately returns. Confirmed live against this deployment: a
+    non-aggregated `by` over ~500K rows took ~7s; the same shape hit the
+    16-29M rows this demo's RDBs briefly grew to during a tick-rate
+    experiment and took 30s+, past every client/server timeout (see
+    query_service._cap_result_rows - that fix bounds what a PLAIN select
+    returns, but structurally can't help a where/by clause, which has to
+    scan before it can filter or group in the first place).
+    """
+    q = query.strip()
+    if not _SELECT_OR_EXEC_RE.match(q) or not _WHERE_OR_BY_RE.search(q):
+        return None
+    if query_router.extract_syms(q):
+        return None  # narrowed by symbol - bounded to what that shard actually owns
+
+    by_match = _BY_RE.search(q)
+    if by_match:
+        if _AGG_FUNC_RE.search(q[:by_match.start()]):
+            return None  # aggregated - one row per group, stays fast at any table size
+        return (
+            "this `by` groups every row into per-symbol lists with no aggregate function - that "
+            "has to scan and copy the WHOLE table regardless of table size, and gets proportionally "
+            "slower as it grows; an aggregate (count i, avg price, ...) by the same group produces "
+            "one row per symbol instead and stays fast at any table size"
+        )
+    return (
+        "no symbol filter here, so this scans the entire table on every shard it reaches - cost "
+        "scales with total row count, not with what the query returns; add `where sym in (...)` "
+        "(or target a specific shard) to keep this bounded as the table grows"
+    )
+
+
 def _routing_tip(query: str, shard_count: int) -> str | None:
     """The one piece of advice we can PROVE rather than ask a model to guess:
     if this query's sym filter maps to a strict subset of shards, targeting
@@ -127,13 +173,13 @@ def _routing_tip(query: str, shard_count: int) -> str | None:
 
 
 def analyze(query: str, shard_count: int, host: str | None = None, port: int | None = None) -> dict:
-    """Deterministic routing tip + (if configured) LLM explanation/issues/
-    optimized-rewrite/suggestions. Never raises for "no LLM" - callers get
-    the deterministic half regardless; llm_error is set (not raised) if a
-    configured provider's call itself fails."""
-    tip = _routing_tip(query, shard_count)
+    """Deterministic routing + scan-risk tips + (if configured) LLM
+    explanation/issues/optimized-rewrite/suggestions. Never raises for "no
+    LLM" - callers get the deterministic half regardless; llm_error is set
+    (not raised) if a configured provider's call itself fails."""
+    deterministic = [_routing_tip(query, shard_count), _scan_risk_tip(query)]
     result = {
-        "explanation": None, "issues": [tip] if tip else [], "optimized_q": None,
+        "explanation": None, "issues": [t for t in deterministic if t], "optimized_q": None,
         "suggestions": [], "provider": None, "llm_error": None,
     }
 

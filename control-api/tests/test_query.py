@@ -77,6 +77,29 @@ def test_shape_vector_and_scalar():
     assert s["kind"] == "scalar" and s["rows"] == [[42]]
 
 
+def test_shape_bare_numpy_array_is_a_vector_not_a_stringified_blob():
+    # Regression: `cols\`trade` comes back from qpython as a plain (non-
+    # structured) numpy array of bytes, e.g. array([b'time', b'sym', ...]) -
+    # confirmed against a live cluster this used to fall through every
+    # shape_result branch to the scalar fallback and render as the literal
+    # text "[b'time' b'sym' ...]" instead of a proper one-row-per-name grid,
+    # which is exactly what broke the query workspace's schema-aware
+    # autocomplete (it reads this via a `cols` query).
+    import numpy as np
+    arr = np.array([b"time", b"sym", b"price"])
+    out = qs.shape_result(arr)
+    assert out["kind"] == "vector"
+    assert out["columns"] == ["value"]
+    assert out["rows"] == [["time"], ["sym"], ["price"]]
+
+
+def test_shape_zero_dim_numpy_array_still_a_scalar():
+    import numpy as np
+    out = qs.shape_result(np.array(42))
+    assert out["kind"] == "scalar"
+    assert out["rows"] == [[42]]
+
+
 # ---- kdb+ timestamp/date conversion ---------------------------------------
 # Regression coverage for a real bug: qpython (pandas=False) hands timestamp
 # columns back as plain int64 nanoseconds-since-2000.01.01, not numpy
@@ -156,6 +179,27 @@ def test_shape_result_structured_array_without_meta_falls_back_safely():
     assert res["rows"] == [[1], [2]]
 
 
+def test_shape_result_qkeyedtable_from_grouped_query():
+    """Regression: `select ... by ... from t` (any grouped select) comes
+    back from qpython as a QKeyedTable - a SEPARATE class from QDictionary,
+    not a subclass of it (confirmed against qpython's source), despite
+    being structurally identical (.keys/.values, each a QTable). Without
+    this, `select count i by sym from trade` fell through every branch in
+    shape_result to the scalar fallback and rendered as one row of raw
+    repr text ("[(b'AAPL',) ...]![(3810,) ...]") instead of a sym|cnt grid
+    - confirmed live against a real cluster."""
+    import numpy as np
+    from qpython.qcollection import QKeyedTable, qlist, qtable
+    from qpython.qtype import QLONG_LIST, QSYMBOL_LIST
+
+    keys = qtable(["sym"], [qlist(np.array(["AAPL", "MSFT"]), qtype=QSYMBOL_LIST)])
+    values = qtable(["cnt"], [qlist(np.array([3810, 3887]), qtype=QLONG_LIST)])
+    res = qs.shape_result(QKeyedTable(keys, values))
+    assert res["kind"] == "table"
+    assert res["columns"] == ["k_sym", "cnt"]
+    assert res["rows"] == [["AAPL", 3810], ["MSFT", 3887]]
+
+
 def test_run_query_blocks_write_then_runs_readonly():
     calls = []
     def fake_conn(q):
@@ -164,7 +208,50 @@ def test_run_query_blocks_write_then_runs_readonly():
     with pytest.raises(ValueError):
         qs.run_query('system "ls"', fake_conn)
     out = qs.run_query("select from trade", fake_conn)
-    assert out["kind"] == "table" and calls == ["select from trade"]
+    # the query actually sent to q is capped (see test_cap_result_rows_* below) -
+    # `run_query`'s payload["query"] still reports the user's original text
+    assert out["kind"] == "table" and out["query"] == "select from trade"
+    assert calls == [f"{qs.DEFAULT_ROW_LIMIT + 1}#(select from trade)"]
+
+
+# ---- row-cap pushdown (query_service._cap_result_rows) --------------------
+# Regression coverage for a real incident: `select from trade` against a
+# live RDB that had grown to 16M+ rows hung the whole HTTP request for 30s+
+# (past every client/server timeout) because the row limit was only ever
+# applied client-side, AFTER pulling the entire result over IPC. Pushing a
+# `#` take into the query itself bounds what kdb+ computes/returns in the
+# first place.
+
+def test_cap_result_rows_wraps_a_plain_select():
+    assert qs._cap_result_rows("select from trade", 50) == "50#(select from trade)"
+    assert qs._cap_result_rows("  select sym from trade  ", 10) == "10#(select sym from trade)"
+
+
+def test_cap_result_rows_case_insensitive():
+    assert qs._cap_result_rows("SELECT from trade", 5) == "5#(SELECT from trade)"
+
+
+def test_cap_result_rows_leaves_an_explicit_take_alone():
+    # the caller already chose their own take - respect it, don't double-wrap
+    assert qs._cap_result_rows("100#select from trade by sym", 50) == "100#select from trade by sym"
+    assert qs._cap_result_rows("-5#trade", 50) == "-5#trade"
+
+
+def test_cap_result_rows_leaves_non_select_queries_alone():
+    # exec/functional-form/system calls have their own semantics - wrapping
+    # them isn't safe, and non-select expressions (tables[], .gw.health[])
+    # were never the source of the runaway-fetch problem this guards against
+    for q in ["tables[]", ".gw.health[]", "exec sym from trade", "update x:1 from trade"]:
+        assert qs._cap_result_rows(q, 50) == q
+
+
+def test_run_query_caps_at_limit_plus_one_so_truncation_is_still_detectable():
+    calls = []
+    def fake_conn(q):
+        calls.append(q)
+        return {"x": list(range(9999))}  # fake conn ignores the cap - just proving what was asked for
+    qs.run_query("select from trade", fake_conn, limit=20)
+    assert calls == ["21#(select from trade)"]
 
 
 # ---- federation / combine_results ----------------------------------------

@@ -23,8 +23,9 @@ def test_provider_catalog_lists_live_and_licensed(client, tadmin):
     r = client.get("/connectors/providers", headers=tadmin)
     assert r.status_code == 200, r.text
     cat = {p["name"]: p for p in r.json()}
-    assert set(cat) == {"finnhub", "twelvedata", "polygon", "yahoo", "alphavantage",
-                        "nyse", "lseg", "nse", "bse"}
+    assert set(cat) == {"finnhub", "twelvedata", "polygon", "coinbase", "kraken",
+                        "binance", "binance-depth", "bybit", "okx",
+                        "yahoo", "alphavantage", "nyse", "lseg", "nse", "bse"}
     assert cat["finnhub"]["tier"] == "live"
     assert cat["yahoo"]["tier"] == "live"
     assert cat["nyse"]["tier"] == "licensed"

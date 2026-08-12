@@ -16,6 +16,8 @@ lives in the gateway's shards.json ConfigMap.
 {{- $poll := .Values.dataPlane.idbPollSeconds -}}
 {{- $eodHour := .Values.eod.hourUtc -}}
 {{- $retention := .Values.idb.retentionDays -}}
+{{- $rdbRetention := .Values.rdb.retentionMin -}}
+{{- $hdbRetention := .Values.hdb.retentionDays -}}
 
 {{- range $i := until (int .Values.shardCount) }}
 {{- $sid := printf "s%d" $i }}
@@ -77,7 +79,8 @@ spec:
           image: "{{ $reg }}kdb-control-plane/data-plane:{{ $tag }}"
           imagePullPolicy: {{ $pull }}
           command: ["q", "wdb.q", "-shard", "{{ $sid }}", "-tphost", "tp-{{ $sid }}",
-                    "-tpport", "5010", "-flushmin", "{{ $flush }}", "-dbdir", "/data/db",
+                    "-tpport", "5010", "-flushmin", "{{ $flush }}", "-retentionmin", "{{ $rdbRetention }}",
+                    "-dbdir", "/data/db",
                     "-hdbdir", "/data/hdb", "-idbhost", "idb-{{ $sid }}", "-idbport", "5030",
                     "-hdbhost", "hdb-{{ $sid }}", "-hdbport", "5060", "-p", "5040"]
           ports: [{ containerPort: 5040 }]
@@ -219,7 +222,7 @@ spec:
           image: "{{ $reg }}kdb-control-plane/data-plane:{{ $tag }}"
           imagePullPolicy: {{ $pull }}
           command: ["q", "hdb.q", "-shard", "{{ $sid }}", "-hdbdir", "/data/hdb",
-                    "-reloadsec", "60", "-p", "5060"]
+                    "-reloadsec", "60", "-retentiondays", "{{ $hdbRetention }}", "-p", "5060"]
           ports: [{ containerPort: 5060 }]
           volumeMounts:
             - { name: hdb, mountPath: /data/hdb }

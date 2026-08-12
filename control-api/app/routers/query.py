@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from pydantic import BaseModel
+from sqlmodel import Session
 
 from .. import export_jobs
 from .. import llm_runtime_config
@@ -22,12 +23,14 @@ from .. import nl2q as nl2q_mod
 from .. import parquet_export
 from .. import q_codegen
 from .. import query_advisor
+from .. import query_cost
 from .. import query_profile
 from .. import query_router
 from .. import query_service as qs
 from .. import topology
+from ..db import get_session
 from ..llm_provider import LLMError
-from .auth import CurrentUser, require_tenant_scope
+from .auth import CurrentUser, require_auth, require_tenant_scope
 
 router = APIRouter(prefix="/query", tags=["query"])
 
@@ -125,6 +128,7 @@ def _run_one(target_id: str, query: str, limit: int, allow_write: bool,
                 "routed_shards": shard_targets if routed else None,
             }
         grid = qs.combine_results(labeled, add_provenance=True, limit=limit)
+        grid["query"] = query
         grid["kind"] = "gateway-federated"
         grid["routed_shards"] = shard_targets if routed else None
         grid["skipped_shards"] = skipped_targets if routed else []
@@ -193,7 +197,8 @@ def _fetch_grid(targets: list[str], query: str, limit: int) -> tuple[list[str], 
 
 
 @router.post("/run")
-def run(body: RunBody, user: CurrentUser = Depends(require_tenant_scope)):
+def run(body: RunBody, user: CurrentUser = Depends(require_tenant_scope),
+       session: Session = Depends(get_session)):
     allow_write = body.allow_write and _ALLOW_WRITE
     if body.allow_write and not _ALLOW_WRITE:
         raise HTTPException(status_code=403,
@@ -203,6 +208,16 @@ def run(body: RunBody, user: CurrentUser = Depends(require_tenant_scope)):
         ok, reason = qs.check_readonly(body.query)
         if not ok:
             raise HTTPException(status_code=400, detail=reason)
+
+    # query cost governance (app/query_cost.py) - opt-in, no-ops unless
+    # QUERY_BUDGET_MS_PER_WINDOW is set. Platform admins are exempt: they're
+    # operating the platform (e.g. debugging a tenant's issue), not
+    # consuming that tenant's own allocation.
+    track_cost = user.role != "platform_admin"
+    if track_cost:
+        block_reason = query_cost.check_budget(session, user.tenant_id)
+        if block_reason:
+            raise HTTPException(status_code=429, detail=block_reason)
 
     targets = body.targets or [body.target]
     # validate every target resolves before running
@@ -218,6 +233,8 @@ def run(body: RunBody, user: CurrentUser = Depends(require_tenant_scope)):
             elapsed_ms=res["elapsed_ms"], connect_ms=res.get("connect_ms"), query_ms=res.get("query_ms"),
             routed_shards=res.get("routed_shards"), error=None if res["ok"] else res["error"],
         )
+        if track_cost:
+            query_cost.record(session, user.tenant_id, user.email, res["elapsed_ms"])
         if not res["ok"]:
             raise HTTPException(status_code=502 if "unreachable" in res["error"] else 400,
                                 detail=res["error"])
@@ -230,14 +247,17 @@ def run(body: RunBody, user: CurrentUser = Depends(require_tenant_scope)):
     results = [_run_one(t, body.query, body.limit, allow_write) for t in targets]
     labeled = [(r["target"], r["grid"]) for r in results if r["ok"]]
     total_rows = sum(r["grid"]["row_count"] for r in results if r["ok"])
+    total_elapsed_ms = round(sum(r["elapsed_ms"] for r in results), 1)
     query_profile.record(
         actor=user.email, target=",".join(targets), query=body.query,
         ok=bool(labeled), row_count=total_rows if labeled else None,
-        elapsed_ms=round(sum(r["elapsed_ms"] for r in results), 1),
+        elapsed_ms=total_elapsed_ms,
         query_ms=round(sum(r.get("query_ms") or 0 for r in results), 1),
         routed_shards=None,
         error=None if labeled else "; ".join(f"{r['target']}: {r.get('error')}" for r in results),
     )
+    if track_cost:
+        query_cost.record(session, user.tenant_id, user.email, total_elapsed_ms)
     if not labeled:
         raise HTTPException(status_code=502, detail="all targets failed: " +
                             "; ".join(f"{r['target']}: {r['error']}" for r in results))
@@ -444,6 +464,25 @@ def history(limit: int = 50, user: CurrentUser = Depends(require_tenant_scope)):
     """Recent query executions with profiling - see query_profile.py. In-memory,
     per control-api process; resets on restart (see module docstring for why)."""
     return {"entries": query_profile.recent(limit), "stats": query_profile.stats()}
+
+
+@router.get("/cost/summary")
+def cost_summary(user: CurrentUser = Depends(require_auth),
+                 session: Session = Depends(get_session)):
+    """Showback: this tenant's query cost consumption vs budget in the
+    current window (app/query_cost.py). Platform admins get every tenant
+    with activity instead of just their own - the same "operating the
+    platform, not consuming a tenant's allocation" distinction /run makes.
+    require_auth (not require_tenant_scope): a platform admin has no
+    tenant_id of their own (by design - see db.py's seeding), so the
+    tenant-scoped dependency would reject them before this even runs."""
+    if user.role == "platform_admin":
+        return {"tenants": query_cost.all_tenants_summary(session),
+                "window_hours": query_cost.settings.query_budget_window_hours,
+                "budget_ms": query_cost.settings.query_budget_ms_per_window or None}
+    if user.tenant_id is None:
+        raise HTTPException(status_code=400, detail="this endpoint is tenant-scoped for non-admins")
+    return query_cost.tenant_summary(session, user.tenant_id)
 
 
 @router.get("/tables")

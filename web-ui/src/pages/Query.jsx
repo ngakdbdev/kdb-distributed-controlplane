@@ -1,15 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import SymbolPicker from "../components/SymbolPicker.jsx";
-
-// table -> columns, from schema.q; used for autocomplete + the q generator
-const SCHEMA = {
-  trade: ["time", "sym", "price", "size", "side", "venue", "shard"],
-  risk: ["time", "sym", "riskType", "limit", "exposure", "status", "shard"],
-};
-const QWORDS = ["select", "from", "where", "by", "update", "delete", "exec", "count",
-  "avg", "sum", "wavg", "max", "min", "last", "first", "dev", "med", "sums", "distinct",
-  "asc", "desc", "xbar", "within", "in", "like"];
+import QueryEditor from "../components/QueryEditor.jsx";
+import { SCHEMA } from "../lib/qLanguage.js";
 
 const PRESETS = [
   { label: "Recent trades", q: "select from trade" },
@@ -36,7 +29,10 @@ function nl2q(input) {
   const forM = s.match(/(?:for|symbol|sym)\s+([a-z]{1,6})\b/);
   if (!sym && forM) sym = forM[1].toUpperCase();
   const whereParts = [];
-  if (sym) whereParts.push(`sym=\`${sym}`);
+  // `$"..."` cast, not a bare backtick token - safe even if this ever
+  // captures a symbol with a hyphen/slash in it (see tradingCore.js's qSym
+  // for why a bare `SYM literal breaks on those characters).
+  if (sym) whereParts.push(`sym=\`$"${sym}"`);
   // comparison against an aggregate ("price greater than avg price") - a
   // where-phrase, not a top-level aggregation. kdb+ evaluates where-phrases
   // left to right, so appending this after the sym filter above scopes the
@@ -92,13 +88,17 @@ export default function Query() {
   const [nl, setNl] = useState("");
   const [genBusy, setGenBusy] = useState(false);
   const [genSource, setGenSource] = useState("");
-  const [ac, setAc] = useState({ open: false, items: [], from: 0, to: 0 });
+  // table -> live column list, fetched via `cols <table>` against whatever
+  // target is selected (real schema, not the SCHEMA fallback above) - so
+  // autocomplete works for any table the cluster actually has, not just
+  // trade/risk. Cached per table name; a target with no reachable q process
+  // just leaves that table's entry unset and callers fall back to SCHEMA.
+  const [liveSchema, setLiveSchema] = useState({});
   const [analysis, setAnalysis] = useState(null);
   const [analyzeBusy, setAnalyzeBusy] = useState(false);
   const [codeNl, setCodeNl] = useState("");
   const [codeGenBusy, setCodeGenBusy] = useState(false);
   const [codeGenError, setCodeGenError] = useState("");
-  const editorRef = useRef(null);
 
   useEffect(() => {
     api.queryTargets().then((d) => {
@@ -112,6 +112,43 @@ export default function Query() {
     api.queryTables(primary).then((d) => setTables(d.tables || [])).catch(() => setTables([]));
   }, [primary]);
 
+  // Real column lists for autocomplete, one lightweight `cols <table>` read
+  // per table - not the static SCHEMA fallback, so a table this deployment
+  // added beyond trade/risk still autocompletes correctly. Deliberately NOT
+  // run against `primary` when that's "gateway": the gateway is a router,
+  // not a physical table host (see query.py's own _run_one comment), so it
+  // has no `trade`/`risk` global to take `cols` of - `cols\`trade` sent
+  // there fails with a variable-not-found error. Schema is shard-invariant,
+  // so any concrete rdb-* target answers it just as well; only fall back to
+  // `primary` itself if no rdb target is available (e.g. primary already is
+  // one, or points at a tickerplant). Runs once per (schemaTarget, tables)
+  // change, not per keystroke.
+  const schemaTarget = targets.find((t) => t.id.startsWith("rdb-"))?.id || (primary !== "gateway" ? primary : null);
+  useEffect(() => {
+    if (!schemaTarget || !tables.length) return;
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(tables.map(async (t) => {
+        try {
+          const res = await api.runQuery({ target: schemaTarget, query: `cols \`${t}`, limit: 200 });
+          const idx = (res.columns || []).indexOf("value");
+          const names = idx >= 0 ? (res.rows || []).map((r) => String(r[idx])) : [];
+          return [t, names];
+        } catch {
+          return [t, null]; // unreachable - the completion source falls back to SCHEMA[t] if present
+        }
+      }));
+      if (!cancelled) {
+        setLiveSchema((prev) => {
+          const next = { ...prev };
+          for (const [t, cols] of entries) if (cols && cols.length) next[t] = cols;
+          return next;
+        });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [schemaTarget, tables.join(",")]);
+
   const available = useMemo(() => targets.filter((t) => !selected.includes(t.id)), [targets, selected]);
   function addTarget(id) { if (id) setSelected((c) => [...c, id]); }
   function removeTarget(id) { setSelected((c) => c.filter((x) => x !== id)); }
@@ -123,42 +160,6 @@ export default function Query() {
     setText((t) => /where/i.test(t) ? `${t}, sym in ${list}` : `${t} where sym in ${list}`);
   }
 
-  // ---- autocomplete ----
-  function candidatesFor(word, fullText) {
-    const mentioned = Object.keys(SCHEMA).filter((t) => fullText.includes(t));
-    const cols = mentioned.flatMap((t) => SCHEMA[t]);
-    const tbls = [...new Set([...(tables || []), ...Object.keys(SCHEMA)])];
-    const pool = [...new Set([...QWORDS, ...tbls, ...cols])];
-    const w = word.toLowerCase();
-    if (!w) return [];
-    return pool.filter((x) => x.toLowerCase().startsWith(w) && x.toLowerCase() !== w).slice(0, 8);
-  }
-  function onEditorChange(e) {
-    const v = e.target.value; setText(v);
-    const pos = e.target.selectionStart;
-    const before = v.slice(0, pos);
-    const m = before.match(/[A-Za-z0-9_]+$/);
-    if (m) {
-      const items = candidatesFor(m[0], v);
-      setAc({ open: items.length > 0, items, from: pos - m[0].length, to: pos });
-    } else setAc((a) => ({ ...a, open: false }));
-  }
-  function applyCompletion(word) {
-    setText((t) => t.slice(0, ac.from) + word + t.slice(ac.to));
-    setAc((a) => ({ ...a, open: false }));
-    requestAnimationFrame(() => {
-      const el = editorRef.current; if (!el) return;
-      const c = ac.from + word.length; el.focus(); el.setSelectionRange(c, c);
-    });
-  }
-  function onKey(e) {
-    if (ac.open && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey))) {
-      e.preventDefault(); applyCompletion(ac.items[0]); return;
-    }
-    if (e.key === "Escape") setAc((a) => ({ ...a, open: false }));
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); runIt(); }
-  }
-
   // Try the backend's LLM-backed generator first (grounded in this
   // TickHouse's live schema - see control-api/app/nl2q.py); if no provider
   // is configured there, or the call fails for any reason (network, model
@@ -166,7 +167,7 @@ export default function Query() {
   // so the box always produces *something* regardless of deployment.
   function useLocalGenerator() {
     const q = nl2q(nl);
-    if (q) { setText(q); setAc((a) => ({ ...a, open: false })); }
+    if (q) setText(q);
     setGenSource("offline pattern-matcher");
   }
   async function generate() {
@@ -175,7 +176,6 @@ export default function Query() {
       const res = await api.nl2q(nl, primary);
       if (res && res.ok && res.q) {
         setText(res.q);
-        setAc((a) => ({ ...a, open: false }));
         setGenSource(`AI (${res.provider})`);
       } else {
         useLocalGenerator();
@@ -201,7 +201,6 @@ export default function Query() {
       const res = await api.codegen(codeNl, primary);
       if (res && res.ok && res.code) {
         setText(res.code);
-        setAc((a) => ({ ...a, open: false }));
       } else {
         setCodeGenError(res?.error || "code generation failed");
       }
@@ -244,6 +243,8 @@ export default function Query() {
         Choose one or more targets — a gateway, a <strong>tickerplant</strong>'s live buffer, or an RDB — write q (with
         autocomplete), or describe what you want in plain English and generate it. Multi-target queries fan out and
         aggregate with a <code>_target</code> column. Read-only by default. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Enter</kbd> runs.
+        Prefer your editor? The <code>vscode-extension/</code> package in this repo runs the same queries, against the
+        same control-api, from inside VS Code.
       </p>
 
       <div className="query-workspace">
@@ -302,19 +303,8 @@ export default function Query() {
           {codeGenError && <div className="error query-error">{codeGenError}</div>}
 
           <div className="editor-wrap">
-            <textarea ref={editorRef} className="query-editor" value={text} spellCheck={false}
-                      onChange={onEditorChange} onKeyDown={onKey}
-                      onBlur={() => setTimeout(() => setAc((a) => ({ ...a, open: false })), 120)}
-                      placeholder="select from trade where sym=`AAPL" />
-            {ac.open && (
-              <div className="ac-pop">
-                {ac.items.map((it, i) => (
-                  <button key={it} className={`ac-item ${i === 0 ? "first" : ""}`} onMouseDown={(e) => { e.preventDefault(); applyCompletion(it); }}>
-                    {it}{i === 0 && <span className="ac-hint">Tab</span>}
-                  </button>
-                ))}
-              </div>
-            )}
+            <QueryEditor value={text} onChange={setText} onRun={runIt} tables={tables} liveSchema={liveSchema}
+                         placeholder="select from trade where sym=`AAPL" />
           </div>
 
           <div className="query-actions">
@@ -382,7 +372,15 @@ function AnalysisPanel({ analysis, onApply }) {
 }
 
 function formatQueryError(message, targets) {
-  if (/unreachable/i.test(message) || /502/.test(message)) {
+  // A federated run's "all targets failed" also comes back as HTTP 502 when
+  // EVERY target rejected the same bad query (e.g. a real kdb+ grammar
+  // error) - that's not a connectivity problem, so don't show the
+  // "unreachable/timed out" framing for it. "query error:" is the prefix
+  // _run_one puts on a per-target q-level failure (routers/query.py) - its
+  // presence means the target answered, it just rejected the query, so the
+  // real backend message (with the actual q error) is more useful here
+  // than a made-up transit-pressure diagnosis.
+  if (!/query error:/i.test(message) && (/unreachable/i.test(message) || /502/.test(message))) {
     const targetText = targets.length > 1 ? `${targets.length} targets` : targets[0] || "gateway";
     return `Target path unavailable on ${targetText}. The gateway or shard RDB path did not answer in time. Check the Metrics page for transit pressure or switch to a live RDB target.`;
   }

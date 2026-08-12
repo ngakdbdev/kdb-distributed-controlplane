@@ -5,7 +5,7 @@ import Sparkline from "../components/Sparkline.jsx";
 import ForecastPanel from "../components/ForecastPanel.jsx";
 import { bucketOHLC, Candlestick, DepthPanel, LiveTape } from "../components/TradingVisuals.jsx";
 import { buildTimeForecast } from "../lib/timeForecast.js";
-import { fetchTradeTape, fmt, summarizePressure } from "../lib/tradingCore.js";
+import { fetchTradeTape, fmt, groupBySymbol, summarizePressure } from "../lib/tradingCore.js";
 import { loadWatchlist, saveWatchlist } from "../lib/watchlist.js";
 
 const REFRESH_MS = 1000;
@@ -264,19 +264,6 @@ export default function Markets({ onNavigate, initial }) {
 
 function Metric({ label, value, cls }) {
   return <div className="metric-card"><div className="metric-label">{label}</div><div className={`metric-value ${cls || ""}`}>{value}</div></div>;
-}
-
-function groupBySymbol(res, fallbackSymbols) {
-  const cols = res.columns || [];
-  const ti = cols.indexOf("time"), si = cols.indexOf("sym"), pi = cols.indexOf("price"), zi = cols.indexOf("size");
-  const out = {};
-  for (const sym of fallbackSymbols) out[sym] = [];
-  for (const row of res.rows || []) {
-    const sym = si >= 0 ? row[si] : fallbackSymbols[0];
-    if (!sym) continue;
-    (out[sym] = out[sym] || []).push({ time: ti >= 0 ? row[ti] : null, price: pi >= 0 ? Number(row[pi]) : null, size: zi >= 0 ? Number(row[zi]) : null });
-  }
-  return out;
 }
 
 function buildWatchRow(symbol, rows) {

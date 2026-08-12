@@ -686,12 +686,16 @@ h2, h3 { letter-spacing: -0.01em; }
 .nl2q-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
 .chip.generate { white-space: nowrap; background: var(--accent-weak); color: var(--accent); border-color: var(--accent-border); font-weight: 600; }
 .editor-wrap { position: relative; }
-.ac-pop { position: absolute; left: 0.5rem; bottom: 0.5rem; z-index: 20; display: flex; flex-wrap: wrap; gap: 0.25rem;
-  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0.4rem; box-shadow: var(--shadow-md); max-width: 90%; }
-.ac-item { display: inline-flex; align-items: center; gap: 0.35rem; font-family: ui-monospace, Menlo, monospace; font-size: 0.8rem;
-  background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 0.2rem 0.5rem; cursor: pointer; color: var(--text); }
-.ac-item:hover, .ac-item.first { border-color: var(--accent); }
-.ac-item .ac-hint { font-size: 0.62rem; background: var(--accent); color: #fff; border-radius: 4px; padding: 0 0.3rem; }
+/* CodeMirror (QueryEditor.jsx) - oneDark supplies the editor's own colors;
+   this just makes its container match the app's other inputs (border,
+   radius, focus ring) instead of CodeMirror's default flush/square look. */
+.editor-wrap .cm-editor {
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 0.9rem;
+}
+.editor-wrap .cm-editor.cm-focused { outline: none; border-color: var(--accent); }
+.editor-wrap .cm-scroller { line-height: 1.5; }
+.editor-wrap .cm-tooltip-autocomplete { border-radius: 8px; overflow: hidden; }
 
 /* ---- tickerplant monitor ---- */
 .tp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }

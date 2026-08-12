@@ -57,6 +57,39 @@ def sec_to_dt(sec) -> Optional[datetime]:
         return None
 
 
+def iso_to_dt(s) -> Optional[datetime]:
+    """RFC 3339 / ISO 8601 with a trailing 'Z' (Coinbase, Kraken v2) - the
+    zone offset stdlib fromisoformat wants instead of 'Z' pre-3.11, so swap
+    it explicitly rather than assume a Python version."""
+    if not isinstance(s, str) or not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def http_get_json(url: str, timeout: float = 20.0) -> dict:
+    """Plain GET -> parsed JSON, stdlib only. Used by the crypto providers'
+    fetch_all_symbols() to pull an exchange's REAL current instrument list
+    (its own public REST endpoint), instead of a hardcoded guess that drifts
+    out of date the moment a pair is listed or delisted."""
+    import json
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "kdb-control-plane"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode())
+
+
+def chunked(items: list, size: int):
+    """Split a list into size-N pieces, preserving order. Used to respect a
+    venue's per-connection/per-message subscription limit (e.g. Binance caps
+    a single websocket connection at 1024 streams) when the requested symbol
+    list is larger than that."""
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
 class MarketDataProvider(ABC):
     # ---- catalog metadata (subclasses override) ----
     name = "base"
@@ -79,11 +112,18 @@ class MarketDataProvider(ABC):
         import topology  # lazy: keeps the module importable without the feeds tree
         return topology.shard_of(symbol, self.shard_count)
 
-    def _publish(self, ticks: list) -> int:
-        """Route + publish a batch of Ticks. Returns how many rows went out."""
+    def _publish(self, ticks: list, publisher=None) -> int:
+        """Route + publish a batch of Ticks. Returns how many rows went out.
+        `publisher` overrides self.publisher for providers that run several
+        websocket connections concurrently in their own threads (Binance,
+        past its per-connection stream cap) - feed_common.TickerplantConnection
+        isn't thread-safe (its `.q` is a single mutable connection with no
+        locking), so those providers give each connection thread its OWN
+        publisher instead of racing on one shared one."""
+        pub = publisher if publisher is not None else self.publisher
         rows = [t.row(self._shard_of) for t in ticks if t]
         if rows:
-            self.publisher.publish_rows("trade", rows)
+            pub.publish_rows("trade", rows)
         if self._on_tick:
             for t in ticks:
                 if t:

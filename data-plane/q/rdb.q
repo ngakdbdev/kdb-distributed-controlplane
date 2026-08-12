@@ -51,20 +51,33 @@ dbDir:first .u.getarg[args;`dbdir;enlist "/data/db"]
      not null .rdb.tpHandle; .rdb.reconnectAttempts)
   }
 
+.rdb.loadOne:{[d;tbl]
+  f:` sv hsym[`$.rdb.dbDir],`$string d,tbl;
+  (tbl; @[get;f;0#value tbl])
+  }
+
+/ trade/risk are independent files, so read them off disk in parallel across
+/ secondary threads (start q with -s N; peach silently degrades to a plain
+/ each when -s is 0/unset, so this is safe either way). kdb+ doesn't support
+/ mutating globals from worker threads, so .rdb.loadOne only reads+returns -
+/ every table insert and the watermark bump happen back on the main thread
+/ once peach has collected both results.
 .rdb.loadWarm:{
   d:`date$.z.p;
-  loaded:0j;
-  {[d;tbl]
-    f:` sv hsym[`$.rdb.dbDir],`$string d,tbl;
-    rows:@[get;f;0#value tbl];
+  res:.rdb.loadOne[d] peach `trade`risk;
+  tbls:{x 0} each res;
+  rowsL:{x 1} each res;
+  {[tbl;rows]
     if[count rows;
       tbl insert rows;
-      loaded+:count rows;
-      if[null .rdb.watermark; .rdb.watermark::max rows`time; .rdb.watermark::.rdb.watermark|max rows`time];
-      -1 "[rdb ",string[.rdb.shard],"] warm-loaded ",string[count rows]," rows from ",string f;
+      -1 "[rdb ",string[.rdb.shard],"] warm-loaded ",string[count rows]," rows into ",string tbl;
       ];
-    }[d] each `trade`risk;
-  if[loaded>0; -1 "[rdb ",string[.rdb.shard],"] warm start complete (rows=",string loaded,") watermark=",string .rdb.watermark];
+    }'[tbls;rowsL];
+  times:raze {$[count x;x`time;()]} each rowsL;
+  if[count times;
+    .rdb.watermark::$[null .rdb.watermark; max times; .rdb.watermark|max times]];
+  loaded:sum count each rowsL;
+  if[loaded>0; -1 "[rdb ",string[.rdb.shard],"] warm start complete (rows=",string[loaded],") watermark=",string[.rdb.watermark]];
   }
 
 .rdb.connectTp:{
@@ -112,7 +125,21 @@ dbDir:first .u.getarg[args;`dbdir;enlist "/data/db"]
 .u.shedTo:.rdb.shedTo
 .u.eod:.rdb.eod
 
+/ .rdb.loadWarm[] peaches across whatever secondary threads -s reserved
+/ (kdb-entrypoint.sh sizes that adaptively from the container's visible
+/ CPUs - see KDB_THREADS). Once warm-start is done, the rest of this
+/ process's life is .rdb.upd on the main thread, which peach never touches -
+/ so hold the threads at full ceiling only for the recovery window, then
+/ scale back down. system"s" with no arg reads the CURRENT count, which at
+/ this point is still exactly the startup -s ceiling (nothing else has
+/ touched it yet), so this is a true post-recovery scale-down, not a guess.
+.rdb.threadCeiling:system "s";
+-1 "[rdb ",shardId,"] warm-start recovery using ",string[.rdb.threadCeiling]," secondary thread(s)";
 .rdb.loadWarm[]
+if[.rdb.threadCeiling>1;
+  system "s 1";
+  -1 "[rdb ",shardId,"] recovery complete, scaled secondary threads ",string[.rdb.threadCeiling]," -> 1";
+  ];
 
 if[not null .rdb.connectTp[]; .rdb.everConnected::1b];
 

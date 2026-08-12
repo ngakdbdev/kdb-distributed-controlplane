@@ -1,0 +1,142 @@
+{
+  "name": "tickhouse-query",
+  "displayName": "TickHouse Query",
+  "description": "Run q queries against your TickHouse control plane from VS Code - the same control-api backend that powers the web Query workspace.",
+  "version": "0.1.0",
+  "publisher": "kdb-distributed-controlplane",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:q",
+    "onCommand:tickhouse.login",
+    "onCommand:tickhouse.runSelection",
+    "onCommand:tickhouse.generate",
+    "onCommand:tickhouse.pickTarget",
+    "onCommand:tickhouse.newQueryFile"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "q",
+        "aliases": [
+          "q",
+          "kdb+"
+        ],
+        "extensions": [
+          ".q",
+          ".k"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "q",
+        "scopeName": "source.q",
+        "path": "./syntaxes/q.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "tickhouse.login",
+        "title": "TickHouse: Log In",
+        "icon": "$(key)"
+      },
+      {
+        "command": "tickhouse.logout",
+        "title": "TickHouse: Log Out"
+      },
+      {
+        "command": "tickhouse.pickTarget",
+        "title": "TickHouse: Select Target…",
+        "icon": "$(server)"
+      },
+      {
+        "command": "tickhouse.runSelection",
+        "title": "TickHouse: Run Query",
+        "icon": "$(play)"
+      },
+      {
+        "command": "tickhouse.generate",
+        "title": "TickHouse: Generate q from Plain English…",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "tickhouse.newQueryFile",
+        "title": "TickHouse: New Query File"
+      },
+      {
+        "command": "tickhouse.setApiUrl",
+        "title": "TickHouse: Set control-api URL…"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "tickhouse.runSelection",
+          "when": "editorLangId == q",
+          "group": "navigation@1"
+        },
+        {
+          "command": "tickhouse.generate",
+          "when": "editorLangId == q",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        { "command": "tickhouse.runSelection" },
+        { "command": "tickhouse.generate" },
+        { "command": "tickhouse.pickTarget" },
+        { "command": "tickhouse.login" },
+        { "command": "tickhouse.logout" },
+        { "command": "tickhouse.newQueryFile" },
+        { "command": "tickhouse.setApiUrl" }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "tickhouse.runSelection",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorLangId == q && editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "TickHouse Query",
+      "properties": {
+        "tickhouse.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "Base URL of the control-api (the same backend the web Query workspace at /query talks to)."
+        },
+        "tickhouse.defaultTarget": {
+          "type": "string",
+          "default": "gateway",
+          "description": "Query target used until you pick one with 'TickHouse: Select Target…' (gateway, an rdb-*, or a tp-*)."
+        },
+        "tickhouse.rowLimit": {
+          "type": "number",
+          "default": 1000,
+          "description": "Row limit sent with each query (mirrors the web workspace's default)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

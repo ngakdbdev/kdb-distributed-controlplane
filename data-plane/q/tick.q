@@ -66,11 +66,25 @@ if[not `TPLOG in key `.; system "mkdir -p log"]
   .u.i::0j;
   }
 
+/ NOTE: the standard kdb-tick pattern has .u.sub return (t; value t) - the
+/ table's CURRENT CONTENT - so a cold subscriber can seed its in-memory view
+/ from it instead of just future updates. Neither subscriber in THIS
+/ architecture uses that: rdb.q warm-starts from wdb's on-disk files, wdb.q
+/ warm-starts from its own db dir - both discard .u.sub's return value
+/ entirely (confirmed: grep shows zero uses of it in either). Returning
+/ `value t` here was therefore pure overhead - and a GROWING one, since t
+/ itself was never purged (see .u.doUpd below): confirmed live, tp-s0's
+/ `trade` had grown to 7M+ rows after a day's real volume, so EVERY
+/ reconnect synchronously shipped that entire table over IPC as part of the
+/ handshake. That's what was actually causing the repeated "tp connect/
+/ resubscribe failed" cycles on wdb-s0/rdb-s0 tonight (the sync call timing
+/ out or the connection resetting mid-transfer) - not a data-volume problem,
+/ a handshake-cost problem that got worse the longer the tp ran.
 .u.sub:{[t;s]
   if[not t in tables`.; '"unknown table: ",string t];
   if[not t in key .u.w; .u.w[t]:`int$()];   / typed empty handle list -> no stray null on first sub
   .u.w[t],:.z.w;
-  (t;value t)}
+  t}
 
 .u.upd:{[t;data]
   / never let a bad batch fail silently on the async path: run the real work
@@ -83,11 +97,19 @@ if[not `TPLOG in key `.; system "mkdir -p log"]
 
 .u.doUpd:{[t;data]
   / feeds send a list of rows in schema order; coerce to typed columns so a
-  / string from the wire lands in a `sym` column as a symbol, etc.
+  / string from the wire lands in a `sym` column as a symbol, etc. `tbl`
+  / only needs the table's SCHEMA (column names/types via meta) - that's
+  / unaffected by row count, so the empty typed table from schema.q works
+  / fine and there's no need to have ever accumulated rows into it.
   tbl:value t; cs:cols tbl; tc:exec t from meta tbl;
   rows:$[0h>type first data; enlist data; data];   / single row -> one-row list
   d:$[98h=type data; data; flip cs!tc$'flip rows]; / already a table? use it; else build+cast
-  t insert d;
+  / Deliberately NOT `t insert d` - the tickerplant is a pass-through, not a
+  / store: nothing here reads trade/risk's accumulated rows (.u.sub above
+  / used to, that's exactly the bug this fixes - see its comment), and
+  / letting them grow unbounded for a full trading day is a genuine, live-
+  / confirmed memory/handshake-cost problem, not a hypothetical one. The TP
+  / LOG (L below) remains the real disaster-recovery record.
   lw:.z.p; L enlist (`.u.upd;t;d); .u.logNanos+:`long$.z.p-lw; .u.logN+:1;
   .u.i+:1; .u.recv+:count d; .u.lastTs:.z.p;
   if[count w:.u.w t;

@@ -7,6 +7,16 @@ shardId:first .u.getarg[args;`shard;enlist "A_M"]
 tpHost:first .u.getarg[args;`tphost;enlist "localhost"]
 tpPort:"I"$first .u.getarg[args;`tpport;enlist "5010"]
 flushIntv:"I"$first .u.getarg[args;`flushmin;enlist "2"]
+/ how long the chained RDB keeps live data in memory, independent of how
+/ often THIS process flushes its own buffer to disk (flushmin) - defaults to
+/ flushmin for backward compatibility (old behavior: retention == flush
+/ cadence). Must be >= flushmin: RDB can only safely shed what's already
+/ been flushed to the scratch file, so asking it to retain LESS than the
+/ flush cadence would shed data that was never durably written yet.
+retentionIntv:"I"$first .u.getarg[args;`retentionmin;enlist string flushIntv]
+if[retentionIntv<flushIntv;
+  -1 "wdb: -retentionmin (",string[retentionIntv],") < -flushmin (",string[flushIntv],") - retention cannot be shorter than the flush cadence, using flushmin";
+  retentionIntv:flushIntv];
 dbDir:first .u.getarg[args;`dbdir;enlist "./db"]
 hdbDir:first .u.getarg[args;`hdbdir;enlist "./hdb"]
 idbHost:first .u.getarg[args;`idbhost;enlist ""]
@@ -20,6 +30,7 @@ hdbPort:"I"$first .u.getarg[args;`hdbport;enlist "0"]
 .wdb.idbAddr:$[count idbHost;`$":",idbHost,":",string idbPort;`]
 .wdb.hdbAddr:$[count hdbHost;`$":",hdbHost,":",string hdbPort;`]
 .wdb.flushIntv:flushIntv
+.wdb.retentionIntv:retentionIntv
 .wdb.lastWatermark:0Np
 .wdb.lastSealedDate:0Nd
 .wdb.lastFlushTime:.z.p
@@ -77,13 +88,21 @@ if[not `metrics in key `.; metrics::([] time:`timestamp$(); tbl:`symbol$(); metr
     }[cutoff] each t;
   }
 
+/ Two cutoffs, deliberately different: flushCutoff bounds THIS process's own
+/ memory (rows older than flushIntv move from wdb's buffer to the scratch
+/ file); retentionCutoff is what gets broadcast as the shed watermark, and
+/ bounds the chained RDB's memory instead (rows older than retentionIntv get
+/ deleted there). retentionIntv >= flushIntv is enforced at startup, so
+/ retentionCutoff is always <= flushCutoff - RDB is only ever told to shed
+/ data that's already safely on disk by the time it sheds it.
 .wdb.flush:{
-  cutoff:.z.p - .wdb.flushIntv * 0D00:01;
-  .wdb.flushTo[cutoff];
-  .wdb.lastWatermark::cutoff;
+  flushCutoff:.z.p - .wdb.flushIntv * 0D00:01;
+  .wdb.flushTo[flushCutoff];
+  retentionCutoff:.z.p - .wdb.retentionIntv * 0D00:01;
+  .wdb.lastWatermark::retentionCutoff;
   h:@[hopen; .wdb.tpAddr; {[e] -1 "wdb: could not reach tp to broadcast watermark: ",e; 0Ni}];
-  if[not null h; h (`.u.broadcastWatermark; cutoff); hclose h];
-  -1 "[wdb ",shardId,"] flushed at ",string cutoff;
+  if[not null h; h (`.u.broadcastWatermark; retentionCutoff); hclose h];
+  -1 "[wdb ",shardId,"] flushed at ",string[flushCutoff]," (rdb retention watermark ",string[retentionCutoff],")";
   }
 
 / seal one closed date's scratch file into a real partitioned HDB segment:

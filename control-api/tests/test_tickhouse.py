@@ -95,6 +95,27 @@ def test_validate_flags_bad_name():
     spec.name = "Bad Name!"
     assert any("name" in p for p in th.validate_spec(spec))
 
+def test_default_eod_config_has_retention_policy():
+    spec = th.auto_spec("acme", "aws", "ubuntu-22.04", "balanced", "a-z", target_config=_AWS_TC)
+    assert spec.eod_config["rdb_retention_min"] == 2
+    assert spec.eod_config["hdb_retention_days"] == 0    # keep forever by default
+    assert th.validate_spec(spec) == []
+
+def test_validate_flags_negative_rdb_retention():
+    spec = th.auto_spec("acme", "aws", "ubuntu-22.04", "balanced", "a-z")
+    spec.eod_config["rdb_retention_min"] = 0
+    assert any("rdb_retention_min" in p for p in th.validate_spec(spec))
+
+def test_validate_flags_negative_hdb_retention():
+    spec = th.auto_spec("acme", "aws", "ubuntu-22.04", "balanced", "a-z")
+    spec.eod_config["hdb_retention_days"] = -1
+    assert any("hdb_retention_days" in p for p in th.validate_spec(spec))
+
+def test_validate_allows_hdb_retention_zero_meaning_keep_forever():
+    spec = th.auto_spec("acme", "aws", "ubuntu-22.04", "balanced", "a-z", target_config=_AWS_TC)
+    spec.eod_config["hdb_retention_days"] = 0
+    assert th.validate_spec(spec) == []
+
 
 # ---- serialization round trip + provision payload ------------------------
 

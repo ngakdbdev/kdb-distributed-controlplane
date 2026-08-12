@@ -78,13 +78,23 @@ dataPlane:
 # ------------------------------------------------------ end-of-day lifecycle
 # hourUtc: which UTC hour the trading day rolls over at (0 = midnight UTC;
 # set it to an exchange's close hour instead). The tickerplant self-triggers
-# on this - no external cron dependency. retentionDays: how long idb keeps a
-# sealed day in memory after wdb has written it into the hdb before evicting
-# it. Per-TickHouse via control-api; these are the chart-level defaults.
+# on this - no external cron dependency. idb.retentionDays: how long idb
+# keeps a sealed day in memory after wdb has written it into the hdb before
+# evicting it. rdb.retentionMin: minutes of LIVE data the chained rdb keeps
+# in memory, independent of dataPlane.flushMinutes (how often wdb flushes
+# its own buffer to disk) - see data-plane/q/wdb.q's .wdb.retentionIntv.
+# hdb.retentionDays: 0 (default) keeps every sealed day forever; purging
+# HDB history is destructive (no cold-storage archive step, just delete)
+# and opt-in only, see hdb.q's .hdb.purgeOld. Per-TickHouse via control-api;
+# these are the chart-level defaults.
 eod:
   hourUtc: 0
 idb:
   retentionDays: 5
+rdb:
+  retentionMin: 2
+hdb:
+  retentionDays: 0
 
 feeds:
   bpipeRateHz: 20

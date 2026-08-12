@@ -28,11 +28,15 @@ from . import topology
 
 # `sym=`AAPL` or `sym in `AAPL`MSFT` or `sym in (`AAPL;`MSFT)` - grab whatever
 # comes after `sym =`/`sym in` up to the next comma/`by`/end of string, then
-# pull every backtick-symbol token out of that span.
+# pull every symbol literal out of that span: either a bare backtick token
+# (`AAPL) or a `$"..."` string-cast (`$"ETH-USD" - the safe form for a symbol
+# containing characters (hyphen, slash) a bare token can't hold - see
+# tradingCore.js's qSym for why the cast form exists at all.
 _SYM_CLAUSE_RE = re.compile(
     r"\bsym\s*(?:=|in)\s*([^,]*?)(?=,|\bby\b|$)", re.IGNORECASE
 )
 _SYM_TOKEN_RE = re.compile(r"`([A-Za-z0-9_.]+)")
+_SYM_CAST_RE = re.compile(r'`\$"([^"]+)"')
 
 
 def extract_syms(query: str) -> list[str] | None:
@@ -43,6 +47,7 @@ def extract_syms(query: str) -> list[str] | None:
     syms: list[str] = []
     for clause in _SYM_CLAUSE_RE.findall(query):
         syms.extend(_SYM_TOKEN_RE.findall(clause))
+        syms.extend(_SYM_CAST_RE.findall(clause))
     return sorted(set(syms)) if syms else None
 
 

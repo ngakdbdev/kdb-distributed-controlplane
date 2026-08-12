@@ -16,6 +16,16 @@ export function changePct(prices) {
   return first ? ((last - first) / first) * 100 : 0;
 }
 
+// `$"..."` casts a string to a q symbol - the only safe way to embed an
+// arbitrary symbol as a literal. A bare backtick token (`ETH-USD) is NOT
+// safe: kdb+ parses the hyphen as subtraction (`ETH minus a variable USD),
+// which throws "'USD" for any symbol containing a hyphen or, worse, silently
+// truncates at a "/" (q's comment marker) for something like BTC/USD -
+// confirmed live once crypto symbols started flowing through this table.
+function qSym(sym) {
+  return `\`$"${sym}"`;
+}
+
 /** Real trade prints for one or more symbols, routed across shard RDBs when possible. */
 export async function fetchTradeTape(symbols, limit = 1200) {
   const uniqueSymbols = [...new Set((symbols || []).filter(Boolean).map((sym) => sym.toUpperCase()))];
@@ -24,8 +34,8 @@ export async function fetchTradeTape(symbols, limit = 1200) {
   const targets = rdbTargets.length ? rdbTargets : ["gateway"];
   const sourceLabel = rdbTargets.length ? `${rdbTargets.length} RDB shards` : "gateway";
   const query = uniqueSymbols.length === 1
-    ? `select time, price, size from trade where sym=\`${uniqueSymbols[0]}`
-    : `select time, sym, price, size from trade where sym in ${uniqueSymbols.map((sym) => `\`${sym}`).join("")}`;
+    ? `select time, price, size from trade where sym=${qSym(uniqueSymbols[0])}`
+    : `select time, sym, price, size from trade where sym in (${uniqueSymbols.map(qSym).join(";")})`;
   const res = await api.runQuery({ targets, query, limit });
   return { res, sourceLabel };
 }
@@ -109,4 +119,20 @@ export function corrClass(value) {
 export function paletteColor(index) {
   const colors = ["#4c8bff", "#2dd4bf", "#f6465d", "#f2a93c", "#8b7bff", "#16c784"];
   return colors[index % colors.length];
+}
+
+/** Splits a fetchTradeTape() result into { SYM: [{time,price,size}] } - one
+ * batched query covers a whole basket, this fans the rows back out per
+ * symbol. Shared by Markets (watchlist) and Bot (multi-symbol monitoring). */
+export function groupBySymbol(res, fallbackSymbols) {
+  const cols = res.columns || [];
+  const ti = cols.indexOf("time"), si = cols.indexOf("sym"), pi = cols.indexOf("price"), zi = cols.indexOf("size");
+  const out = {};
+  for (const sym of fallbackSymbols) out[sym] = [];
+  for (const row of res.rows || []) {
+    const sym = si >= 0 ? row[si] : fallbackSymbols[0];
+    if (!sym) continue;
+    (out[sym] = out[sym] || []).push({ time: ti >= 0 ? row[ti] : null, price: pi >= 0 ? Number(row[pi]) : null, size: zi >= 0 ? Number(row[zi]) : null });
+  }
+  return out;
 }

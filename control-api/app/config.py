@@ -61,6 +61,36 @@ class Settings:
     gateway_port: int = int(os.environ.get("GATEWAY_PORT", str(topology.TIER_PORTS["gateway"])))
     gateway_timeout_sec: float = float(os.environ.get("GATEWAY_TIMEOUT_SEC", "5"))
 
+    # --- Pre-trade risk gate (app/risk_check.py) ---
+    # Default is fail-CLOSED: if the risk feed can't be reached, an order is
+    # blocked rather than let through unverified - "can't prove it's clean"
+    # is not the same as "clean". Fail-open is a real, defensible choice for
+    # some desks (an infra hiccup on a side channel isn't always a reason to
+    # halt trading) but it's a risk-policy decision, not a default a client
+    # library should make silently - so it's opt-in, explicit, and every
+    # time it actually lets a trade through unverified, that's audited.
+    risk_gate_fail_open: bool = os.environ.get("RISK_GATE_FAIL_OPEN", "false").lower() == "true"
+
+    # A SECOND, REAL check alongside the simulated CRIMS-style BREACH check
+    # above: realized volatility computed directly from the symbol's own live
+    # trade prints (app/risk_check.py's check_realized_volatility), not a
+    # fabricated signal. 0 (default) = not enforced - opt-in, like the other
+    # governance knobs here, because a universal threshold doesn't exist
+    # (crypto routinely runs far hotter than equities) and guessing one wrong
+    # would either never fire or block routine trading. Expressed as a
+    # fraction (e.g. 5.0 = 500% annualized).
+    risk_max_realized_vol_annualized: float = float(
+        os.environ.get("RISK_MAX_REALIZED_VOL_ANNUALIZED", "0"))
+
+    # --- Query cost governance (app/query_cost.py) ---
+    # 0 (default) = no budget enforced - opt-in, like the other governance
+    # knobs above. A tenant's summed query elapsed_ms over the trailing
+    # query_budget_window_hours is checked against this before each new
+    # query runs; platform admins are exempt (they're operating the
+    # platform, not consuming a tenant's allocation).
+    query_budget_ms_per_window: int = int(os.environ.get("QUERY_BUDGET_MS_PER_WINDOW", "0"))
+    query_budget_window_hours: float = float(os.environ.get("QUERY_BUDGET_WINDOW_HOURS", "1"))
+
     # --- Natural-language-to-q (app/nl2q.py, app/llm_provider.py) ---
     # "none" (default) disables the LLM path entirely - the query workspace
     # falls back to its offline regex generator, so the feature works with

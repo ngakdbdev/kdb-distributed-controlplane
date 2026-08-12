@@ -1,10 +1,28 @@
-# Pre-deployment guides
+# Documentation
+
+## Building, running, and operating the platform
+
+- [developer-guide.md](developer-guide.md) — codebase layout, where to make a
+  given kind of change, local dev workflow, testing conventions
+- [platform-usage.md](platform-usage.md) — every web UI page, what it
+  actually does, and the real constraints behind each feature
+- [tickerplant-administration.md](tickerplant-administration.md) — how the
+  q/kdb+ tick chain works, sharding, retention/EOD, thread sizing, watchdog,
+  common admin tasks
+- [troubleshooting.md](troubleshooting.md) — real incidents this deployment
+  has hit, organized by symptom, with the actual root cause and fix for each
+- [deployment-process.md](deployment-process.md) — the actual steps to stand
+  up each of the four deployment paths, in order, with what "done" looks
+  like at each step
+
+## Pre-deployment guides
 
 Four guides, one per target, meant to be worked through **before** you run anything under
 `deploy/<cloud>/` or `helm install`. Those existing scripts/charts answer "how do I stand this up";
 these guides answer "what do I need to have ready and decided first, and what will bite me later if
 I skip it." They're deliberately checklist-shaped, not tutorials — the quickstart commands still live
-in each `deploy/<cloud>/README.md` and in `helm/kdb-control-plane/values.yaml`'s own comments.
+in each `deploy/<cloud>/README.md`, in `helm/kdb-control-plane/values.yaml`'s own comments, and now
+in [deployment-process.md](deployment-process.md) above.
 
 - [predeploy-aws.md](predeploy-aws.md) — single-VM demo on EC2
 - [predeploy-gcp.md](predeploy-gcp.md) — single-VM demo on Compute Engine

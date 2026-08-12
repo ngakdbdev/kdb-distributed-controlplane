@@ -54,6 +54,10 @@ def render_helm_sets(desired: dict) -> list:
         sets.append(f"eod.hourUtc={eod['eod_hour_utc']}")
     if "idb_retention_days" in eod:
         sets.append(f"idb.retentionDays={eod['idb_retention_days']}")
+    if "rdb_retention_min" in eod:
+        sets.append(f"rdb.retentionMin={eod['rdb_retention_min']}")
+    if "hdb_retention_days" in eod:
+        sets.append(f"hdb.retentionDays={eod['hdb_retention_days']}")
 
     for comp in desired.get("components", []):
         hw = comp.get("hardware") or {}

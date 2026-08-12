@@ -25,7 +25,8 @@ def no_real_risk_feed(monkeypatch):
     there is one (e.g. run inside the deployed container), a real BREACH row
     for a test symbol would make these flaky. Default every test to "not
     blocked"; individual tests override this to exercise the block path."""
-    monkeypatch.setattr(trading_router.risk_check, "check_pretrade", lambda symbol: None)
+    monkeypatch.setattr(trading_router.risk_check, "check_pretrade",
+                        lambda symbol: risk_check.CheckResult(block_reason=None))
 
 
 # ---- greeks (Black-Scholes) ----------------------------------------------
@@ -130,7 +131,8 @@ def test_risk_check_passes_when_no_breach(monkeypatch):
         "columns": ["time", "sym", "riskType", "limit", "exposure", "status", "shard"],
         "rows": [[1, "AAPL", "VAR", 1000000, 500000, "OK", "s0"]],
     })
-    assert risk_check.check_pretrade("AAPL", connect=lambda: object()) is None
+    result = risk_check.check_pretrade("AAPL", connect=lambda symbol: object())
+    assert result.block_reason is None and not result.degraded
 
 def test_risk_check_blocks_on_breach(monkeypatch):
     monkeypatch.setattr(risk_check, "check_pretrade", _REAL_CHECK_PRETRADE)
@@ -138,14 +140,116 @@ def test_risk_check_blocks_on_breach(monkeypatch):
         "columns": ["time", "sym", "riskType", "limit", "exposure", "status", "shard"],
         "rows": [[1, "AAPL", "VAR", 1000000, 1200000, "BREACH", "s0"]],
     })
-    reason = risk_check.check_pretrade("AAPL", connect=lambda: object())
-    assert reason and "BREACH" in reason
+    result = risk_check.check_pretrade("AAPL", connect=lambda symbol: object())
+    assert result.block_reason and "BREACH" in result.block_reason
+    assert not result.degraded  # a verified read, not a degraded/unreachable one
 
-def test_risk_check_fails_open_when_feed_unreachable(monkeypatch):
+
+def _boom(symbol):
+    raise ConnectionRefusedError("no gateway")
+
+
+def test_risk_check_fails_closed_by_default_when_feed_unreachable(monkeypatch):
+    """Default policy (Settings.risk_gate_fail_open=False): an unreachable
+    risk feed BLOCKS the order - "couldn't verify" is not "verified clean"."""
     monkeypatch.setattr(risk_check, "check_pretrade", _REAL_CHECK_PRETRADE)
-    def _boom():
-        raise ConnectionRefusedError("no gateway")
-    assert risk_check.check_pretrade("AAPL", connect=_boom) is None
+    result = risk_check.check_pretrade("AAPL", connect=_boom, fail_open=False)
+    assert result.block_reason and "unreachable" in result.block_reason
+    assert result.degraded
+
+def test_risk_check_fails_open_when_explicitly_configured(monkeypatch):
+    """fail_open=True (RISK_GATE_FAIL_OPEN) is the opt-in override - order
+    proceeds, but still flagged degraded so the caller can audit it."""
+    monkeypatch.setattr(risk_check, "check_pretrade", _REAL_CHECK_PRETRADE)
+    result = risk_check.check_pretrade("AAPL", connect=_boom, fail_open=True)
+    assert result.block_reason is None
+    assert result.degraded
+
+def test_risk_check_default_policy_comes_from_settings(monkeypatch):
+    """No explicit fail_open passed -> falls back to the deployment's
+    configured policy, not a hardcoded default inside the function."""
+    monkeypatch.setattr(risk_check, "check_pretrade", _REAL_CHECK_PRETRADE)
+    monkeypatch.setattr(risk_check._settings, "risk_gate_fail_open", True)
+    result = risk_check.check_pretrade("AAPL", connect=_boom)
+    assert result.block_reason is None and result.degraded
+
+
+# ---- real, live-data volatility check (alongside the simulated CRIMS one) -
+
+def _fake_run_query_for(risk_row, prices):
+    """Distinguishes the risk-table lookup from the trade-price lookup by
+    query text, the same way the real q processes are distinguished by which
+    table each query names."""
+    def fn(q, conn, limit=None):
+        if "from risk" in q:
+            return {"columns": ["time", "sym", "riskType", "limit", "exposure", "status", "shard"],
+                    "rows": [risk_row] if risk_row else []}
+        return {"columns": ["price"], "rows": [[p] for p in prices]}
+    return fn
+
+
+def test_volatility_check_disabled_by_default_does_not_query_prices(monkeypatch):
+    calls = []
+    monkeypatch.setattr(risk_check.qs, "run_query",
+                        lambda q, conn, limit=None: (calls.append(q), {"columns": [], "rows": []})[1])
+    result = risk_check.check_realized_volatility("AAPL", connect=lambda s: object())
+    assert result.block_reason is None
+    assert calls == []  # short-circuited before touching qs.run_query at all
+
+
+def test_volatility_check_blocks_on_extreme_moves(monkeypatch):
+    # a violent sawtooth over a handful of prints -> huge realized vol
+    prices = [100, 140, 90, 150, 80, 160, 70]
+    monkeypatch.setattr(risk_check.qs, "run_query",
+                        lambda q, conn, limit=None: {"columns": ["price"], "rows": [[p] for p in prices]})
+    result = risk_check.check_realized_volatility("AAPL", connect=lambda s: object(), max_annualized=1.0)
+    assert result.block_reason and "realized volatility" in result.block_reason
+    assert result.realized_vol_annualized > 1.0
+
+
+def test_volatility_check_passes_under_threshold(monkeypatch):
+    prices = [100.0, 100.1, 100.0, 100.05, 100.02, 100.03]
+    monkeypatch.setattr(risk_check.qs, "run_query",
+                        lambda q, conn, limit=None: {"columns": ["price"], "rows": [[p] for p in prices]})
+    result = risk_check.check_realized_volatility("AAPL", connect=lambda s: object(), max_annualized=5.0)
+    assert result.block_reason is None
+    assert result.realized_vol_annualized is not None
+
+
+def test_volatility_check_unreachable_does_not_block(monkeypatch):
+    """This is a supplementary signal, not the fail-closed backstop (that's
+    the CRIMS check) - a live-data hiccup here must not itself halt trading."""
+    monkeypatch.setattr(risk_check.qs, "run_query",
+                        lambda q, conn, limit=None: (_ for _ in ()).throw(ConnectionRefusedError("down")))
+    result = risk_check.check_realized_volatility("AAPL", connect=lambda s: object(), max_annualized=1.0)
+    assert result.block_reason is None
+    assert result.degraded
+
+
+def test_pretrade_runs_volatility_check_when_crims_is_clean(monkeypatch):
+    monkeypatch.setattr(risk_check, "check_pretrade", _REAL_CHECK_PRETRADE)
+    monkeypatch.setattr(risk_check._settings, "risk_max_realized_vol_annualized", 1.0)
+    monkeypatch.setattr(risk_check.qs, "run_query", _fake_run_query_for(
+        risk_row=[1, "AAPL", "VAR", 1000000, 500000, "OK", "s0"],
+        prices=[100, 140, 90, 150, 80, 160, 70]))
+    result = risk_check.check_pretrade("AAPL", connect=lambda s: object())
+    assert result.block_reason and "realized volatility" in result.block_reason
+
+
+def test_pretrade_crims_breach_short_circuits_before_volatility_check(monkeypatch):
+    """A CRIMS BREACH blocks immediately - the volatility check (and its own
+    extra IPC round-trip) never needs to run."""
+    monkeypatch.setattr(risk_check, "check_pretrade", _REAL_CHECK_PRETRADE)
+    monkeypatch.setattr(risk_check._settings, "risk_max_realized_vol_annualized", 1.0)
+    calls = []
+    def fn(q, conn, limit=None):
+        calls.append(q)
+        return {"columns": ["time", "sym", "riskType", "limit", "exposure", "status", "shard"],
+                "rows": [[1, "AAPL", "VAR", 1000000, 1200000, "BREACH", "s0"]]}
+    monkeypatch.setattr(risk_check.qs, "run_query", fn)
+    result = risk_check.check_pretrade("AAPL", connect=lambda s: object())
+    assert result.block_reason and "BREACH" in result.block_reason
+    assert len(calls) == 1  # only the risk-table lookup, no trade-price lookup
 
 
 # ---- endpoints ------------------------------------------------------------
@@ -242,7 +346,8 @@ def test_match_endpoint_fills_a_crossed_resting_order(client, tadmin):
 
 def test_order_blocked_by_pretrade_risk_breach(client, tadmin, monkeypatch):
     monkeypatch.setattr(trading_router.risk_check, "check_pretrade",
-                        lambda symbol: f"pre-trade risk check failed: {symbol} is in BREACH")
+                        lambda symbol: risk_check.CheckResult(
+                            block_reason=f"pre-trade risk check failed: {symbol} is in BREACH"))
     r = client.post("/trading/orders", headers=tadmin,
                     json={"symbol": "TSLA", "side": "buy", "qty": 10,
                           "order_type": "market", "ref_price": 200.0})

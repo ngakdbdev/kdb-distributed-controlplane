@@ -36,11 +36,26 @@ def snapshot():
 
 @router.websocket("/stream")
 async def stream(ws: WebSocket):
-    """Pushes a fresh snapshot every second - the dashboard's live feed."""
+    """Pushes a fresh snapshot every second - the dashboard's live feed.
+
+    _snapshot() makes synchronous kdb+ IPC calls (kdb_client.GatewayClient
+    is plain blocking qpython, up to gateway_timeout_sec per call, several
+    calls per snapshot). Calling it directly here would block THIS
+    process's single asyncio event loop for however long the gateway takes
+    to answer - freezing every other concurrent request (every page's HTTP
+    calls, every other client's metrics stream) for as long as one slow or
+    hanging gateway call takes, not just this one dashboard. asyncio.to_thread
+    runs it on a worker thread instead, so a slow/unresponsive gateway
+    degrades to a stale metrics tick, not a frozen server. (The plain GET
+    /metrics/snapshot above doesn't need this - FastAPI already runs a
+    sync `def` route handler in a thread pool automatically; only an
+    `async def` websocket handler has to opt in explicitly.)
+    """
     await ws.accept()
     try:
         while True:
-            await ws.send_json(_snapshot())
+            snapshot = await asyncio.to_thread(_snapshot)
+            await ws.send_json(snapshot)
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         log.info("metrics stream client disconnected")

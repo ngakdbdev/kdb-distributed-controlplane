@@ -25,6 +25,16 @@ def _bpipe_connector(client, tadmin):
     return next(c for c in connectors if c["service_name"] == "bpipe-sim")
 
 
+def test_real_provider_feeds_are_registered_connectors(client, tadmin):
+    connectors = {c["service_name"]: c for c in client.get("/connectors", headers=tadmin).json()}
+    for svc in ("finnhub-feed", "twelvedata-feed", "coinbase-feed", "kraken-feed",
+               "binance-feed", "bybit-feed", "okx-feed"):
+        assert svc in connectors, f"{svc} not registered as a Connector"
+        assert connectors[svc]["enabled"] is False   # opt-in default, same as bpipe-sim/crims-sim
+    assert connectors["coinbase-feed"]["kind"] == "crypto"
+    assert connectors["finnhub-feed"]["kind"] == "equities"
+
+
 def test_list_connectors_defaults_to_empty_symbol_group(client, tadmin):
     c = _bpipe_connector(client, tadmin)
     assert c["symbols"] == []   # unscoped == full built-in universe, unchanged default
