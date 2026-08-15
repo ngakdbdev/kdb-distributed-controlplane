@@ -81,3 +81,66 @@ def test_polling_run_once_tolerates_fetch_failure():
         raise RuntimeError("network down")
     prov = get_provider("yahoo")(["AAPL"], FakePublisher(), shard_count=2, fetch=boom)
     assert prov.run_once() == 0             # logged, not raised
+
+
+# ---- IBKR (conid resolution + snapshot polling) ----------------------------
+
+def _ibkr_fetch(conid_by_symbol, snapshot_by_conid):
+    """Fake CPAPI: routes /iserver/secdef/search (conid lookup) and
+    /iserver/marketdata/snapshot (quote poll) to canned responses, the same
+    two real endpoints ibkr.py actually calls."""
+    def fetch(url):
+        if "/iserver/secdef/search" in url:
+            sym = url.split("symbol=")[1].split("&")[0]
+            conid = conid_by_symbol.get(sym)
+            return [{"conid": conid}] if conid else []
+        if "/iserver/marketdata/snapshot" in url:
+            conids = [int(c) for c in url.split("conids=")[1].split("&")[0].split(",")]
+            return [snapshot_by_conid[c] for c in conids if c in snapshot_by_conid]
+        raise AssertionError(f"unexpected URL: {url}")
+    return fetch
+
+
+def test_ibkr_resolves_conid_then_polls_snapshot():
+    fetch = _ibkr_fetch(
+        conid_by_symbol={"AAPL": 265598},
+        snapshot_by_conid={265598: {"conid": 265598, "31": "180.23", "87": "1000"}},
+    )
+    pub = FakePublisher()
+    prov = get_provider("ibkr")(["AAPL"], pub, shard_count=2, fetch=fetch)
+    n = prov.run_once()
+    assert n == 1
+    assert pub.rows[0][1] == "AAPL" and pub.rows[0][2] == 180.23 and pub.rows[0][3] == 1000
+    assert pub.rows[0][5] == "ibkr"
+
+
+def test_ibkr_caches_conid_across_polls_only_one_lookup():
+    lookups = []
+
+    def fetch(url):
+        if "/iserver/secdef/search" in url:
+            lookups.append(url)
+            return [{"conid": 265598}]
+        return [{"conid": 265598, "31": "180.0", "87": "1"}]
+
+    prov = get_provider("ibkr")(["AAPL"], FakePublisher(), shard_count=2, fetch=fetch)
+    prov.run_once()
+    prov.run_once()
+    assert len(lookups) == 1  # resolved once, cached for the second poll
+
+
+def test_ibkr_symbol_that_fails_to_resolve_is_skipped_not_fatal():
+    fetch = _ibkr_fetch(conid_by_symbol={}, snapshot_by_conid={})
+    prov = get_provider("ibkr")(["NOPE"], FakePublisher(), shard_count=2, fetch=fetch)
+    assert prov.run_once() == 0
+
+
+def test_ibkr_defaults_gateway_url_when_unset():
+    prov = get_provider("ibkr")(["AAPL"], FakePublisher(), shard_count=2)
+    assert prov.gateway_base_url == "https://localhost:5000/v1/api"
+
+
+def test_ibkr_uses_configured_gateway_url():
+    prov = get_provider("ibkr")(["AAPL"], FakePublisher(), shard_count=2,
+                                gateway_base_url="https://ibeam:5000/v1/api")
+    assert prov.gateway_base_url == "https://ibeam:5000/v1/api"

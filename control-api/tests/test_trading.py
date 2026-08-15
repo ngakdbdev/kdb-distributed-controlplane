@@ -112,6 +112,181 @@ def test_broker_router_refuses():
     with pytest.raises(oms.OrderRoutingNotConfigured):
         oms.BrokerRouter().fill("buy", 10, "market", 100, None)
 
+
+class _FakeAlpacaClient:
+    """Stands in for alpaca_broker.AlpacaClient - no network, no import of
+    the real HTTP plumbing needed to test oms.AlpacaRouter's own logic."""
+    def __init__(self, filled_price=180.5, filled_qty=None, raise_on_submit=None, raise_on_wait=None):
+        self.filled_price = filled_price
+        self.filled_qty = filled_qty
+        self.raise_on_submit = raise_on_submit
+        self.raise_on_wait = raise_on_wait
+        self.submitted = None
+
+    def submit_order(self, **kwargs):
+        if self.raise_on_submit:
+            raise self.raise_on_submit
+        self.submitted = kwargs
+        return {"id": "order-1", "status": "accepted"}
+
+    def wait_for_fill(self, order_id):
+        if self.raise_on_wait:
+            raise self.raise_on_wait
+        return {"id": order_id, "status": "filled",
+                "filled_avg_price": str(self.filled_price),
+                "filled_qty": str(self.filled_qty if self.filled_qty is not None else 10)}
+
+
+def test_alpaca_router_needs_a_symbol():
+    with pytest.raises(oms.OrderError, match="needs a symbol"):
+        oms.AlpacaRouter(_FakeAlpacaClient()).fill("buy", 10, "market", 100, None)
+
+
+def test_alpaca_router_submits_and_waits_then_returns_the_real_fill():
+    client = _FakeAlpacaClient(filled_price=180.5, filled_qty=10)
+    router = oms.AlpacaRouter(client, live=False)
+    fill = router.fill("buy", 10, "market", 100, None, symbol="AAPL")
+    assert fill.price == 180.5
+    assert fill.qty == 10
+    assert fill.route == "alpaca-paper"
+    assert client.submitted["symbol"] == "AAPL"
+    assert client.submitted["side"] == "buy"
+
+
+def test_alpaca_router_live_flag_sets_route_name():
+    router = oms.AlpacaRouter(_FakeAlpacaClient(), live=True)
+    fill = router.fill("buy", 1, "market", 100, None, symbol="AAPL")
+    assert fill.route == "alpaca-live"
+
+
+def test_alpaca_router_wraps_submit_failures_as_order_error():
+    client = _FakeAlpacaClient(raise_on_submit=RuntimeError("network down"))
+    with pytest.raises(oms.OrderError, match="alpaca order failed"):
+        oms.AlpacaRouter(client).fill("buy", 1, "market", 100, None, symbol="AAPL")
+
+
+def test_alpaca_router_wraps_fill_wait_failures_as_order_error():
+    client = _FakeAlpacaClient(raise_on_wait=RuntimeError("order rejected"))
+    with pytest.raises(oms.OrderError, match="alpaca order failed"):
+        oms.AlpacaRouter(client).fill("buy", 1, "market", 100, None, symbol="AAPL")
+
+
+# ---- trading.py's router selection (_router()) - the safe-by-default seam -
+
+def test_router_selection_defaults_to_internal_paper_router_when_unconfigured():
+    # no Alpaca env vars set anywhere in this test run (see conftest/env) -
+    # must be the exact same PaperRouter instance the module always used,
+    # not a new/different one, so nothing about existing behavior changes.
+    assert trading_router._router() is trading_router._PAPER
+
+
+def test_router_selection_switches_to_alpaca_when_configured(monkeypatch):
+    monkeypatch.setenv("ALPACA_TRADING_MODE", "paper")
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    router = trading_router._router()
+    assert isinstance(router, oms.AlpacaRouter)
+    assert router.route_name == "alpaca-paper"
+
+
+def test_router_selection_switches_to_ibkr_when_configured(monkeypatch):
+    monkeypatch.setenv("IBKR_TRADING_MODE", "paper")
+    router = trading_router._router()
+    assert isinstance(router, oms.IBKRRouter)
+    assert router.route_name == "ibkr-paper"
+
+
+def test_router_selection_refuses_when_both_brokers_configured(monkeypatch):
+    monkeypatch.setenv("ALPACA_TRADING_MODE", "paper")
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    monkeypatch.setenv("IBKR_TRADING_MODE", "paper")
+    with pytest.raises(oms.OrderError, match="both Alpaca and IBKR"):
+        trading_router._router()
+
+
+def test_permission_endpoint_reports_misconfigured_instead_of_500ing(client, tadmin, monkeypatch):
+    monkeypatch.setenv("ALPACA_TRADING_MODE", "paper")
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    monkeypatch.setenv("IBKR_TRADING_MODE", "paper")
+    r = client.get("/trading/permission", headers=tadmin)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mode"] == "misconfigured"
+    assert body["live_routing"] is False
+    assert "both Alpaca and IBKR" in body["error"]
+
+
+# ---- oms.IBKRRouter ---------------------------------------------------------
+
+class _FakeIBKRClient:
+    def __init__(self, filled_price=180.5, account_id="DU1234567", raise_on_submit=None):
+        self.filled_price = filled_price
+        self._account_id = account_id
+        self.raise_on_submit = raise_on_submit
+        self.submitted = None
+
+    def primary_account_id(self):
+        return self._account_id
+
+    def resolve_conid(self, symbol):
+        return 265598 if symbol == "AAPL" else None
+
+    def submit_order(self, account_id, conid, side, qty, **kwargs):
+        if self.raise_on_submit:
+            raise self.raise_on_submit
+        self.submitted = {"account_id": account_id, "conid": conid, "side": side, "qty": qty, **kwargs}
+        return {"order_id": "abc123", "order_status": "Submitted"}
+
+    def wait_for_fill(self, order_id):
+        return {"order_id": order_id, "order_status": "Filled", "avg_price": str(self.filled_price)}
+
+
+def test_ibkr_router_needs_a_symbol():
+    with pytest.raises(oms.OrderError, match="needs a symbol"):
+        oms.IBKRRouter(_FakeIBKRClient(), mode="paper").fill("buy", 10, "market", 100, None)
+
+
+def test_ibkr_router_places_and_returns_real_fill():
+    client = _FakeIBKRClient(filled_price=180.5)
+    router = oms.IBKRRouter(client, mode="paper")
+    fill = router.fill("buy", 10, "market", 100, None, symbol="AAPL")
+    assert fill.price == 180.5
+    assert fill.qty == 10
+    assert fill.route == "ibkr-paper"
+    assert client.submitted["conid"] == 265598
+    assert client.submitted["account_id"] == "DU1234567"
+
+
+def test_ibkr_router_refuses_on_account_mode_mismatch():
+    # paper mode configured, but the connected account looks like a live one
+    client = _FakeIBKRClient(account_id="U1234567")
+    router = oms.IBKRRouter(client, mode="paper")
+    with pytest.raises(oms.OrderError, match="doesn't look like a paper account"):
+        router.fill("buy", 10, "market", 100, None, symbol="AAPL")
+
+
+def test_ibkr_router_refuses_when_conid_cannot_be_resolved():
+    client = _FakeIBKRClient()
+    router = oms.IBKRRouter(client, mode="paper")
+    with pytest.raises(oms.OrderError, match="ibkr order failed"):
+        router.fill("buy", 10, "market", 100, None, symbol="UNKNOWN")
+
+
+def test_ibkr_router_wraps_submit_failures_as_order_error():
+    client = _FakeIBKRClient(raise_on_submit=RuntimeError("gateway down"))
+    router = oms.IBKRRouter(client, mode="paper")
+    with pytest.raises(oms.OrderError, match="ibkr order failed"):
+        router.fill("buy", 10, "market", 100, None, symbol="AAPL")
+
+
+def test_ibkr_router_live_mode_route_name():
+    client = _FakeIBKRClient(account_id="U1234567")
+    router = oms.IBKRRouter(client, mode="live")
+    fill = router.fill("buy", 1, "market", 100, None, symbol="AAPL")
+    assert fill.route == "ibkr-live"
+
 def test_crosses_buy_limit():
     assert oms.crosses("buy", limit_price=100, market_price=99)    # market at/below -> crosses
     assert oms.crosses("buy", limit_price=100, market_price=100)

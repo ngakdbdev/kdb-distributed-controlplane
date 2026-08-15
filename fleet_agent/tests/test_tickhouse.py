@@ -31,7 +31,7 @@ class SpecBackend:
     def current_shard_count(self):
         return None
 
-    def reconcile(self, n):
+    def reconcile(self, n, gateway_replicas=None):
         return ReconcileResult(ok=True, shard_count=n, detail="count path")
 
     def reconcile_spec(self, desired):
@@ -60,7 +60,7 @@ def test_simple_shardcount_still_uses_count_path():
 def test_spec_provision_needs_backend_support():
     class NoSpec:
         def current_shard_count(self): return None
-        def reconcile(self, n): return ReconcileResult(ok=True, shard_count=n, detail="")
+        def reconcile(self, n, gateway_replicas=None): return ReconcileResult(ok=True, shard_count=n, detail="")
         def teardown(self): return ReconcileResult(ok=True, detail="")
     res = Provisioner(NoSpec()).provision(_spec_payload())
     assert not res.ok and "does not support" in res.detail
@@ -105,12 +105,58 @@ def test_render_compose_env():
     assert env["TH_PROFILE"] == "low-latency"
 
 
+def test_render_helm_sets_cpu_pinning_tuning_sets_guaranteed_qos():
+    # "cpu-pinning" in a component's tuning (the low-latency profile's
+    # default - see tickhouse.py's _PROFILE_TUNING) must set limits.cpu equal
+    # to requests.cpu, not just requests.cpu alone - that's what makes the
+    # pod Guaranteed-QoS-eligible for the kubelet's static CPUManager. A
+    # component WITHOUT "cpu-pinning" in its tuning must NOT get a limits.cpu
+    # override (that would silently change resourcing for profiles that
+    # never asked for pinning).
+    payload = _spec_payload()["desired"]
+    payload["components"][0]["hardware"]["tuning"] = ["cpu-pinning", "core-isolation"]
+    joined = "\n".join(tr.render_helm_sets(payload))
+    assert "resources.tickerplant.limits.cpu=8" in joined
+    assert "resources.gateway.limits.cpu" not in joined  # gateway's hardware has no tuning set
+
+
+def test_render_helm_sets_numa_node_sets_node_selector():
+    payload = _spec_payload()["desired"]
+    payload["components"][0]["hardware"]["numa_node"] = "0"
+    joined = "\n".join(tr.render_helm_sets(payload))
+    assert "nodeSelectors.tickerplant.numa-node=0" in joined
+
+
+def test_render_helm_sets_no_pinning_fields_emits_neither():
+    # the common case (no NUMA fields set at all) must change nothing -
+    # HardwareSpec.cpuset/numa_node default to "" precisely so this stays
+    # a no-op until an operator explicitly opts in.
+    joined = "\n".join(tr.render_helm_sets(_spec_payload()["desired"]))
+    assert "limits.cpu" not in joined
+    assert "nodeSelectors" not in joined
+
+
+def test_render_compose_env_cpuset_passthrough_for_supported_components():
+    payload = _spec_payload()["desired"]
+    payload["components"][0]["hardware"]["cpuset"] = "0-3"
+    payload["components"][0]["hardware"]["numa_node"] = "0"
+    env = tr.render_compose_env(payload)
+    assert env["TP_CPUSET"] == "0-3"
+    assert env["TP_NUMA_NODE"] == "0"
+
+
+def test_render_compose_env_omits_pinning_when_unset():
+    env = tr.render_compose_env(_spec_payload()["desired"])
+    assert "TP_CPUSET" not in env
+    assert "TP_NUMA_NODE" not in env
+
+
 # ---- KX installer plan ----------------------------------------------------
 
 def test_kx_installer_plan_is_ordered_and_covers_licence_and_verify():
     inst = KxInstaller(KxInstallConfig(
         binary_url="https://artifacts.example.com/kx/q-linux.tgz",
-        license_path="/run/secrets/k4.lic", install_dir="/opt/kx", qhome="/opt/kx/q"))
+        license_path="/run/secrets/kc.lic", install_dir="/opt/kx", qhome="/opt/kx/q"))
     labels = [label for label, _ in inst.plan()]
     assert labels[0] == "make install dir"
     assert "download KX binary" in labels

@@ -5,6 +5,11 @@ how to run the pieces locally while you work on them. For "what do I need to
 prepare before deploying," see `docs/README.md`'s pre-deployment guides
 instead — this is about developing the platform itself.
 
+**New to this codebase?** This is reference material, not a tutorial - it
+assumes you already have the stack running and know what a tickerplant/
+shard/RDB is. If either of those isn't true yet, read
+[getting-started.md](getting-started.md) first.
+
 ## Repository layout
 
 ```

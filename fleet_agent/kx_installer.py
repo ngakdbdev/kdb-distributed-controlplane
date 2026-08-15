@@ -49,7 +49,7 @@ def kx_arch_for_os(os_type: str) -> str:
 
 @dataclass
 class KxInstallConfig:
-    license_path: str = ""              # path to k4.lic/kc.lic on the box (a mounted secret)
+    license_path: str = ""              # path to kc.lic on the box (a mounted secret)
     install_dir: str = "/opt/kx"
     qhome: str = "/opt/kx/q"
     os_type: str = "linux"              # linux-based target (per requirement)
@@ -137,7 +137,7 @@ class KxInstaller:
             ]
 
         steps += [
-            ("install licence", ["cp", c.license_path, f"{q}/k4.lic"]),
+            ("install licence", ["cp", c.license_path, f"{q}/kc.lic"]),
             ("mark q executable", ["chmod", "+x", f"{q}/{arch}/q"]),
             ("verify", [f"{q}/{arch}/q", "-c", "1", "1"]),   # trivial exit proves q + licence load
         ]

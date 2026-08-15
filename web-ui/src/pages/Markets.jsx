@@ -3,7 +3,7 @@ import { api } from "../api.js";
 import SymbolPicker from "../components/SymbolPicker.jsx";
 import Sparkline from "../components/Sparkline.jsx";
 import ForecastPanel from "../components/ForecastPanel.jsx";
-import { bucketOHLC, Candlestick, DepthPanel, LiveTape } from "../components/TradingVisuals.jsx";
+import { bucketOHLC, Candlestick, DepthPanel, LiveTape, MacdPanel } from "../components/TradingVisuals.jsx";
 import { buildTimeForecast } from "../lib/timeForecast.js";
 import { fetchTradeTape, fmt, groupBySymbol, summarizePressure } from "../lib/tradingCore.js";
 import { loadWatchlist, saveWatchlist } from "../lib/watchlist.js";
@@ -33,6 +33,7 @@ export default function Markets({ onNavigate, initial }) {
   const [queryHealth, setQueryHealth] = useState({ status: "idle", message: "Waiting for query path…" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [indicators, setIndicators] = useState({ ema9: true, ema21: false, bb: false, macd: false });
 
   useEffect(() => { saveWatchlist(syms); }, [syms]);
   useEffect(() => { if (!syms.includes(focus)) setFocus(syms[0] || ""); }, [syms, focus]);
@@ -232,8 +233,27 @@ export default function Markets({ onNavigate, initial }) {
       {focusRows.length > 0 && (
         <div className="card">
           <div className="section-head"><h3>Symbol drilldown</h3><span className="muted">{focus}</span></div>
+          <div className="indicator-row">
+            <button className={`chip ${indicators.ema9 ? "indicator-active" : ""}`}
+                    onClick={() => setIndicators((i) => ({ ...i, ema9: !i.ema9 }))}>EMA 9</button>
+            <button className={`chip ${indicators.ema21 ? "indicator-active" : ""}`}
+                    onClick={() => setIndicators((i) => ({ ...i, ema21: !i.ema21 }))}>EMA 21</button>
+            <button className={`chip ${indicators.bb ? "indicator-active" : ""}`}
+                    onClick={() => setIndicators((i) => ({ ...i, bb: !i.bb }))}>BB 20 2</button>
+            <button className={`chip ${indicators.macd ? "indicator-active" : ""}`}
+                    onClick={() => setIndicators((i) => ({ ...i, macd: !i.macd }))}>MACD 12 26 9</button>
+          </div>
           <div className="drilldown-grid">
-            <Candlestick bars={bucketOHLC(focusRows, 5000)} height={220} />
+            <div>
+              <Candlestick bars={bucketOHLC(focusRows, 5000)} height={220} showBollinger={indicators.bb}
+                          emaPeriods={[indicators.ema9 && 9, indicators.ema21 && 21].filter(Boolean)} />
+              {indicators.macd && (
+                <>
+                  <div className="macd-label">MACD (12, 26, close, 9 EMA)</div>
+                  <MacdPanel bars={bucketOHLC(focusRows, 5000)} height={90} />
+                </>
+              )}
+            </div>
             <div className="drilldown-stats">
               <div className="drill-row"><span>Last print</span><b>{fmt(market?.last)}</b></div>
               <div className="drill-row"><span>Session change</span><b className={market?.change >= 0 ? "up" : "down"}>{fmt(market?.change)} ({fmt(market?.change_pct)}%)</b></div>

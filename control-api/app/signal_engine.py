@@ -17,10 +17,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import Callable, Optional
 
 from sqlmodel import Session, select
 
+from . import alpaca_broker
 from . import oms
 from . import query_service as qs
 from . import topology
@@ -42,6 +44,35 @@ TAPE_LIMIT_PER_SHARD = 1200
 _SHARD_COUNT = int(os.environ.get("SHARD_COUNT", "2"))
 
 ConnectFn = Callable[[str], object]
+
+# How long a broker-tradability check is trusted before re-checking - an
+# asset's tradable status doesn't change minute to minute, and this module
+# runs on a tight poll (bot_scheduler.py's BOT_POLL_SEC, ~12s). Confirmed
+# live: without this cache, a symbol the broker rejects gets re-checked -
+# and, without the check at all, re-ATTEMPTED as a real doomed order - on
+# literally every single poll, forever.
+_TRADABILITY_TTL_SEC = 3600
+_tradability_cache: dict[str, tuple[bool, float]] = {}
+
+
+def _is_broker_tradable(symbol: str) -> bool:
+    """True if there's no real broker to check against (PaperRouter accepts
+    any symbol) or the configured broker confirms it lists this one. This
+    platform's own auto-mode screens the cluster's ACTUAL live symbol
+    universe, which includes symbols from simulated/demo feeds that were
+    never meant to be tradable anywhere real - without this check, the bot
+    would keep trying to open a real Alpaca position in one of those and
+    getting rejected, forever, one wasted order attempt per poll."""
+    client = alpaca_broker.client_from_env()
+    if client is None:
+        return True
+    now = time.monotonic()
+    cached = _tradability_cache.get(symbol)
+    if cached is not None and (now - cached[1]) < _TRADABILITY_TTL_SEC:
+        return cached[0]
+    tradable = client.is_tradable(symbol)
+    _tradability_cache[symbol] = (tradable, now)
+    return tradable
 
 
 def _connect_shard(shard_id: str):
@@ -225,6 +256,11 @@ def evaluate_tenant(session: Session, config: BotConfig, connect: ConnectFn = _c
             if forecast["trend"] != "up":
                 _log(session, tenant_id, symbol, "hold",
                     f"flat, trend is {forecast['trend']} - waiting for momentum up")
+                continue
+
+            if not _is_broker_tradable(symbol):
+                _log(session, tenant_id, symbol, "skip",
+                    f"{symbol} isn't tradable on the configured broker - not attempting an order")
                 continue
 
             stop_price = last * (1 - stop_loss_pct / 100.0)

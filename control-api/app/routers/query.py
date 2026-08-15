@@ -11,6 +11,7 @@ lives in-cluster). Targets/host resolution here come from env + topology.
 """
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
@@ -41,14 +42,33 @@ _GW_PORT = int(os.environ.get("QUERY_GATEWAY_PORT", "5050"))
 _SHARD_COUNT = int(os.environ.get("QUERY_SHARD_COUNT", os.environ.get("SHARD_COUNT", "2")))
 _ALLOW_WRITE = os.environ.get("QUERY_ALLOW_WRITE", "").lower() in ("1", "true", "yes")
 _MARKET_TABLE_RE = re.compile(r"\bfrom\s+(trade|risk)\b", re.IGNORECASE)
+# bounds how many sockets one request opens at once across shards x tiers -
+# see _run_many. 26 shards x 3 tiers = 78 possible targets for one federated
+# query; this keeps a single request from opening that many connections at
+# the same instant even though route_shards/route_tiers usually narrow well
+# below the theoretical max.
+_MAX_FANOUT_WORKERS = int(os.environ.get("QUERY_FANOUT_MAX_WORKERS", "16"))
+
+# tier -> (topology tier name, human label), for the explicit per-shard
+# targets the query workspace lists (idb-s0, hdb-s0, ...) - a user or the
+# NL2Q box can always pick one of these directly. rdb is "today" (in-memory,
+# fast); idb is recently-sealed days still cached in memory (no `date`
+# column - it's a flat, undated cache, see route_tiers); hdb is full on-disk
+# history (a real date-partitioned table). The AUTOMATIC gateway fan-out
+# (query_router.route_tiers) only ever picks rdb or hdb, never idb - see
+# that function's docstring for why a date-filtered query can't usefully
+# reach idb the way a manually-targeted, dateless query can.
+_HISTORY_TIER_LABELS = {"rdb": "today", "idb": "recent sealed days", "hdb": "full history"}
 
 
 def _targets() -> list[dict]:
     out = [{"id": "gateway", "label": "Gateway (all shards)", "host": _GW_HOST, "port": _GW_PORT}]
-    for s in topology.shards(_SHARD_COUNT):
-        rdb = topology.gateway_host(s, "rdb")
-        host, port = rdb.rsplit(":", 1)
-        out.append({"id": f"rdb-{s.id}", "label": f"RDB {s.label} (today)", "host": host, "port": int(port)})
+    for tier, label in _HISTORY_TIER_LABELS.items():
+        for s in topology.shards(_SHARD_COUNT):
+            host_port = topology.gateway_host(s, tier)
+            host, port = host_port.rsplit(":", 1)
+            out.append({"id": f"{tier}-{s.id}", "label": f"{tier.upper()} {s.label} ({label})",
+                       "host": host, "port": int(port)})
     for s in topology.shards(_SHARD_COUNT):
         tp = topology.gateway_host(s, "tickerplant")
         host, port = tp.rsplit(":", 1)
@@ -71,6 +91,35 @@ def _connect(host: str, port: int):
                                    timeout=int(os.environ.get("QUERY_TIMEOUT_SEC", "15")))
     conn.open()
     return conn
+
+
+def _run_many(target_ids: list[str], query: str, limit: int, allow_write: bool,
+              max_allowed: int = qs.MAX_ROW_LIMIT) -> list[dict]:
+    """Run `_run_one` against every target concurrently instead of one at a
+    time. Each call is a blocking IPC round trip - open a socket, send the
+    query, wait for the q process to answer - so N targets run serially cost
+    N round trips even though every target is an independent process with
+    nothing to wait on from the others. A thread pool is the right tool here
+    even under the GIL: these are blocking socket calls (qpython's `conn()`),
+    which release the GIL while waiting on the network, so threads genuinely
+    overlap wall-clock time rather than just interleaving CPU work. Workers
+    are capped at _MAX_FANOUT_WORKERS regardless of how many targets are
+    passed, and naturally scale UP to that cap for a wider query (more
+    shards, more tiers) and down to 1 for a single target - this is the
+    adaptive part of "parallelize a big historical scan": the width of the
+    query itself decides how much of the pool gets used, no manual tuning."""
+    if len(target_ids) <= 1:
+        return [_run_one(t, query, limit, allow_write, max_allowed) for t in target_ids]
+    workers = min(len(target_ids), _MAX_FANOUT_WORKERS)
+    results: list[dict] = [None] * len(target_ids)  # type: ignore[list-item]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_to_index = {
+            pool.submit(_run_one, t, query, limit, allow_write, max_allowed): i
+            for i, t in enumerate(target_ids)
+        }
+        for fut, i in future_to_index.items():
+            results[i] = fut.result()
+    return results
 
 
 @router.get("/targets")
@@ -98,40 +147,62 @@ def _run_one(target_id: str, query: str, limit: int, allow_write: bool,
     import time
 
     # Gateway is a router, not a physical table host; for plain market-table
-    # queries we fan out to RDB shards and merge, so users can keep writing
-    # standard q like `select ... from trade ...` against target "gateway".
-    # Intelligent routing (query_router.py): if the query's `sym` filter
-    # resolves to a strict subset of shards, only fan out to those - a shard
-    # that doesn't own any referenced symbol would return zero rows anyway
-    # (topology.shard_of is the SAME partitioning the gateway itself uses),
-    # so this is a pure latency win, never a correctness tradeoff. Falls
-    # back to the full shard set whenever it can't confidently narrow.
+    # queries we fan out to the tier(s)/shards that could actually hold the
+    # data and merge, so users can keep writing standard q like `select ...
+    # from trade ...` against target "gateway".
+    #   - tiers (query_router.route_tiers): rdb ("today") unless the query's
+    #     own `date` clause needs history, in which case it SWITCHES to hdb
+    #     - not "rdb+hdb", and never idb. Confirmed live against this
+    #     schema: neither rdb's nor idb's trade/risk tables carry a `date`
+    #     column at all (flat, undated buffers - rdb is implicitly "today",
+    #     idb is implicitly "whatever's cached in the last N days"); only
+    #     hdb is a real date-partitioned kdb+ table. Sending a date-filtered
+    #     query to rdb/idb doesn't just waste a round trip, it fails
+    #     outright (no such column) - see route_tiers' own docstring. This
+    #     is what makes a query like a multi-month VWAP reachable at all
+    #     (previously: only rdb was ever queried, so historical data
+    #     silently wasn't there no matter what the query said).
+    #   - shards (query_router.route_shards): if the query's `sym` filter
+    #     resolves to a strict subset of shards, only fan out to those - a
+    #     shard that doesn't own any referenced symbol would return zero
+    #     rows anyway (topology.shard_of is the SAME partitioning the
+    #     gateway itself uses), so this is a pure latency win, never a
+    #     correctness tradeoff. This one DOES compose freely with the tier
+    #     switch above: a 3-month VWAP for one symbol fans out to hdb on
+    #     just that symbol's one shard, not every shard - and every target
+    #     in the resulting set is dispatched concurrently (_run_many), not
+    #     one at a time, so a wide historical scan doesn't pay for its own
+    #     breadth in serialized round-trip latency.
     if target_id == "gateway" and _MARKET_TABLE_RE.search(query):
         t0 = time.perf_counter()
-        all_shard_targets = [t["id"] for t in _targets() if t["id"].startswith("rdb-")]
-        routed = query_router.route_shards(query, _SHARD_COUNT)
-        if routed:
-            shard_targets = [f"rdb-{sid}" for sid in routed if f"rdb-{sid}" in all_shard_targets]
-        else:
-            shard_targets = all_shard_targets
-        skipped_targets = [t for t in all_shard_targets if t not in shard_targets]
-        results = [_run_one(t, query, limit, allow_write, max_allowed) for t in shard_targets]
+        tiers = query_router.route_tiers(query)
+        all_shard_ids = [s.id for s in topology.shards(_SHARD_COUNT)]
+        routed_shard_ids = query_router.route_shards(query, _SHARD_COUNT)
+        shard_ids = routed_shard_ids or all_shard_ids
+        known_target_ids = {t["id"] for t in _targets()}
+        shard_targets = [f"{tier}-{sid}" for tier in tiers for sid in shard_ids
+                         if f"{tier}-{sid}" in known_target_ids]
+        all_possible_targets = [f"{tier}-{sid}" for tier in tiers for sid in all_shard_ids]
+        skipped_targets = [t for t in all_possible_targets if t not in shard_targets]
+        results = _run_many(shard_targets, query, limit, allow_write, max_allowed)
         labeled = [(r["target"], r["grid"]) for r in results if r["ok"]]
         if not labeled:
             return {
                 "target": target_id,
                 "ok": False,
-                "error": "all shard RDB targets failed: " + "; ".join(
+                "error": f"all {'/'.join(tiers)} targets failed: " + "; ".join(
                     f"{r['target']}: {r.get('error', 'unknown error')}" for r in results
                 ),
                 "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-                "routed_shards": shard_targets if routed else None,
+                "routed_shards": shard_targets if routed_shard_ids else None,
+                "tiers": tiers,
             }
         grid = qs.combine_results(labeled, add_provenance=True, limit=limit)
         grid["query"] = query
         grid["kind"] = "gateway-federated"
-        grid["routed_shards"] = shard_targets if routed else None
-        grid["skipped_shards"] = skipped_targets if routed else []
+        grid["routed_shards"] = shard_targets if routed_shard_ids else None
+        grid["skipped_shards"] = skipped_targets if routed_shard_ids else []
+        grid["tiers"] = tiers
         if re.search(r"\bby\b", query, re.IGNORECASE):
             grid["warning"] = (
                 "grouped query merged from per-shard partials; if this is an aggregate, "
@@ -145,7 +216,8 @@ def _run_one(target_id: str, query: str, limit: int, allow_write: bool,
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
             "connect_ms": 0.0,
             "query_ms": query_ms,
-            "routed_shards": shard_targets if routed else None,
+            "routed_shards": shard_targets if routed_shard_ids else None,
+            "tiers": tiers,
         }
 
     host, port = _resolve(target_id)
@@ -187,7 +259,7 @@ def _fetch_grid(targets: list[str], query: str, limit: int) -> tuple[list[str], 
         _resolve(t)
     max_allowed = export_jobs.BULK_ROW_LIMIT_MAX
     limit = min(limit, max_allowed)
-    results = [_run_one(t, query, limit, False, max_allowed) for t in targets]
+    results = _run_many(targets, query, limit, False, max_allowed)
     labeled = [(r["target"], r["grid"]) for r in results if r["ok"]]
     if not labeled:
         raise HTTPException(status_code=502, detail="all targets failed: " +
@@ -244,7 +316,7 @@ def run(body: RunBody, user: CurrentUser = Depends(require_tenant_scope),
         return payload
 
     # federated: fan out, combine successful grids, report per-target status
-    results = [_run_one(t, body.query, body.limit, allow_write) for t in targets]
+    results = _run_many(targets, body.query, body.limit, allow_write)
     labeled = [(r["target"], r["grid"]) for r in results if r["ok"]]
     total_rows = sum(r["grid"]["row_count"] for r in results if r["ok"])
     total_elapsed_ms = round(sum(r["elapsed_ms"] for r in results), 1)

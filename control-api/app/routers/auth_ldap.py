@@ -17,6 +17,7 @@ from sqlmodel import Session, select
 
 from .. import ldap_auth
 from ..config import settings
+from ..crypto import encrypt_secret
 from ..db import get_session, log_event
 from ..models import Tenant, TenantLDAP, UserRole
 from ..provisioning import provision_user
@@ -141,7 +142,7 @@ def put_config(slug: str, body: LDAPConfigIn, user: CurrentUser = Depends(get_cu
     row.bind_mode = body.bind_mode
     row.bind_dn = body.bind_dn
     if body.bind_password:                        # only overwrite when a new secret is supplied
-        row.bind_password = body.bind_password
+        row.bind_password = encrypt_secret(body.bind_password)
     row.user_search_base = body.user_search_base
     row.user_filter = body.user_filter
     row.bind_dn_template = body.bind_dn_template

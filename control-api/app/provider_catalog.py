@@ -19,6 +19,17 @@ PROVIDER_CATALOG = [
     {"name": "polygon", "display_name": "Polygon.io", "tier": "live",
      "coverage": "US equities/options/FX/crypto (real-time on paid tiers)",
      "requires": "a Polygon.io API key"},
+    {"name": "alpaca", "display_name": "Alpaca", "tier": "live",
+     "coverage": "US equities/ETFs - real-time IEX trades free, consolidated SIP tape on a paid plan",
+     "requires": ("a free Alpaca account's API key ID + secret key (same credentials Alpaca paper "
+                 "trading uses) - see the Bot page for order routing through this account")},
+    {"name": "ibkr", "display_name": "Interactive Brokers", "tier": "live",
+     "coverage": "Level 1 quotes - whatever your IBKR account/gateway is entitled to (free for basic US "
+                "coverage; full NBBO and non-US exchanges typically need a paid market-data subscription)",
+     "requires": ("a running, already-authenticated IBKR Client Portal Gateway - NOT a simple API key. "
+                 "The gateway process and its login/2FA session lifecycle are yours to operate; IBeam "
+                 "(github.com/Voyz/ibeam) is the community-standard tool for automating that. See the "
+                 "Bot page for order routing through the same gateway")},
     {"name": "coinbase", "display_name": "Coinbase", "tier": "live",
      "coverage": "crypto spot - real-time trades, no key required",
      "requires": "nothing - public feed (symbols in Coinbase's own pair format, e.g. BTC-USD)"},

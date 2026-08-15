@@ -245,6 +245,97 @@ def bybit_trade(msg: dict) -> list:
     return out
 
 
+def _ibkr_parse_price(raw) -> float | None:
+    """CPAPI sometimes prefixes a snapshot price with a single letter code
+    (documented IBKR behavior) - e.g. "C180.23" = closed/last-close price
+    (shown when the market's not currently trading), "H180.23" = halted.
+    Strip a single leading non-digit/non-minus character before parsing;
+    the price itself is still real, just annotated."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if s[0].isalpha():
+        s = s[1:]
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _ibkr_parse_volume(raw) -> int:
+    """CPAPI's volume field is a human-readable abbreviated STRING, not a
+    raw number - e.g. "45.2M" (45,200,000), "812.3K" (812,300), "1.1B".
+    Documented IBKR behavior, not a formatting bug on our side."""
+    if raw is None:
+        return 0
+    s = str(raw).strip().upper()
+    if not s:
+        return 0
+    mult = 1
+    if s.endswith("K"):
+        mult, s = 1_000, s[:-1]
+    elif s.endswith("M"):
+        mult, s = 1_000_000, s[:-1]
+    elif s.endswith("B"):
+        mult, s = 1_000_000_000, s[:-1]
+    try:
+        return int(float(s) * mult)
+    except ValueError:
+        return 0
+
+
+def ibkr_snapshot(rows, conid_to_symbol: dict) -> list:
+    """CPAPI /iserver/marketdata/snapshot response: a JSON array, one entry
+    per requested conid: [{"conid": 265598, "31": "180.23", "87": "45.2M",
+    ...}, ...]. "31" = last price, "87" = volume (see the parse helpers
+    above for why both need special handling - IBKR returns display-
+    formatted strings here, not clean numbers). conid_to_symbol resolves
+    each row back to the ticker this provider actually asked for (CPAPI
+    addresses instruments by numeric conid, never by symbol)."""
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sym = conid_to_symbol.get(row.get("conid"))
+        price = _ibkr_parse_price(row.get("31"))
+        if sym is None or price is None:
+            continue
+        out.append(Tick(symbol=sym, price=price, size=_ibkr_parse_volume(row.get("87")),
+                        side="", venue="ibkr", ts=None))
+    return out
+
+
+def alpaca_trade(msg) -> list:
+    """Alpaca market-data v2 stream, one frame at a time (Alpaca sends an
+    ARRAY of messages per websocket frame, mixing trade/quote/bar/status
+    events together - only "T":"t" ones are trades):
+    [{"T":"t","S":"AAPL","p":180.23,"s":100,"t":"2024-01-02T14:30:00.123Z",
+      "x":"...","i":...,"c":[...],"z":"C"}, ...]
+    A single call here may therefore return ticks for several symbols at
+    once, unlike most other adapters which parse one symbol per message."""
+    events = msg if isinstance(msg, list) else [msg]
+    out = []
+    for e in events:
+        if not isinstance(e, dict) or e.get("T") != "t":
+            continue
+        sym = e.get("S")
+        price = e.get("p")
+        if sym is None or price is None:
+            continue
+        try:
+            price = float(price)
+        except (TypeError, ValueError):
+            continue
+        out.append(Tick(symbol=sym, price=price, size=int(e.get("s", 0) or 0),
+                        side="", venue=f"alpaca:{e.get('x', '')}" if e.get("x") else "alpaca",
+                        ts=iso_to_dt(e.get("t"))))
+    return out
+
+
 def okx_trade(msg: dict) -> list:
     """OKX v5 public "trades" channel: {"arg":{"channel":"trades","instId":...},
     "data":[{"instId","px","sz","side"("buy"/"sell"),"ts"(ms, string)},...]}.

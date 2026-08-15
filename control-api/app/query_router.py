@@ -59,3 +59,55 @@ def route_shards(query: str, shard_count: int) -> list[str] | None:
     if not syms:
         return None
     return sorted({topology.shard_of(s, shard_count) for s in syms})
+
+
+# --------------------------------------------------------------------------- #
+# tier routing (rdb "today" vs idb/hdb "history")
+# --------------------------------------------------------------------------- #
+# `date = ...` / `date within ...` / `date < ...` etc - same clause-then-token
+# shape as the sym matcher above. Captures the operator too, since (unlike sym
+# narrowing) the operator changes what "confidently today-only" means: `date =
+# .z.d` is exactly today; `date < .z.d` is everything BUT today - very
+# different tier needs from the same literal.
+_DATE_CLAUSE_RE = re.compile(
+    r"\bdate\s*(=|>=|<=|>|<|within|in)\s*([^,]*?)(?=,|\bby\b|$)", re.IGNORECASE
+)
+_DATE_LITERAL_RE = re.compile(r"\d{4}\.\d{2}\.\d{2}")
+_TODAY_ONLY_RE = re.compile(r"^\s*\.z\.[dD]\s*$")
+
+
+def route_tiers(query: str) -> list[str]:
+    """Which of rdb ("today", in-memory) / hdb ("full history", on-disk,
+    date-partitioned) tiers a market-table query needs.
+
+    Default - no `date` clause at all, or a clause provably equal to exactly
+    today (`date = .z.d`) - is rdb-only, UNCHANGED from before hdb was
+    reachable as a query target at all: this keeps the cost/latency profile
+    of every existing filtered-by-symbol-only query exactly as it was.
+
+    Anything else (an explicit date literal, a `within`/`in` range, or a
+    </<=/>/>= bound against anything) can't be confidently proven "today
+    only", so this routes to hdb instead - NOT "rdb + hdb", and NOT idb.
+    Confirmed live against this schema: neither rdb's nor idb's `trade`/`risk`
+    tables carry a `date` column at all (both are flat, undated buffers -
+    rdb is implicitly "today", idb is implicitly "whatever's cached in the
+    last N days", with no per-row date to filter on). Only hdb is a real
+    kdb+ date-partitioned table, where `date` is a genuine (virtual) column.
+    Sending a `date`-filtered query to rdb/idb doesn't just waste a round
+    trip the way an over-wide symbol fan-out would - it FAILS outright
+    ('date' / column-not-found), for any date value, not just historical
+    ones. So unlike route_shards' "widen when unsure" pattern, this is a
+    hard tier SWITCH, not a widen: a query either needs today's live buffer
+    (rdb) or history (hdb), never usefully both from the identical query
+    text, because rdb structurally cannot answer a dated predicate. A caller
+    that genuinely wants both today's and historical data for one symbol
+    federates two separate queries (one dateless against rdb, one
+    date-scoped against hdb) rather than one query against both tiers."""
+    clauses = _DATE_CLAUSE_RE.findall(query)
+    if not clauses:
+        return ["rdb"]
+    if len(clauses) == 1:
+        op, rhs = clauses[0]
+        if op == "=" and _TODAY_ONLY_RE.match(rhs) and not _DATE_LITERAL_RE.search(rhs):
+            return ["rdb"]
+    return ["hdb"]

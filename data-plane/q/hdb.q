@@ -5,7 +5,6 @@
 / Reloads on demand - wdb calls .hdb.reload right after sealing a new day -
 / or on its own timer as a fallback if that direct notification is ever
 / missed (network hiccup, hdb briefly down, ...).
-/
 / Before the first end-of-day seal ever happens (a brand new TickHouse, day
 / one), the directory has no date partitions yet: \l on it is a safe no-op
 / (tested directly against this build), so trade/risk just stay the empty
@@ -63,7 +62,12 @@ retentionDays:"I"$first .u.getarg[args;`retentiondays;enlist "0"]
   }
 
 .hdb.dates:{
-  $[(`trade in tables`.) and (`date in cols trade); distinct exec date from trade; `date$()]
+  / `exec date from trade` (the obvious way to ask a partitioned table
+  / which dates it has) throws 'nyi' on this build - confirmed live
+  / against real sealed data, reproducibly. .Q.pv (the partition-value
+  / list \l itself populates when loading a partitioned directory) is the
+  / same information without going through exec at all.
+  $[`trade in tables`.; asc distinct .Q.pv; `date$()]
   }
 
 .hdb.health:{

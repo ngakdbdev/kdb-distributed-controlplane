@@ -4,9 +4,9 @@
 #
 #   docker compose -f docker-compose.yml -f deploy/tls/docker-compose.local-tls.yml up -d --build
 #
-# Then open https://tickforge.qbytecomputing.com and accept the browser's
-# "not trusted" warning (expected for a self-signed cert). For real deployments
-# use docker-compose.tls.yml instead (Let's Encrypt).
+# Then open https://$TLS_DOMAIN and accept the browser's "not trusted"
+# warning (expected for a self-signed cert). For real deployments use
+# docker-compose.tls.yml instead (Let's Encrypt).
 services:
   caddy:
     image: caddy:2-alpine
@@ -15,7 +15,7 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      TICKFORGE_DOMAIN: "${TICKFORGE_DOMAIN:-tickforge.qbytecomputing.com}"
+      TLS_DOMAIN: "${TLS_DOMAIN:-tickforge.qbytecomputing.com}"
     volumes:
       - ./deploy/tls/Caddyfile.local:/etc/caddy/Caddyfile:ro
       - caddy-local-data:/data

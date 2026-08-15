@@ -1,4 +1,4 @@
-# TickForge — a kdb+ tick control plane
+# Vantik — a kdb+ tick control plane
 
 A control plane (web UI + API + self-healing watchdog) sitting above a sharded kdb+ tick deployment
 built on the Tick-X pattern (tickerplant → write-down DB → chained RDB → intraday DB, split across N
@@ -8,14 +8,14 @@ live query with real autocomplete, bulk data export, client-computed autoscaling
 a paper-trading terminal exercising the same query path. Still **not** a production multi-tenant
 platform on its own — see "What's still honest to caveat" below before you point it at anything real.
 
-Product name in the UI is **TickForge** (Qbyte Computing Limited); the codebase and container names
+Product name in the UI is **Vantik** (Qbyte Computing Limited); the codebase and container names
 still say `kdb-control-plane` throughout, unchanged.
 
 ## Licensing note - the kdb+/KDB-X engine is never bundled here
 
 The `q` binary and license file are proprietary (even the free KDB-X Community Edition requires
 its own license terms and is not redistributable). This repo never contains them - `.gitignore`
-excludes `data-plane/docker/kdbx/q` and `k4.lic` on purpose. Download KDB-X yourself from the KX
+excludes `data-plane/docker/kdbx/q` and `kc.lic` on purpose. Download KDB-X yourself from the KX
 Developer Center and place both files at `data-plane/docker/kdbx/` before building the data-plane
 images. `reference/` contains KX's own public *scripts* (not the engine) as read-only reference
 material - see `reference/README.md` for exactly what that is and isn't.
@@ -54,8 +54,13 @@ docker-compose.yml     Ties the whole stack together (GENERATED - see scripts/ge
 
 ## Running locally
 
+**New to this codebase?** [docs/getting-started.md](docs/getting-started.md) is the same
+walkthrough as below, but self-contained: it explains what kdb+/a tickerplant/a shard actually
+are before using the words, and shows expected output at each step. Read that instead if any of
+the steps below are unfamiliar.
+
 1. Download KDB-X Community Edition (free) from the KX Developer Center and place the `q` binary and
-   `k4.lic` license at `data-plane/docker/kdbx/`.
+   `kc.lic` license at `data-plane/docker/kdbx/`.
 2. `cp .env.example .env` and fill in real secrets (see `docs/README.md`'s secret-rotation checklist -
    don't ship what's in `.env.example` verbatim; some values there look real, not placeholder).
 3. `docker compose build && docker compose up -d`

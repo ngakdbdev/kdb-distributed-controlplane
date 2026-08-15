@@ -14,7 +14,7 @@ history in a notebook and got a CSV export that took all afternoon.
 
 ## Before they arrive (10 min)
 
-1. Stack up on the demo box: KDB-X binary + `k4.lic` in
+1. Stack up on the demo box: KDB-X binary + `kc.lic` in
    `data-plane/docker/kdbx/`, then `docker compose up -d` (see root README).
 2. `pip install -r demokit/requirements.txt`.
 3. Dry-run the whole thing once so nothing surprises you live:

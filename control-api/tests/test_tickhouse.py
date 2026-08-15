@@ -191,3 +191,75 @@ def test_explicit_sharding_flags_duplicate_symbol():
                         shard_symbols=[{"label": "a", "symbols": ["AAPL"]},
                                        {"label": "b", "symbols": ["AAPL"]}])
     assert any("assigned to both" in p for p in th.validate_spec(spec))
+
+
+# ---- SLA-driven blueprint suggestion (item 4: "I need 100ms tick-to-trade") --
+
+def test_suggest_blueprint_tight_latency_target_picks_low_latency():
+    out = th.suggest_blueprint(tick_to_trade_target_ms=100)
+    assert out["profile"] == "low-latency"
+
+
+def test_suggest_blueprint_loose_target_with_high_volume_picks_high_throughput():
+    out = th.suggest_blueprint(tick_to_trade_target_ms=5000, peak_msgs_per_sec=20000)
+    assert out["profile"] == "high-throughput"
+
+
+def test_suggest_blueprint_no_signals_defaults_to_balanced_and_default_shard_count():
+    out = th.suggest_blueprint()
+    assert out["profile"] == "balanced"
+    assert out["shard_count"] == 2  # this repo's own long-standing default
+
+
+def test_suggest_blueprint_high_volume_widens_shard_count():
+    out = th.suggest_blueprint(peak_msgs_per_sec=15000)
+    assert out["shard_count"] >= 8  # 15000 / 2000-per-shard heuristic, ceil
+
+
+def test_suggest_blueprint_high_symbol_count_widens_shard_count():
+    out = th.suggest_blueprint(symbol_count=6000)
+    assert out["shard_count"] >= 12  # 6000 / 500-per-shard heuristic, ceil
+
+
+def test_suggest_blueprint_shard_count_never_exceeds_max_shards():
+    out = th.suggest_blueprint(peak_msgs_per_sec=10_000_000)
+    assert out["shard_count"] == th.topology.MAX_SHARDS
+
+
+def test_suggest_blueprint_latency_budget_is_a_low_high_range_per_hop():
+    out = th.suggest_blueprint(tick_to_trade_target_ms=100)
+    for hop, rng in out["latency_budget_ms"].items():
+        assert rng["low"] <= rng["high"], hop
+    assert out["latency_budget_total_ms"]["low"] <= out["latency_budget_total_ms"]["high"]
+
+
+def test_suggest_blueprint_flags_target_below_optimistic_floor():
+    out = th.suggest_blueprint(tick_to_trade_target_ms=0.01)
+    assert out["target_likely_achievable"] is False
+    assert any("BELOW even this estimate" in c for c in out["caveats"])
+
+
+def test_suggest_blueprint_achievable_target_not_flagged_as_unachievable():
+    out = th.suggest_blueprint(tick_to_trade_target_ms=10_000)
+    assert out["target_likely_achievable"] is True
+
+
+def test_suggest_blueprint_no_target_leaves_achievability_unknown():
+    out = th.suggest_blueprint(peak_msgs_per_sec=1000)
+    assert out["target_likely_achievable"] is None
+
+
+def test_suggest_blueprint_always_caveats_that_numbers_are_estimates():
+    # this is the whole point - never let the estimate be mistaken for a
+    # measured guarantee (see DEMO.md's own "I don't quote a number I
+    # haven't measured on your target hardware" principle)
+    out = th.suggest_blueprint(tick_to_trade_target_ms=100)
+    assert any("ARCHITECTURAL ESTIMATE" in c for c in out["caveats"])
+    assert any("demokit.load_test" in c for c in out["caveats"])
+
+
+def test_suggest_blueprint_cross_region_widens_network_hop():
+    same_az = th.suggest_blueprint(tick_to_trade_target_ms=100, cross_region=False)
+    cross_region = th.suggest_blueprint(tick_to_trade_target_ms=100, cross_region=True)
+    assert (cross_region["latency_budget_ms"]["network_rtt"]["low"] >
+            same_az["latency_budget_ms"]["network_rtt"]["low"])

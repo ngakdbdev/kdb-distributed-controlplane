@@ -32,7 +32,7 @@ ingress:
   # Requires AGIC (Application Gateway Ingress Controller) installed
   # in-cluster; use "nginx" instead if you run ingress-nginx.
   className: "azure-application-gateway"
-  host: "tickforge.yourcompany.com"
+  host: "vantik.yourcompany.com"
   # Terminate TLS at App Gateway with a managed cert, or run cert-manager +
   # Let's Encrypt in-cluster and set tls: true once the kdb-control-plane-tls
   # Secret exists.

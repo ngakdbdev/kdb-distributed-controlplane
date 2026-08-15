@@ -20,6 +20,7 @@ keys) or online activation; this is the pragmatic choice for a fixed 32-char key
 from __future__ import annotations
 
 import base64
+import os
 import hmac
 import os
 import struct
@@ -127,3 +128,34 @@ def status_line(info: LicenseInfo) -> str:
     warn = "  (expiring soon!)" if info.days_remaining <= 7 else ""
     return (f"licence ok: {info.edition}, expires {info.expiry.isoformat()} "
             f"({info.days_remaining} days left){warn}")
+
+
+# --------------------------------------------------------------------------- enforcement policy
+# A licence key is mandatory for any deployment that isn't the developer's
+# own local box: DEPLOYMENT_ENV distinguishes the two. Local/dev keeps
+# working with zero configuration (the default, `docker compose up` on a
+# laptop needs no key) - the mandatory requirement kicks in for anything
+# that ships to a customer (the cloud VM scripts set DEPLOYMENT_ENV=customer,
+# the Helm chart defaults it the same way, fleet_agent runs inside a
+# tenant's own environment by definition). LICENSE_ENFORCE, if set at all,
+# always wins over the DEPLOYMENT_ENV-derived default in either direction -
+# it's the explicit escape hatch for the rare case (testing the enforcement
+# path locally, or deliberately running a customer box unenforced during a
+# support incident) where the default for that environment isn't what's
+# wanted right now.
+_LOCAL_DEPLOYMENT_ENVS = ("local", "dev", "development")
+
+
+def enforcement_active(deployment_env: str | None = None, explicit: str | None = None) -> bool:
+    """Whether main.py should refuse to start on an invalid/missing licence.
+    Both args default to `None`, meaning "read it from the environment
+    myself" (DEPLOYMENT_ENV / LICENSE_ENFORCE) - callers can still pass
+    them explicitly, which is what makes this unit-testable without env-var
+    monkeypatching gymnastics."""
+    if explicit is None:
+        explicit = os.environ.get("LICENSE_ENFORCE", "")
+    if explicit:
+        return explicit.strip().lower() in ("1", "true", "yes")
+    if deployment_env is None:
+        deployment_env = os.environ.get("DEPLOYMENT_ENV", "local")
+    return deployment_env.strip().lower() not in _LOCAL_DEPLOYMENT_ENVS

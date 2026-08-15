@@ -82,11 +82,11 @@ And per [docs/README.md](README.md) item 1 — never reuse anything that ever ap
 ## 4. The KX-X license Secret — required, not optional
 
 Every kdb+ container mounts a Secret named by `kdbx.licenseSecretName` (default `kdbx-license`) at
-`/usr/local/kdbx/{q,k4.lic}`. **Pods crash-loop without it** — create it before or immediately after
+`/usr/local/kdbx/{q,kc.lic}`. **Pods crash-loop without it** — create it before or immediately after
 install:
 ```bash
 kubectl create secret generic kdbx-license -n kdb-control-plane \
-  --from-file=q=./q --from-file=k4.lic=./k4.lic
+  --from-file=q=./q --from-file=kc.lic=./kc.lic
 ```
 This is never chart-managed (licensing terms — same reason the binary isn't bundled anywhere else in
 this repo). If you're on the portal-pull path instead of a locally-staged binary, that mechanism is

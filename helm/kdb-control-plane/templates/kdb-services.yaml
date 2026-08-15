@@ -5,6 +5,28 @@ on uniform per-tier ports, then the single gateway. Nothing here is
 hand-duplicated per shard - change .Values.shardCount and the data plane
 scales. Shard ids are stable indices (s0..s{N-1}); the letter range each owns
 lives in the gateway's shards.json ConfigMap.
+
+NOTE on `command:` below: Kubernetes' pod `command:` field overrides the
+container image's ENTRYPOINT (not just its CMD, unlike docker-compose's
+`command:`, which only overrides CMD - see Dockerfile.kdb's
+`ENTRYPOINT ["/usr/local/bin/kdb-entrypoint.sh"]`). That means every
+`command: ["q", ...]` list here bypasses kdb-entrypoint.sh entirely: no
+arch detection, no KX-portal-pull fallback, none of the adaptive secondary-
+thread logic that script implements for the docker-compose path - this
+literal `q` must resolve directly off $PATH (see the `ENV PATH="/kdbx:..."`
+line in Dockerfile.kdb) rather than through the script's
+$KX_BINARIES_DIR/$KX_ARCH/q resolution. This is a real architecture
+inconsistency between the two deploy paths, not intentional; it's flagged
+here rather than silently "fixed" by switching to `args:` (which WOULD
+restore the entrypoint script) because that also changes where the license/
+binary volume needs to be mounted (kdb-entrypoint.sh expects an arch
+subdirectory, e.g. /kdbx/l64/q - the volumeMounts below currently place the
+binary at /usr/local/kdbx/q, a flat path relying on kdb+'s own
+adjacent-to-executable licence lookup instead). Reconciling that fully needs
+verification against a real cluster before trusting it; kdbThreads below is
+added as an explicit `-s N` arg directly (see values.yaml's dataPlane.kdbThreads)
+so secondary threads work under the CURRENT bypass, without depending on that
+larger fix.
 */}}
 {{- $ns := .Values.global.namespace -}}
 {{- $reg := .Values.global.imageRegistry -}}
@@ -18,6 +40,25 @@ lives in the gateway's shards.json ConfigMap.
 {{- $retention := .Values.idb.retentionDays -}}
 {{- $rdbRetention := .Values.rdb.retentionMin -}}
 {{- $hdbRetention := .Values.hdb.retentionDays -}}
+{{- $kdbThreads := int .Values.dataPlane.kdbThreads -}}
+{{/* per-component resource/nodeSelector overrides - see values.yaml's
+`resources`/`nodeSelectors` comments. A component with no entry just
+inherits $res (the shared dataPlane.resources default) and no nodeSelector
+(current behavior, unchanged). */}}
+{{- $resOv := .Values.resources | default dict -}}
+{{- $nodeSelOv := .Values.nodeSelectors | default dict -}}
+{{- $tpRes := (get $resOv "tickerplant") | default $res -}}
+{{- $tpNodeSel := get $nodeSelOv "tickerplant" -}}
+{{- $wdbRes := (get $resOv "wdb") | default $res -}}
+{{- $wdbNodeSel := get $nodeSelOv "wdb" -}}
+{{- $rdbRes := (get $resOv "rdb") | default $res -}}
+{{- $rdbNodeSel := get $nodeSelOv "rdb" -}}
+{{- $idbRes := (get $resOv "idb") | default $res -}}
+{{- $idbNodeSel := get $nodeSelOv "idb" -}}
+{{- $hdbRes := (get $resOv "hdb") | default $res -}}
+{{- $hdbNodeSel := get $nodeSelOv "hdb" -}}
+{{- $gwRes := (get $resOv "gateway") | default $res -}}
+{{- $gwNodeSel := get $nodeSelOv "gateway" -}}
 
 {{- range $i := until (int .Values.shardCount) }}
 {{- $sid := printf "s%d" $i }}
@@ -36,6 +77,9 @@ spec:
     metadata:
       labels: { app: tp-{{ $sid }}, role: tickerplant, shard: {{ $sid | quote }} }
     spec:
+      {{- if $tpNodeSel }}
+      nodeSelector: {{ $tpNodeSel | toYaml | nindent 8 }}
+      {{- end }}
       containers:
         - name: tp-{{ $sid }}
           image: "{{ $reg }}kdb-control-plane/data-plane:{{ $tag }}"
@@ -45,8 +89,8 @@ spec:
           volumeMounts:
             - { name: tp-log, mountPath: /app/log }
             - { name: kdbx-license, mountPath: /usr/local/kdbx/q, subPath: q }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/k4.lic, subPath: k4.lic }
-          resources: {{ $res | toYaml | nindent 12 }}
+            - { name: kdbx-license, mountPath: /usr/local/kdbx/kc.lic, subPath: kc.lic }
+          resources: {{ $tpRes | toYaml | nindent 12 }}
       volumes:
         - name: tp-log
           persistentVolumeClaim: { claimName: tp-log-{{ $sid }} }
@@ -74,6 +118,9 @@ spec:
     metadata:
       labels: { app: wdb-{{ $sid }}, role: wdb, shard: {{ $sid | quote }} }
     spec:
+      {{- if $wdbNodeSel }}
+      nodeSelector: {{ $wdbNodeSel | toYaml | nindent 8 }}
+      {{- end }}
       containers:
         - name: wdb-{{ $sid }}
           image: "{{ $reg }}kdb-control-plane/data-plane:{{ $tag }}"
@@ -82,14 +129,15 @@ spec:
                     "-tpport", "5010", "-flushmin", "{{ $flush }}", "-retentionmin", "{{ $rdbRetention }}",
                     "-dbdir", "/data/db",
                     "-hdbdir", "/data/hdb", "-idbhost", "idb-{{ $sid }}", "-idbport", "5030",
-                    "-hdbhost", "hdb-{{ $sid }}", "-hdbport", "5060", "-p", "5040"]
+                    "-hdbhost", "hdb-{{ $sid }}", "-hdbport", "5060", "-p", "5040",
+                    "-eodhour", "{{ $eodHour }}"{{ if gt $kdbThreads 0 }}, "-s", "{{ $kdbThreads }}"{{ end }}]
           ports: [{ containerPort: 5040 }]
           volumeMounts:
             - { name: db, mountPath: /data/db }
             - { name: hdb, mountPath: /data/hdb }
             - { name: kdbx-license, mountPath: /usr/local/kdbx/q, subPath: q }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/k4.lic, subPath: k4.lic }
-          resources: {{ $res | toYaml | nindent 12 }}
+            - { name: kdbx-license, mountPath: /usr/local/kdbx/kc.lic, subPath: kc.lic }
+          resources: {{ $wdbRes | toYaml | nindent 12 }}
       volumes:
         - name: db
           persistentVolumeClaim: { claimName: db-{{ $sid }} }
@@ -119,17 +167,20 @@ spec:
     metadata:
       labels: { app: rdb-{{ $sid }}, role: rdb, shard: {{ $sid | quote }} }
     spec:
+      {{- if $rdbNodeSel }}
+      nodeSelector: {{ $rdbNodeSel | toYaml | nindent 8 }}
+      {{- end }}
       containers:
         - name: rdb-{{ $sid }}
           image: "{{ $reg }}kdb-control-plane/data-plane:{{ $tag }}"
           imagePullPolicy: {{ $pull }}
           command: ["q", "rdb.q", "-shard", "{{ $sid }}", "-tphost", "tp-{{ $sid }}",
-                    "-tpport", "5010", "-p", "5020"]
+                    "-tpport", "5010", "-p", "5020"{{ if gt $kdbThreads 0 }}, "-s", "{{ $kdbThreads }}"{{ end }}]
           ports: [{ containerPort: 5020 }]
           volumeMounts:
             - { name: kdbx-license, mountPath: /usr/local/kdbx/q, subPath: q }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/k4.lic, subPath: k4.lic }
-          resources: {{ $res | toYaml | nindent 12 }}
+            - { name: kdbx-license, mountPath: /usr/local/kdbx/kc.lic, subPath: kc.lic }
+          resources: {{ $rdbRes | toYaml | nindent 12 }}
       volumes:
         - name: kdbx-license
           secret: { secretName: {{ $lic }}, defaultMode: 0555 }
@@ -155,6 +206,9 @@ spec:
     metadata:
       labels: { app: idb-{{ $sid }}, role: idb, shard: {{ $sid | quote }} }
     spec:
+      {{- if $idbNodeSel }}
+      nodeSelector: {{ $idbNodeSel | toYaml | nindent 8 }}
+      {{- end }}
       # idb shares a ReadWriteOnce PVC with its shard's wdb, and block storage
       # on every major cloud (EBS/Azure Disk/PD) is single-node-attach only, so
       # idb must schedule onto the same node as its wdb. A multi-node setup
@@ -178,8 +232,8 @@ spec:
           volumeMounts:
             - { name: db, mountPath: /data/db }
             - { name: kdbx-license, mountPath: /usr/local/kdbx/q, subPath: q }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/k4.lic, subPath: k4.lic }
-          resources: {{ $res | toYaml | nindent 12 }}
+            - { name: kdbx-license, mountPath: /usr/local/kdbx/kc.lic, subPath: kc.lic }
+          resources: {{ $idbRes | toYaml | nindent 12 }}
       volumes:
         - name: db
           persistentVolumeClaim: { claimName: db-{{ $sid }} }
@@ -207,6 +261,9 @@ spec:
     metadata:
       labels: { app: hdb-{{ $sid }}, role: hdb, shard: {{ $sid | quote }} }
     spec:
+      {{- if $hdbNodeSel }}
+      nodeSelector: {{ $hdbNodeSel | toYaml | nindent 8 }}
+      {{- end }}
       # same RWO co-location constraint as idb, but against the hdb PVC that
       # wdb seals end-of-day partitions into.
       affinity:
@@ -222,13 +279,13 @@ spec:
           image: "{{ $reg }}kdb-control-plane/data-plane:{{ $tag }}"
           imagePullPolicy: {{ $pull }}
           command: ["q", "hdb.q", "-shard", "{{ $sid }}", "-hdbdir", "/data/hdb",
-                    "-reloadsec", "60", "-retentiondays", "{{ $hdbRetention }}", "-p", "5060"]
+                    "-reloadsec", "60", "-retentiondays", "{{ $hdbRetention }}", "-p", "5060"{{ if gt $kdbThreads 0 }}, "-s", "{{ $kdbThreads }}"{{ end }}]
           ports: [{ containerPort: 5060 }]
           volumeMounts:
             - { name: hdb, mountPath: /data/hdb }
             - { name: kdbx-license, mountPath: /usr/local/kdbx/q, subPath: q }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/k4.lic, subPath: k4.lic }
-          resources: {{ $res | toYaml | nindent 12 }}
+            - { name: kdbx-license, mountPath: /usr/local/kdbx/kc.lic, subPath: kc.lic }
+          resources: {{ $hdbRes | toYaml | nindent 12 }}
       volumes:
         - name: hdb
           persistentVolumeClaim: { claimName: hdb-{{ $sid }} }
@@ -251,7 +308,9 @@ metadata:
   namespace: {{ .Values.global.namespace }}
   labels: { app: gateway, role: gateway }
 spec:
-  replicas: 1
+  {{- if not .Values.gateway.autoscaling.enabled }}
+  replicas: {{ .Values.gateway.replicaCount }}
+  {{- end }}
   selector: { matchLabels: { app: gateway } }
   template:
     metadata:
@@ -260,6 +319,9 @@ spec:
         # roll the gateway when the topology changes so it rereads shards.json
         checksum/shards: {{ include "kdb-control-plane.shardsJson" . | sha256sum }}
     spec:
+      {{- if $gwNodeSel }}
+      nodeSelector: {{ $gwNodeSel | toYaml | nindent 8 }}
+      {{- end }}
       containers:
         - name: gateway
           image: "{{ .Values.global.imageRegistry }}kdb-control-plane/data-plane:{{ .Values.global.imageTag }}"
@@ -271,8 +333,8 @@ spec:
           volumeMounts:
             - { name: shards, mountPath: /app/shards.json, subPath: shards.json }
             - { name: kdbx-license, mountPath: /usr/local/kdbx/q, subPath: q }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/k4.lic, subPath: k4.lic }
-          resources: {{ .Values.dataPlane.resources | toYaml | nindent 12 }}
+            - { name: kdbx-license, mountPath: /usr/local/kdbx/kc.lic, subPath: kc.lic }
+          resources: {{ $gwRes | toYaml | nindent 12 }}
       volumes:
         - name: shards
           configMap: { name: gateway-shards }
@@ -285,3 +347,30 @@ metadata: { name: gateway, namespace: {{ .Values.global.namespace }} }
 spec:
   selector: { app: gateway }
   ports: [{ port: 5050, targetPort: 5050 }]
+{{- if .Values.gateway.autoscaling.enabled }}
+---
+# CPU-based HPA for the gateway - see values.yaml's gateway.autoscaling
+# comment for why CPU (not request rate) is the built-in trigger here, and
+# the Autoscale page for a request-rate-INFORMED replica recommendation that
+# applies via the same fleet provisioning path as a shard-count change,
+# without requiring a custom-metrics adapter.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway
+  namespace: {{ .Values.global.namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gateway
+  minReplicas: {{ .Values.gateway.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.gateway.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.gateway.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

@@ -36,8 +36,13 @@ class DataPlaneBackend(Protocol):
         """The data plane's current shard count, or None if nothing is deployed."""
         ...
 
-    def reconcile(self, shard_count: int) -> ReconcileResult:
-        """Bring the data plane to `shard_count` shards (helm upgrade / compose)."""
+    def reconcile(self, shard_count: int, gateway_replicas: Optional[int] = None) -> ReconcileResult:
+        """Bring the data plane to `shard_count` shards (helm upgrade / compose),
+        and the gateway to `gateway_replicas` replicas if given (None = leave
+        whatever it's currently set to alone - the gateway is a horizontally
+        scalable, stateless tier independent of shard count, see
+        values.yaml's gateway.* comment, so this is a genuinely separate
+        knob, not derived from shard_count)."""
         ...
 
     def teardown(self) -> ReconcileResult:
@@ -50,11 +55,16 @@ class Provisioner:
         self.backend = backend
 
     def provision(self, payload: dict) -> ReconcileResult:
-        """Reconcile to the shard count in a `provision` command payload.
+        """Reconcile to the shard count (and optionally gateway replica
+        count) in a `provision` command payload.
 
         payload shape (from the control plane):
-            {"desired": {"shardCount": N, "topology": {...}, "services": [...]},
+            {"desired": {"shardCount": N, "gatewayReplicas": M, "topology": {...},
+                         "services": [...]},
              "note": "..."}
+        gatewayReplicas is optional - omitted or None means "leave the
+        gateway's replica count as it is", the same as before this field
+        existed.
         """
         desired = (payload or {}).get("desired") or {}
 
@@ -70,17 +80,21 @@ class Provisioner:
         if not (1 <= n <= MAX_SHARDS):
             return ReconcileResult(ok=False, detail=f"shardCount {n} out of range 1..{MAX_SHARDS}")
 
+        gw = desired.get("gatewayReplicas")
+        if gw is not None and (not isinstance(gw, int) or gw < 1):
+            return ReconcileResult(ok=False, detail=f"gatewayReplicas {gw!r} must be a positive integer")
+
         try:
             current = self.backend.current_shard_count()
         except Exception as exc:  # noqa: BLE001 - a backend probe failure is a failed reconcile
             return ReconcileResult(ok=False, detail=f"could not read current state: {exc}")
 
-        if current == n:
+        if current == n and gw is None:
             return ReconcileResult(ok=True, shard_count=n,
                                    detail=f"already at {n} shards, no change",
                                    steps=["no-op"])
         try:
-            result = self.backend.reconcile(n)
+            result = self.backend.reconcile(n, gateway_replicas=gw)
         except Exception as exc:  # noqa: BLE001
             return ReconcileResult(ok=False, shard_count=n, detail=f"reconcile raised: {exc}")
         # ensure the shard_count is stamped even if a backend forgot to

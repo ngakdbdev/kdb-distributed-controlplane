@@ -28,10 +28,11 @@ if [ "$found" -eq 0 ]; then
   exit 1
 fi
 
-if [ ! -f "$DEST/k4.lic" ] && [ ! -f "$DEST/kc.lic" ]; then
+if [ ! -f "$DEST/kc.lic" ]; then
   echo "" >&2
-  echo "NOTE: no licence found at $DEST/k4.lic - copy your KX licence there before" >&2
-  echo "      starting q. Never commit the licence (this folder is git-ignored)." >&2
+  echo "NOTE: no licence found at $DEST/kc.lic - copy your KX licence there (rename" >&2
+  echo "      it to kc.lic if it downloaded under a different name) before starting" >&2
+  echo "      q. Never commit the licence (this folder is git-ignored)." >&2
 fi
 
 echo "staged $found architecture(s): $(ls -1 "$DEST" | tr '\n' ' ')"

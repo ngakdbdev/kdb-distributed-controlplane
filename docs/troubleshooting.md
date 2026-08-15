@@ -6,6 +6,10 @@ real cause and the fix - not just "restart it," though sometimes that
 genuinely is the answer, and this says so plainly rather than pretending
 otherwise.
 
+New here? [getting-started.md](getting-started.md) explains the terms
+(tickerplant, shard, RDB/WDB/HDB) this doc uses without re-explaining them
+every time.
+
 **Before anything else**, check the actual container state - most
 "something's wrong" reports turn out to be one specific process cycling,
 not the whole platform:

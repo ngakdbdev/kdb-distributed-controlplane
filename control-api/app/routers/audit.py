@@ -1,7 +1,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from sqlmodel import Session, select
+from sqlmodel import Session, and_, or_, select
 
 from ..config import settings
 from ..db import get_session, log_event
@@ -9,6 +9,19 @@ from ..models import AuditEvent
 from .auth import CurrentUser, require_auth
 
 router = APIRouter(prefix="/audit", tags=["audit"])
+
+# actor values used ONLY by the data plane's own self-reporting (the
+# watchdog's detect_failure/auto_heal, a tickerplant's slow_sub_discard -
+# both post to /audit/internal below with no tenant_id, since neither
+# knows or cares which tenant's data it concerns - it's about the shared
+# cluster). These are the ONLY tenant_id-IS-NULL rows a non-platform-admin
+# gets to see (below) - genuinely tenant-scoped platform actions like
+# create_tenant/suspend_tenant also end up with tenant_id unset (they're
+# ABOUT a tenant, not scoped to the caller's own), but their actor is
+# always a human admin's email, never one of these, so they stay hidden
+# from anyone but platform_admin.
+_PLATFORM_WIDE_ACTORS = ("watchdog",)
+_PLATFORM_WIDE_ACTOR_PREFIX = "tp:"
 
 
 @router.get("")
@@ -25,7 +38,20 @@ def list_audit_events(limit: int = Query(default=100, le=1000),
             q = q.where(AuditEvent.tenant_id == tenant_id)
         # else: no filter - platform admin sees the full cross-tenant trail
     else:
-        q = q.where(AuditEvent.tenant_id == user.tenant_id)
+        # Previously an exact tenant_id match, which a NULL tenant_id (the
+        # watchdog's own self-healing reports, always platform-wide) could
+        # never satisfy - a tenant_admin could never see the watchdog
+        # actively healing THEIR OWN tick cluster. Carved out narrowly by
+        # actor (see _PLATFORM_WIDE_ACTORS above), not a blanket "any NULL
+        # tenant_id" - that would also leak other tenants' create_tenant/
+        # suspend_tenant events, which are unrelated to this tenant.
+        q = q.where(or_(
+            AuditEvent.tenant_id == user.tenant_id,
+            and_(AuditEvent.tenant_id.is_(None), or_(
+                AuditEvent.actor.in_(_PLATFORM_WIDE_ACTORS),
+                AuditEvent.actor.like(f"{_PLATFORM_WIDE_ACTOR_PREFIX}%"),
+            )),
+        ))
     events = session.exec(q).all()
     return [e.model_dump() for e in events]
 

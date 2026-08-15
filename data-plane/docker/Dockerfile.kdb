@@ -6,7 +6,7 @@
 # data folder (each has just the binary; q.k is embedded) + add your licence:
 #     <data folder>/l64/q        (Linux x86-64)
 #     <data folder>/l64arm/q     (Linux ARM64 - Graviton etc.)
-#     <data folder>/k4.lic       (your KX licence)
+#     <data folder>/kc.lic       (your KX licence)
 # Helper: data-plane/docker/stage-kdbx.sh. compose mounts
 # ${KX_BINARIES_DIR:-./data-plane/docker/kdbx} at /kdbx.
 #
@@ -17,7 +17,7 @@
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl rlwrap procps unzip && \
+    ca-certificates curl rlwrap procps unzip numactl && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

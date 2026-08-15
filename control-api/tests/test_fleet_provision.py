@@ -65,6 +65,35 @@ def test_provision_rejects_out_of_range_shard_count(client, tadmin, bad):
     assert r.status_code == 400
 
 
+def test_provision_omits_gateway_replicas_when_not_given(client, tadmin):
+    # unchanged behavior for every caller that doesn't know about this field
+    # yet - no "gatewayReplicas" key at all, not a null one, so an older
+    # agent/backend that's never heard of it sees exactly what it always has.
+    agent = _register_agent(client, tadmin)
+    r = client.post(f"/fleet/agents/{agent['agent_id']}/provision",
+                    json={"shard_count": 2}, headers=tadmin)
+    assert r.status_code == 200, r.text
+    payload = json.loads(r.json()["payload"])
+    assert "gatewayReplicas" not in payload["desired"]
+
+
+def test_provision_carries_gateway_replicas_through_to_desired_topology(client, tadmin):
+    agent = _register_agent(client, tadmin)
+    r = client.post(f"/fleet/agents/{agent['agent_id']}/provision",
+                    json={"shard_count": 2, "gateway_replicas": 4}, headers=tadmin)
+    assert r.status_code == 200, r.text
+    payload = json.loads(r.json()["payload"])
+    assert payload["desired"]["gatewayReplicas"] == 4
+
+
+def test_provision_rejects_non_positive_gateway_replicas(client, tadmin):
+    agent = _register_agent(client, tadmin)
+    for bad in (0, -1):
+        r = client.post(f"/fleet/agents/{agent['agent_id']}/provision",
+                        json={"shard_count": 2, "gateway_replicas": bad}, headers=tadmin)
+        assert r.status_code == 400
+
+
 def test_provision_unknown_agent_404(client, tadmin):
     r = client.post("/fleet/agents/999999/provision",
                     json={"shard_count": 2}, headers=tadmin)

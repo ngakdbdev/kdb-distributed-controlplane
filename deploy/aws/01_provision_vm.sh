@@ -39,11 +39,83 @@ fi
 
 export AWS_DEFAULT_REGION="$REGION"
 
-echo "== resolving latest Ubuntu 22.04 AMI (Canonical, via SSM public parameter) =="
-AMI_ID="$(aws ssm get-parameters \
-  --names /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id \
-  --query 'Parameters[0].Value' --output text)"
+# AMI resolution - three layers, in order, because this is the #1 reported
+# failure point of this script: (1) an explicit override, for when you
+# already know the AMI you want or auto-resolution keeps failing;
+# (2) the SSM public-parameter lookup (fast, usually works); (3) a direct
+# EC2 describe-images query against Canonical's official AWS account as a
+# fallback, since the SSM parameter path has moved/lagged in the past and
+# some IAM policies scope ssm:GetParameters away from public parameters
+# while still allowing ec2:DescribeImages. Every layer is checked for a
+# real result before moving on - silently passing an empty/"None" AMI_ID
+# into run-instances was the actual root cause of confusing failures here,
+# not the lookup method itself.
+if [ -n "${AMI_ID:-}" ]; then
+  echo "== using explicitly set AMI_ID=$AMI_ID (skipping auto-resolution) =="
+else
+  echo "== resolving latest Ubuntu 22.04 AMI for $REGION (SSM public parameter) =="
+  AMI_ID="$(aws ssm get-parameters \
+    --names /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id \
+    --query 'Parameters[0].Value' --output text 2>/dev/null || true)"
+
+  if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
+    echo "   SSM lookup returned nothing for $REGION - falling back to a direct"
+    echo "   EC2 describe-images query against Canonical's AMI catalog."
+    AMI_ID="$(aws ec2 describe-images \
+      --owners 099720109477 \
+      --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" \
+                "Name=state,Values=available" \
+                "Name=architecture,Values=x86_64" \
+      --query 'sort_by(Images, &CreationDate)[-1].ImageId' --output text 2>/dev/null || true)"
+  fi
+
+  if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
+    cat >&2 <<EOF
+
+ERROR: could not resolve an Ubuntu 22.04 AMI for region '$REGION' automatically.
+
+This usually means one of:
+  - your IAM identity lacks ssm:GetParameters and/or ec2:DescribeImages
+    permission (try: aws sts get-caller-identity, then check the attached
+    policy covers both - public SSM parameters and Canonical's AMIs don't
+    need special cross-account permissions, just these two actions allowed
+    at all)
+  - a transient AWS API issue - wait a minute and re-run
+  - (rare) a brand-new region Canonical hasn't finished publishing to yet
+
+Workaround: find a known-good AMI ID yourself - AWS Console -> EC2 ->
+AMI Catalog -> search "Ubuntu 22.04" -> filter to region '$REGION' - then
+re-run with it set explicitly:
+  AMI_ID=ami-xxxxxxxxxxxxxxxxx ./01_provision_vm.sh
+
+EOF
+    exit 1
+  fi
+fi
 echo "   AMI: $AMI_ID"
+
+echo "== checking '$INSTANCE_TYPE' is offered in $REGION =="
+OFFERED="$(aws ec2 describe-instance-type-offerings \
+  --location-type region \
+  --filters "Name=instance-type,Values=$INSTANCE_TYPE" \
+  --query 'InstanceTypeOfferings[0].InstanceType' --output text 2>/dev/null || true)"
+if [ -z "$OFFERED" ] || [ "$OFFERED" = "None" ]; then
+  cat >&2 <<EOF
+
+ERROR: instance type '$INSTANCE_TYPE' is not offered in region '$REGION'.
+Newer compute-optimized families (C7i included) roll out to regions on
+their own schedule - not every region has every generation yet.
+
+Fix: either pick a region that has it -
+  aws ec2 describe-instance-type-offerings --location-type region \\
+    --filters Name=instance-type,Values=$INSTANCE_TYPE \\
+    --query 'InstanceTypeOfferings[].Location' --output text
+or pick an instance type this region does have and re-run with it set:
+  INSTANCE_TYPE=c6i.2xlarge ./01_provision_vm.sh
+
+EOF
+  exit 1
+fi
 
 echo "== ensuring an SSH key pair ($KEY_NAME) =="
 if ! aws ec2 describe-key-pairs --key-names "$KEY_NAME" >/dev/null 2>&1; then

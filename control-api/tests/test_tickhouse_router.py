@@ -66,6 +66,34 @@ def test_preview_reports_bad_shard_ranges(client, tadmin):
     assert r.status_code == 400
 
 
+def test_suggest_returns_a_profile_and_shard_count_for_review(client, tadmin):
+    r = client.post("/tickhouses/suggest",
+                    json={"tick_to_trade_target_ms": 100, "peak_msgs_per_sec": 8000},
+                    headers=tadmin)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["profile"] in ("low-latency", "balanced", "high-throughput")
+    assert body["shard_count"] >= 1
+    assert body["caveats"]  # never silent about these being estimates
+
+
+def test_suggest_with_no_body_fields_still_returns_a_default(client, tadmin):
+    r = client.post("/tickhouses/suggest", json={}, headers=tadmin)
+    assert r.status_code == 200, r.text
+    assert r.json()["profile"] == "balanced"
+
+
+def test_suggest_output_feeds_straight_into_preview(client, tadmin):
+    # the intended flow: suggest -> operator reviews/edits -> preview -> create
+    # -> provision. Confirm the suggested profile is one preview actually accepts.
+    suggestion = client.post("/tickhouses/suggest",
+                             json={"tick_to_trade_target_ms": 50}, headers=tadmin).json()
+    r = client.post("/tickhouses/preview",
+                    json=_hi(profile=suggestion["profile"]), headers=tadmin)
+    assert r.status_code == 200, r.text
+    assert r.json()["problems"] == []
+
+
 def test_create_list_get_delete(client, tadmin):
     created = client.post("/tickhouses", json=_hi(name="acme-apac"), headers=tadmin)
     assert created.status_code == 200, created.text

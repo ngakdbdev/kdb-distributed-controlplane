@@ -138,13 +138,20 @@ def bot_log(limit: int = 60, user: CurrentUser = Depends(require_tenant_scope),
             "ts": e.timestamp.isoformat() if e.timestamp else None} for e in rows]
 
 
-@router.post("/positions/{symbol}/close")
+@router.post("/positions/{symbol:path}/close")
 def close_position(symbol: str, user: CurrentUser = Depends(require_trading),
                    session: Session = Depends(get_session)):
     """Manually flatten a bot-opened position - the server-side counterpart
     to Bot.jsx's closePositionManually. Same rationale as that button's own
     comment: "stop bot" only pauses the poll loop, it deliberately does not
-    force-liquidate, so this is the explicit per-symbol way to flatten."""
+    force-liquidate, so this is the explicit per-symbol way to flatten.
+
+    :path (not the default str converter) - a crypto pair symbol like
+    ACU/USD contains a literal "/", and the frontend's encodeURIComponent
+    turns that into %2F; uvicorn decodes %2F to "/" before Starlette routes
+    the request, so the plain {symbol} converter never matched it at all
+    (404, confirmed live - every manual close attempt on a "/"-symbol failed
+    before even reaching this function)."""
     symbol = symbol.upper()
     pos = session.exec(select(BotPosition).where(
         BotPosition.tenant_id == user.tenant_id, BotPosition.symbol == symbol)).first()
@@ -169,3 +176,61 @@ def close_position(symbol: str, user: CurrentUser = Depends(require_trading),
                             reason=f"manually closed - sold {pos.qty} @ {fill_price:.4f}, P&L {pnl:.2f}"))
     session.commit()
     return {"symbol": symbol, "qty": pos.qty, "fill_price": fill_price, "pnl": pnl}
+
+
+@router.post("/positions/{symbol:path}/force-clear")
+def force_clear_position(symbol: str, user: CurrentUser = Depends(require_trading),
+                         session: Session = Depends(get_session)):
+    """Drops a bot position from local tracking WITHOUT placing a closing
+    order at the broker - the escape hatch for a position that can never
+    close through /close because the broker will never accept the order.
+    Confirmed live: a position in a demo-only symbol the configured broker
+    doesn't list at all (Alpaca rejects it with "asset not found" on every
+    attempt) sat retrying that doomed close every ~12s indefinitely, and
+    because it stayed "held", put_config's own held-position guard then
+    refused every basket edit that didn't also keep that dead symbol -
+    silently blocking adds too, not just removes. This does NOT flatten
+    anything at the real broker - if a live position genuinely exists there,
+    it's now unmonitored and must be handled directly at the broker."""
+    symbol = symbol.upper()
+    pos = session.exec(select(BotPosition).where(
+        BotPosition.tenant_id == user.tenant_id, BotPosition.symbol == symbol)).first()
+    if pos is None:
+        raise HTTPException(status_code=404, detail=f"no open bot position in {symbol}")
+
+    session.delete(pos)
+    session.add(BotLogEntry(tenant_id=user.tenant_id, symbol=symbol, type="force-cleared",
+                            reason=f"force-cleared by {user.email} without a broker order - "
+                                   f"verify this symbol's real state at the broker directly"))
+    log_event(session, user.email, "bot_position_force_cleared",
+              target=f"tenant:{user.tenant_id}:{symbol}",
+              detail="cleared from local tracking without a broker order", tenant_id=user.tenant_id)
+    session.commit()
+    return {"symbol": symbol, "status": "cleared"}
+
+
+@router.post("/reset")
+def hard_reset(user: CurrentUser = Depends(require_trading), session: Session = Depends(get_session)):
+    """Full hard reset: force-clears every open bot position (see
+    force_clear_position's own caveat - broker-side state isn't touched),
+    empties the basket, and disables the bot. For when the bot is stuck
+    holding something a basket edit can't get past (see force_clear_position)
+    and starting clean is simpler than clearing symbols one at a time."""
+    config = _get_or_create_config(session, user.tenant_id)
+    positions = session.exec(select(BotPosition).where(BotPosition.tenant_id == user.tenant_id)).all()
+    cleared = [p.symbol for p in positions]
+    for p in positions:
+        session.delete(p)
+        session.add(BotLogEntry(tenant_id=user.tenant_id, symbol=p.symbol, type="force-cleared",
+                                reason=f"cleared by hard reset ({user.email}) - "
+                                       f"verify this symbol's real state at the broker directly"))
+    config.symbols_json = "[]"
+    config.enabled = False
+    config.updated_at = datetime.utcnow()
+    config.updated_by = user.email
+    session.add(config)
+    log_event(session, user.email, "bot_hard_reset", target=f"tenant:{user.tenant_id}",
+              detail=f"cleared positions: {', '.join(cleared) or 'none'}", tenant_id=user.tenant_id)
+    session.commit()
+    session.refresh(config)
+    return _config_api(config)

@@ -4,7 +4,7 @@
 // "Your positions" chips, a deep-link symbol); Portfolio reads it to show a
 // watchlist row for anything you're tracking but don't hold yet, so a symbol
 // added on Markets shows up on Portfolio without any extra step.
-const KEY = "tickforge_watchlist_v1";
+const KEY = "vantik_watchlist_v1";
 const MAX = 12;
 
 export function loadWatchlist() {

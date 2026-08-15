@@ -4,6 +4,11 @@ What the web UI actually does, page by page. For how the underlying tick
 chain works, see `docs/tickerplant-administration.md`. For what to do when
 something's broken, see `docs/troubleshooting.md`.
 
+**First time here?** This assumes the stack is already running and you've
+logged in once. If you haven't gotten that far yet, or terms like
+"tickerplant" or "shard" are unfamiliar, start with
+[getting-started.md](getting-started.md) instead - it walks through both.
+
 ## Logging in
 
 `/login` — tenant users authenticate against the platform's own credential
@@ -110,27 +115,55 @@ target.
 
 ## Markets / Orders / Portfolio / Bot / Execution
 
-The trading terminal. **Paper-only, by design and by hard technical
-line** - orders fill against a caller-supplied reference price with no real
-order book or matching engine; there's a coded seam for a real broker route
-(`BrokerRouter`) that unconditionally refuses until one's actually wired
-in. A real pre-trade risk gate runs before every fill, reading the same
-live risk feed the Alerts page does - it fails **closed** by default (an
-unreachable risk feed blocks the order rather than letting it through
-unverified; `RISK_GATE_FAIL_OPEN` opts back into the old fail-open
-behavior for desks that have consciously decided that tradeoff). Trading
-permission is a separate, explicit grant (`can_trade`) from tenant admin -
-viewing market data needs no special permission, placing orders does.
+The trading terminal. **Paper by default, unconditionally**, until you
+deliberately configure otherwise - orders fill against a caller-supplied
+reference price with no real order book or matching engine. Two real broker
+seams exist:
+
+- `BrokerRouter` (generic FIX/broker adapter) - still unconditionally
+  refuses; nothing is wired to it.
+- `AlpacaRouter` (`app/alpaca_broker.py`) - a real, working integration.
+  Unconfigured (no `ALPACA_API_KEY_ID`/`ALPACA_API_SECRET_KEY`, or
+  `ALPACA_TRADING_MODE=off`, the default), behavior is identical to before
+  this existed. `ALPACA_TRADING_MODE=paper` routes marketable fills (market
+  orders, and limit orders that cross on arrival) through Alpaca's own
+  paper-trading simulation instead - a real broker's order mechanics against
+  live prices, still zero real money. `ALPACA_TRADING_MODE=live` moves real
+  money and additionally requires `ALPACA_LIVE_TRADING_ACK` to exactly match
+  a confirmation phrase (`alpaca_broker.LIVE_ACK_PHRASE`) - a bare
+  `ALPACA_TRADING_MODE=live` cannot enable it by accident, and a
+  missing/wrong ack silently downgrades to paper rather than either erroring
+  or (worse) going live anyway. A resting (non-marketable) limit order
+  always stays on the internal matcher regardless of mode - Alpaca's own
+  order-book lifecycle isn't wired in for that case. The Orders and Bot
+  pages both show the real active mode as a badge (PAPER / ALPACA PAPER / a
+  loud red ALPACA LIVE), never a hardcoded label.
+
+Going live on a product shipped to customers is a business/legal decision
+needing real compliance review (broker connectivity + entitlements +
+sign-off), not just a config change - see `alpaca_broker.py`'s own
+docstring before ever setting `ALPACA_TRADING_MODE=live`.
+
+A real pre-trade risk gate runs before every fill regardless of route,
+reading the same live risk feed the Alerts page does - it fails **closed**
+by default (an unreachable risk feed blocks the order rather than letting
+it through unverified; `RISK_GATE_FAIL_OPEN` opts back into the old
+fail-open behavior for desks that have consciously decided that tradeoff).
+Trading permission is a separate, explicit grant (`can_trade`) from tenant
+admin - viewing market data needs no special permission, placing orders
+does.
 
 ## Connectors
 
 Turn real market-data providers on/off per tenant, scoped to a symbol
 group. Two tiers, shown honestly: **live** (Finnhub, Twelve Data,
-Polygon.io, Coinbase, Kraken, Yahoo Finance, Alpha Vantage - usable today,
-several needing no API key at all) and **licensed** (NYSE, LSEG/Refinitiv,
-NSE, BSE - coded to the real protocol/SDK shape but refusing with a clear
-message until real credentials/entitlements are plugged in; never fake a
-connection).
+Polygon.io, Alpaca, Coinbase, Kraken, Yahoo Finance, Alpha Vantage - usable
+today, several needing no API key at all) and **licensed** (NYSE,
+LSEG/Refinitiv, NSE, BSE - coded to the real protocol/SDK shape but
+refusing with a clear message until real credentials/entitlements are
+plugged in; never fake a connection). Alpaca's market-data feed and its
+order-routing seam (above) share credentials but are otherwise
+independent - enabling one doesn't enable the other.
 
 ## Autoscaling
 

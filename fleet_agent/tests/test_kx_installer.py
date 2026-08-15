@@ -12,7 +12,7 @@ _FAKE_TOKEN = "SECRET-TOKEN-VALUE-should-never-appear"
 
 
 def _portal_cfg(**kw):
-    kw.setdefault("license_path", "/run/secrets/k4.lic")
+    kw.setdefault("license_path", "/run/secrets/kc.lic")
     return KxInstallConfig(source="kx-portal",
                            kx_version="4.1", kx_channel="~latest~", kx_arch="l64", **kw)
 
@@ -61,7 +61,7 @@ def test_portal_preflight_still_needs_linux_and_licence(monkeypatch):
 
 def test_url_source_still_works():
     cfg = KxInstallConfig(source="url", binary_url="https://mirror.example.com/kx.tgz",
-                          license_path="/run/secrets/k4.lic")
+                          license_path="/run/secrets/kc.lic")
     labels = [l for l, _ in KxInstaller(cfg).plan()]
     assert "download KX binary" in labels
     download = next(argv for l, argv in KxInstaller(cfg).plan() if l == "download KX binary")
@@ -70,11 +70,11 @@ def test_url_source_still_works():
 
 def test_from_env_builds_portal_config_without_storing_token():
     env = {"KX_INSTALL_SOURCE": "kx-portal", "KX_VERSION": "4.1", "KX_CHANNEL": "~latest~",
-           "KX_ARCH": "l64", "KX_LICENSE_PATH": "/run/secrets/k4.lic",
+           "KX_ARCH": "l64", "KX_LICENSE_PATH": "/run/secrets/kc.lic",
            "KX_BEARER_TOKEN": _FAKE_TOKEN}
     cfg = KxInstallConfig.from_env(env)
     assert cfg.source == "kx-portal" and cfg.kx_version == "4.1"
-    assert cfg.license_path == "/run/secrets/k4.lic"
+    assert cfg.license_path == "/run/secrets/kc.lic"
     assert cfg.bearer_env == "KX_BEARER_TOKEN"
     # the token value is NOT copied onto the config anywhere
     assert _FAKE_TOKEN not in repr(cfg)
@@ -103,7 +103,7 @@ def test_kx_arch_for_os(os_type, arch):
 
 def test_installer_resolves_arch_from_os_when_not_pinned():
     inst = KxInstaller(KxInstallConfig(source="local", binaries_dir="/kdbx",
-                                       license_path="/run/secrets/k4.lic",
+                                       license_path="/run/secrets/kc.lic",
                                        os_type="ubuntu-22.04-arm64"))
     assert inst.arch() == "l64arm"
     # verify + chmod steps target the resolved arch dir
@@ -113,7 +113,7 @@ def test_installer_resolves_arch_from_os_when_not_pinned():
 
 def test_local_source_unpacks_arch_zip_from_data_folder():
     inst = KxInstaller(KxInstallConfig(source="local", binaries_dir="/data/kx",
-                                       license_path="/run/secrets/k4.lic", os_type="linux"))
+                                       license_path="/run/secrets/kc.lic", os_type="linux"))
     labels = [l for l, _ in inst.plan()]
     assert "unpack KX binary for l64" in labels
     unpack = next(argv for l, argv in inst.plan() if l.startswith("unpack KX binary"))
@@ -122,7 +122,7 @@ def test_local_source_unpacks_arch_zip_from_data_folder():
 
 def test_local_preflight_requires_binaries_dir():
     problems = KxInstaller(KxInstallConfig(source="local", binaries_dir="",
-                                           license_path="/run/secrets/k4.lic")).preflight()
+                                           license_path="/run/secrets/kc.lic")).preflight()
     assert any("binaries_dir" in p for p in problems)
 
 

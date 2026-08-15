@@ -36,6 +36,7 @@ _ENV_KEYS = {
     "twelvedata": "TWELVEDATA_API_KEY",
     "polygon": "POLYGON_API_KEY",
     "alphavantage": "ALPHAVANTAGE_API_KEY",
+    "alpaca": "ALPACA_API_KEY_ID",
     # yahoo/coinbase/kraken need no key - yahoo's an unofficial endpoint;
     # coinbase/kraken's market-data (not trading) feeds are fully public
 }
@@ -100,7 +101,21 @@ def main(argv=None) -> int:
     # on first publish. That way a licensed provider that refuses in run()
     # doesn't hang forever trying to reach tickerplants it will never use.
 
-    provider = cls(symbols, publisher, args.shards, api_key=api_key)
+    # alpaca needs a SECOND credential (secret key, not just the key ID every
+    # other provider uses) plus which data feed tier to subscribe to - both
+    # unique to it, so kept as an explicit extra-kwargs case rather than
+    # widening every other provider's constructor for one adapter's shape.
+    extra_kwargs = {}
+    if args.provider == "alpaca":
+        extra_kwargs["api_secret"] = os.environ.get("ALPACA_API_SECRET_KEY", "")
+        extra_kwargs["data_feed"] = os.environ.get("ALPACA_DATA_FEED", "iex")
+    elif args.provider == "ibkr":
+        # no API key at all - auth lives entirely in the already-running
+        # Client Portal Gateway this points at (see ibkr.py's docstring)
+        extra_kwargs["gateway_base_url"] = os.environ.get("IBKR_GATEWAY_BASE_URL", "")
+        extra_kwargs["verify_ssl"] = os.environ.get("IBKR_GATEWAY_VERIFY_SSL", "false").lower() == "true"
+
+    provider = cls(symbols, publisher, args.shards, api_key=api_key, **extra_kwargs)
     print(f"\n  starting {provider.display_name} -> {args.shards} shards, {len(symbols)} symbols\n")
     try:
         provider.run()

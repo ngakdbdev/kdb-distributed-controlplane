@@ -1,6 +1,17 @@
 # Documentation
 
+## New to this? Start here.
+
+[getting-started.md](getting-started.md) — the zero-to-running walkthrough.
+Assumes nothing: explains what kdb+/a tickerplant/a shard even are in plain
+English, then gets the whole system running on your own laptop step by
+step, with expected output shown at each command. If this is your first
+time in this codebase, read that one first, not the reference docs below.
+
 ## Building, running, and operating the platform
+
+Reference material, not a tutorial — for once you're past the getting-started
+guide and need the detail on a specific piece.
 
 - [developer-guide.md](developer-guide.md) — codebase layout, where to make a
   given kind of change, local dev workflow, testing conventions
@@ -80,7 +91,7 @@ environment and reached a git history, regardless of whether it's still active:
 The `q` binary and license are proprietary and never bundled in this repo (see root `README.md`).
 Every path below needs one of:
 - **Community Edition** (free, commercial use allowed) — download from the KX Developer Center, stage
-  the binary + `k4.lic` yourself (`data-plane/docker/kdbx/` for the VM path, a Kubernetes `Secret` for
+  the binary + `kc.lic` yourself (`data-plane/docker/kdbx/` for the VM path, a Kubernetes `Secret` for
   the Helm path).
 - **Portal pull at deploy time** — set `KX_INSTALL_SOURCE=kx-portal` and a rotated `KX_BEARER_TOKEN`;
   the containers fetch the binary from the KX portal on first start. Requires outbound internet from

@@ -13,7 +13,7 @@
 #                never echoed.
 #
 # Same image runs on amd64 or arm64: the arch is resolved from uname at start.
-# You always supply your own LICENCE (k4.lic) - via the data folder or QLIC.
+# You always supply your own LICENCE (kc.lic) - via the data folder or QLIC.
 set -e
 
 : "${KX_BINARIES_DIR:=/kdbx}"
@@ -111,6 +111,30 @@ else
   unset QLIC
 fi
 QBIN="$QHOME/$KX_ARCH/q"
+
+# Optional CPU/NUMA pinning via numactl. Set KDB_CPUSET (e.g. "0-3" or
+# "0,2,4,6") to bind this process to specific cores, and/or KDB_NUMA_NODE
+# (e.g. "0") to bind its memory allocations to one NUMA node. Neither is
+# auto-derived: there's no generic, portable way to learn a host's real
+# core-to-NUMA-node layout from inside a container without host
+# introspection (`numactl --hardware` on the host tells you; see
+# docs/hardening.md's NUMA section), so this is operator-set per component,
+# not guessed. Unset (the default) = no pinning, identical behavior to
+# before this existed. Missing numactl warns and continues WITHOUT pinning
+# rather than failing the container outright - a mis-set/unavailable pinning
+# knob shouldn't take down a process that would otherwise run fine unpinned.
+if [ -n "$KDB_CPUSET" ] || [ -n "$KDB_NUMA_NODE" ]; then
+  if command -v numactl >/dev/null 2>&1; then
+    numa_args=""
+    [ -n "$KDB_CPUSET" ] && numa_args="--physcpubind=$KDB_CPUSET"
+    [ -n "$KDB_NUMA_NODE" ] && numa_args="$numa_args --membind=$KDB_NUMA_NODE"
+    echo "kdb-entrypoint: NUMA pinning -> numactl $numa_args -- $QBIN $*" >&2
+    # shellcheck disable=SC2086  # numa_args is intentionally word-split (0-2 flags)
+    exec numactl $numa_args -- "$QBIN" "$@"
+  else
+    echo "kdb-entrypoint: KDB_CPUSET/KDB_NUMA_NODE set but numactl isn't installed in this image - continuing WITHOUT pinning. Rebuild the data-plane image (numactl is in Dockerfile.kdb's apt-get line) to enable it." >&2
+  fi
+fi
 
 echo "kdb-entrypoint: arch=$KX_ARCH source=$KX_INSTALL_SOURCE QHOME=$QHOME -> $QBIN $*" >&2
 exec "$QBIN" "$@"

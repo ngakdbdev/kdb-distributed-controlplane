@@ -16,8 +16,12 @@ import logging
 import os
 import threading
 
+from sqlmodel import Session
+
+from . import asset_metadata
 from . import signal_engine
 from . import symbols as symref
+from .db import engine
 
 log = logging.getLogger("symbol_discovery")
 
@@ -41,6 +45,11 @@ def run_once() -> None:
     if added:
         log.info("symbol discovery: added %d newly-seen symbol(s): %s",
                  len(added), ", ".join(sorted(added)))
+    try:
+        with Session(engine) as session:
+            asset_metadata.record_seen(live, session)
+    except Exception:  # noqa: BLE001 - persistence is a bonus, never fatal to discovery itself
+        log.exception("symbol discovery: failed to persist asset metadata")
 
 
 def _loop() -> None:

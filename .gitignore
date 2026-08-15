@@ -6,6 +6,10 @@ __pycache__/
 *.db
 control-api/control_plane*.db
 data-plane/docker/kdbx/q
-data-plane/docker/kdbx/k4.lic
+data-plane/docker/kdbx/*.lic
 *.log
 deploy/tls/.local-ca/
+.claude
+.venv
+.pytest_cache
+

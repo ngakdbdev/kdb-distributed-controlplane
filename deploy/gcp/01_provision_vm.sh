@@ -20,12 +20,38 @@ REGION="${GCP_ZONE%-*}"
 VM_NAME="${VM_NAME:-kdb-control-plane-demo}"
 MACHINE_TYPE="${MACHINE_TYPE:-c3-standard-8}"   # 8 vCPU / 32GB, compute-optimized
 DISK_SIZE_GB="${DISK_SIZE_GB:-100}"
+IMAGE_FAMILY="${IMAGE_FAMILY:-ubuntu-2204-lts}"
+IMAGE_PROJECT="${IMAGE_PROJECT:-ubuntu-os-cloud}"
 
 echo "== setting active project =="
 gcloud config set project "$PROJECT_ID"
 
 echo "== enabling required APIs =="
 gcloud services enable compute.googleapis.com
+
+# Machine-type availability per zone is the #1 reported failure point of
+# this script - compute-optimized C3 has materially narrower zone coverage
+# than general-purpose families, and picking a zone that doesn't have it
+# otherwise surfaces as a buried "not available" error from `instances
+# create`. Check first, with a clear fix.
+echo "== checking '$MACHINE_TYPE' is offered in $ZONE =="
+OFFERED="$(gcloud compute machine-types list \
+  --filter="name=$MACHINE_TYPE AND zone:$ZONE" \
+  --format='value(name)' 2>/dev/null || true)"
+if [ -z "$OFFERED" ]; then
+  cat >&2 <<EOF
+
+ERROR: machine type '$MACHINE_TYPE' is not offered in zone '$ZONE'.
+
+Fix: either pick a zone that has it -
+  gcloud compute machine-types list --filter="name=$MACHINE_TYPE" \\
+    --format='value(zone)'
+or pick a machine type this zone does have and re-run with it set:
+  MACHINE_TYPE=n2-standard-8 ./01_provision_vm.sh
+
+EOF
+  exit 1
+fi
 
 echo "== creating a COMPACT placement policy (adjacent-host packing) =="
 gcloud compute resource-policies create group-placement \
@@ -38,8 +64,8 @@ echo "== creating the VM (C3, Tier_1 networking via gVNIC, compact-placed) =="
 gcloud compute instances create "$VM_NAME" \
   --zone "$ZONE" \
   --machine-type "$MACHINE_TYPE" \
-  --image-family=ubuntu-2204-lts \
-  --image-project=ubuntu-os-cloud \
+  --image-family="$IMAGE_FAMILY" \
+  --image-project="$IMAGE_PROJECT" \
   --boot-disk-size "${DISK_SIZE_GB}GB" \
   --boot-disk-type=pd-ssd \
   --network-interface=nic-type=GVNIC \

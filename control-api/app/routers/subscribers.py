@@ -3,7 +3,7 @@ from sqlmodel import Session, select
 
 from ..db import get_session, log_event
 from ..models import Subscriber
-from .auth import CurrentUser, require_tenant_scope
+from .auth import CurrentUser, require_admin, require_tenant_scope
 
 router = APIRouter(prefix="/subscribers", tags=["subscribers"])
 
@@ -16,7 +16,7 @@ def list_subscribers(user: CurrentUser = Depends(require_tenant_scope),
 
 
 @router.post("")
-def add_subscriber(sub: Subscriber, user: CurrentUser = Depends(require_tenant_scope),
+def add_subscriber(sub: Subscriber, user: CurrentUser = Depends(require_admin),
                     session: Session = Depends(get_session)):
     sub.id = None
     sub.tenant_id = user.tenant_id  # never trust a tenant_id from the request body
@@ -29,7 +29,7 @@ def add_subscriber(sub: Subscriber, user: CurrentUser = Depends(require_tenant_s
 
 
 @router.delete("/{subscriber_id}")
-def remove_subscriber(subscriber_id: int, user: CurrentUser = Depends(require_tenant_scope),
+def remove_subscriber(subscriber_id: int, user: CurrentUser = Depends(require_admin),
                        session: Session = Depends(get_session)):
     sub = session.get(Subscriber, subscriber_id)
     if sub is None or sub.tenant_id != user.tenant_id:

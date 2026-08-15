@@ -13,6 +13,7 @@ import Execution from "./pages/Execution.jsx";
 import Export from "./pages/Export.jsx";
 import Fleet from "./pages/Fleet.jsx";
 import TickHouses from "./pages/TickHouses.jsx";
+import InfraSettings from "./pages/InfraSettings.jsx";
 import Login from "./pages/Login.jsx";
 import Markets from "./pages/Markets.jsx";
 import Metrics from "./pages/Metrics.jsx";
@@ -20,11 +21,13 @@ import Migration from "./pages/Migration.jsx";
 import ModelSettings from "./pages/ModelSettings.jsx";
 import Orders from "./pages/Orders.jsx";
 import Portfolio from "./pages/Portfolio.jsx";
+import PredictiveSignals from "./pages/PredictiveSignals.jsx";
 import Query from "./pages/Query.jsx";
 import QueryAnalysis from "./pages/QueryAnalysis.jsx";
 import RecoveryWatch from "./components/RecoveryWatch.jsx";
 import Subscribers from "./pages/Subscribers.jsx";
 import Topology from "./pages/Topology.jsx";
+import Users from "./pages/Users.jsx";
 
 const PAGES = {
   overview: Overview,
@@ -35,9 +38,11 @@ const PAGES = {
   query: Query,
   "query-analysis": QueryAnalysis,
   "model-settings": ModelSettings,
+  "infra-settings": InfraSettings,
   markets: Markets,
   orders: Orders,
   portfolio: Portfolio,
+  signals: PredictiveSignals,
   bot: Bot,
   execution: Execution,
   connectors: Connectors,
@@ -48,6 +53,7 @@ const PAGES = {
   export: Export,
   audit: AuditLog,
   migration: Migration,
+  users: Users,
 };
 
 // The SSO callback redirects to <ui>/#access_token=...&token_type=bearer.
@@ -95,12 +101,22 @@ export default function App() {
     return <Login onLoggedIn={() => setLoggedIn(true)} />;
   }
 
-  const isPlatformAdmin = role === "platform_admin";
-  const Page = (active === "model-settings" && !isPlatformAdmin) ? Overview : (PAGES[active] || Overview);
+  // Page-level gating mirrors Nav.jsx's own PLATFORM_ADMIN_GROUP /
+  // TENANT_ADMIN_GROUP split - platform-wide settings (LLMConfig) vs.
+  // per-tenant infra/admin pages (require_admin server-side; see
+  // routers/auth.py). Direct URL/state manipulation to an ungated id still
+  // hits the backend's own role check, so this is a UX courtesy, not the
+  // enforcement boundary.
+  const platformAdminOnlyPages = ["model-settings"];
+  const tenantAdminOnlyPages = ["tickhouses", "autoscale", "fleet", "infra-settings", "users", "audit"];
+  const blocked =
+    (platformAdminOnlyPages.includes(active) && role !== "platform_admin") ||
+    (tenantAdminOnlyPages.includes(active) && role !== "tenant_admin");
+  const Page = blocked ? Overview : (PAGES[active] || Overview);
 
   return (
     <div className="app-shell">
-      <Nav active={active} onChange={navigate} onLogout={logout} isPlatformAdmin={isPlatformAdmin} />
+      <Nav active={active} onChange={navigate} onLogout={logout} role={role} />
       <div className="app-content-col">
         <main className="app-main">
           <Page onNavigate={navigate} initial={navParams} />

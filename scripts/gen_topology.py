@@ -69,6 +69,12 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
     command: ["tick.q", "{sid}", "-p", "{TP}", "-eodhour", "{eod_hour}"]
     environment:
       <<: *kdb-env
+      # optional NUMA/CPU pinning via kdb-entrypoint.sh's numactl support -
+      # blank (default) = no pinning, unchanged behavior. Operator-set, not
+      # auto-derived - see control-api/app/tickhouse.py's HardwareSpec.cpuset
+      # docstring for why. TP_CPUSET="0-1" / TP_NUMA_NODE="0" to enable.
+      KDB_CPUSET: "${{TP_CPUSET:-}}"
+      KDB_NUMA_NODE: "${{TP_NUMA_NODE:-}}"
     restart: unless-stopped
     volumes:
       - {KX_BIN_MOUNT}
@@ -85,7 +91,8 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
               "-flushmin", "2", "-retentionmin", "{rdb_retention_min}",
               "-dbdir", "/data/db", "-hdbdir", "/data/hdb",
               "-idbhost", "idb-{sid}", "-idbport", "{IDB}",
-              "-hdbhost", "hdb-{sid}", "-hdbport", "{HDB}", "-p", "{WDB}"]
+              "-hdbhost", "hdb-{sid}", "-hdbport", "{HDB}", "-p", "{WDB}",
+              "-eodhour", "{eod_hour}"]
     environment:
       <<: *kdb-env
       # secondary threads (-s), injected by kdb-entrypoint.sh - see KDB_THREADS
@@ -114,6 +121,9 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
       # parallel warm-start recovery read) finishes, so the full ceiling is
       # only held for the recovery window, not the process's whole life.
       KDB_THREADS: "${{RDB_THREADS:-{kdb_threads}}}"
+      # optional NUMA/CPU pinning - see tp-{sid}'s KDB_CPUSET comment above.
+      KDB_CPUSET: "${{RDB_CPUSET:-}}"
+      KDB_NUMA_NODE: "${{RDB_NUMA_NODE:-}}"
     restart: unless-stopped
     depends_on: [tp-{sid}]
     volumes:
@@ -144,9 +154,15 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
     environment:
       <<: *kdb-env
       # see rdb-{sid}'s KDB_THREADS comment above. hdb's periodic reload
-      # (system"l dir") is a single built-in mmap call, not peach-driven, so
-      # like wdb this just reserves CPU-sized capacity for future use.
+      # (system"l dir") is a single built-in mmap call, not peach-driven, but
+      # a client SELECT that actually reaches hdb (see control-api's
+      # query_router.route_tiers) DOES use these threads automatically - kdb+
+      # parallelizes a partitioned-table select across date partitions on its
+      # own whenever -s>0, no extra q code needed.
       KDB_THREADS: "${{HDB_THREADS:-{kdb_threads}}}"
+      # optional NUMA/CPU pinning - see tp-{sid}'s KDB_CPUSET comment above.
+      KDB_CPUSET: "${{HDB_CPUSET:-}}"
+      KDB_NUMA_NODE: "${{HDB_NUMA_NODE:-}}"
     restart: unless-stopped
     depends_on: [wdb-{sid}]
     volumes:
@@ -230,6 +246,55 @@ def _feeds_service(n: int) -> str:
       TP_HOST_PATTERN: "tp-{{shard}}"
       TP_PORT: "{TP}"
       FINNHUB_API_KEY: "${{FINNHUB_API_KEY:-}}"
+      PROVIDER_SYMBOLS_FILE: "${{PROVIDER_SYMBOLS_FILE:-}}"
+    volumes:
+      - ./data-plane/feeds/symbols:/symbols:ro
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
+
+  # Alpaca live provider (opt-in) - US equities/ETFs, real-time IEX trades
+  # free. Same credentials the Bot page's Alpaca paper-trading route uses
+  # (ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY) - this container only reads
+  # market data with them, never places an order.
+  #   docker compose --profile providers up -d alpaca-feed
+  alpaca-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "alpaca", "--symbols", "${{ALPACA_SYMBOLS:-AAPL,MSFT,GOOGL,AMZN,TSLA}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+      ALPACA_API_KEY_ID: "${{ALPACA_API_KEY_ID:-}}"
+      ALPACA_API_SECRET_KEY: "${{ALPACA_API_SECRET_KEY:-}}"
+      ALPACA_DATA_FEED: "${{ALPACA_DATA_FEED:-iex}}"
+      PROVIDER_SYMBOLS_FILE: "${{PROVIDER_SYMBOLS_FILE:-}}"
+    volumes:
+      - ./data-plane/feeds/symbols:/symbols:ro
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
+
+  # Interactive Brokers live provider (opt-in) - Level 1 quotes via a
+  # LOCALLY-RUNNING, already-authenticated Client Portal Gateway (see
+  # data-plane/feeds/providers/ibkr.py's docstring - this is NOT a simple
+  # API-key integration). IBKR_GATEWAY_BASE_URL's default
+  # (https://localhost:5000/v1/api) means "the gateway is reachable from
+  # THIS container's own localhost", which is essentially never true in
+  # compose - point it at the gateway's real address (e.g.
+  # host.docker.internal on Docker Desktop if the gateway runs on the host,
+  # or a service name if it's another container on this network, e.g. an
+  # IBeam service you add yourself).
+  #   docker compose --profile providers up -d ibkr-feed
+  ibkr-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "ibkr", "--symbols", "${{IBKR_SYMBOLS:-AAPL,MSFT,GOOGL,AMZN,TSLA}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+      IBKR_GATEWAY_BASE_URL: "${{IBKR_GATEWAY_BASE_URL:-https://localhost:5000/v1/api}}"
+      IBKR_GATEWAY_VERIFY_SSL: "${{IBKR_GATEWAY_VERIFY_SSL:-false}}"
       PROVIDER_SYMBOLS_FILE: "${{PROVIDER_SYMBOLS_FILE:-}}"
     volumes:
       - ./data-plane/feeds/symbols:/symbols:ro
@@ -410,6 +475,42 @@ def _control_plane_services(n: int) -> str:
       RISK_GATE_FAIL_OPEN: "${{RISK_GATE_FAIL_OPEN:-false}}"
       QUERY_BUDGET_MS_PER_WINDOW: "${{QUERY_BUDGET_MS_PER_WINDOW:-0}}"
       QUERY_BUDGET_WINDOW_HOURS: "${{QUERY_BUDGET_WINDOW_HOURS:-1}}"
+      # A product licence key is mandatory for any DEPLOYMENT_ENV other than
+      # local/dev - see control-api/app/licensing.py's enforcement_active().
+      # Defaults to "local" (unenforced) so a bare `docker compose up` keeps
+      # working with zero configuration; the cloud VM deploy scripts set
+      # this to "customer" in the .env they generate.
+      DEPLOYMENT_ENV: "${{DEPLOYMENT_ENV:-local}}"
+      LICENSE_KEY: "${{LICENSE_KEY:-}}"
+      LICENSE_ENFORCE: "${{LICENSE_ENFORCE:-}}"
+      # Order routing through a real Alpaca account (app/alpaca_broker.py) -
+      # blank/off (default) leaves the bot/order ticket on the internal
+      # simulated paper fill, unchanged from before this existed. See
+      # .env.example's Alpaca block for the full explanation, especially
+      # before ever setting ALPACA_TRADING_MODE to anything but "off"/"paper".
+      ALPACA_API_KEY_ID: "${{ALPACA_API_KEY_ID:-}}"
+      ALPACA_API_SECRET_KEY: "${{ALPACA_API_SECRET_KEY:-}}"
+      ALPACA_TRADING_MODE: "${{ALPACA_TRADING_MODE:-off}}"
+      ALPACA_LIVE_TRADING_ACK: "${{ALPACA_LIVE_TRADING_ACK:-}}"
+      # Order routing through a real Interactive Brokers account
+      # (app/ibkr_broker.py) - same off-by-default pattern as Alpaca above.
+      # control-api reaches the Gateway itself (order placement), separate
+      # from the ibkr-feed container above (market data) - both point at
+      # the same gateway but are otherwise independent processes.
+      IBKR_GATEWAY_BASE_URL: "${{IBKR_GATEWAY_BASE_URL:-https://localhost:5000/v1/api}}"
+      IBKR_GATEWAY_VERIFY_SSL: "${{IBKR_GATEWAY_VERIFY_SSL:-false}}"
+      IBKR_TRADING_MODE: "${{IBKR_TRADING_MODE:-off}}"
+      IBKR_LIVE_TRADING_ACK: "${{IBKR_LIVE_TRADING_ACK:-}}"
+      # Predictive Signals page's news feed (app/news_feed.py) - reuses the
+      # SAME Finnhub key the finnhub-feed market-data provider uses (a
+      # separate call budget: Finnhub's free tier is a per-minute rate
+      # limit, not a shared quota). Alpha Vantage is optional/supplementary
+      # (real per-article sentiment scores when configured) - its free tier
+      # is heavily request-limited, so blank here just means the news feed
+      # runs on Finnhub's own keyword-based sentiment instead, not that it
+      # stops working.
+      FINNHUB_API_KEY: "${{FINNHUB_API_KEY:-}}"
+      ALPHAVANTAGE_API_KEY: "${{ALPHAVANTAGE_API_KEY:-}}"
     volumes:
       - control-api-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock

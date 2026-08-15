@@ -15,12 +15,13 @@ export default function Alerts({ onNavigate }) {
 
     async function tick() {
       if (closed) return;
-      const [ops, market, exec] = await Promise.all([
+      const [ops, market, exec, heal] = await Promise.all([
         buildOpsAlerts(),
         buildMarketAlerts(prevPrices.current),
         buildExecutionAlerts(),
+        buildSelfHealAlerts(),
       ]);
-      const merged = [...ops, ...market, ...exec]
+      const merged = correlateAlerts([...ops, ...market, ...exec, ...heal])
         .sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
       setAlerts(merged.slice(0, 30));
       setLastUpdated(new Date());
@@ -70,13 +71,21 @@ export default function Alerts({ onNavigate }) {
         ) : (
           <div className="alerts-grid">
             {alerts.map((a, i) => (
-              <article key={`${a.kind}-${a.key}-${i}`} className={`alert-card ${a.severity}`}>
+              <article key={`${a.kind}-${a.key}-${i}`} className={`alert-card ${a.severity}${a.kind === "incident" ? " incident" : ""}`}>
                 <header>
                   <span className={`signal-pill ${severityToPill(a.severity)}`}>{a.severity}</span>
                   <span className="muted">{a.kind}</span>
                 </header>
                 <h4>{a.title}</h4>
-                <p>{a.detail}</p>
+                {a.members ? (
+                  <ul style={{ margin: "0.3rem 0 0", paddingLeft: "1.1rem" }}>
+                    {a.members.map((m, j) => (
+                      <li key={j}><span className={`signal-pill ${severityToPill(m.severity)}`} style={{ marginRight: "0.4rem" }}>{m.severity}</span>{m.title}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>{a.detail}</p>
+                )}
                 <footer>
                   <span>{a.source}</span>
                   <span className="mono">{a.ts}</span>
@@ -109,6 +118,49 @@ function severityToPill(sev) {
   return "up";
 }
 
+// Groups alerts that share a groupKey (same shard, same symbol) into one
+// incident card instead of a flood of individually-plausible-looking rows.
+// A tickerplant going down on a shard used to show up as three to five
+// separate cards (subscriber pressure, tier disconnect, transit lag,
+// watchdog detected it, watchdog healed it) with no visual link between
+// them - reading as five unrelated problems instead of one incident with
+// five symptoms. Only alerts that opt in via groupKey are eligible;
+// anything without one (most execution alerts, ungrouped ops signals)
+// passes through unchanged. A group of exactly one member is left
+// standalone too - correlation only pays for itself once there's actually
+// more than one thing to correlate.
+function correlateAlerts(alerts) {
+  const groups = new Map();
+  const standalone = [];
+  for (const a of alerts) {
+    if (!a.groupKey) { standalone.push(a); continue; }
+    if (!groups.has(a.groupKey)) groups.set(a.groupKey, []);
+    groups.get(a.groupKey).push(a);
+  }
+  const out = [...standalone];
+  for (const [key, members] of groups) {
+    out.push(members.length > 1 ? buildIncident(key, members) : members[0]);
+  }
+  return out;
+}
+
+function buildIncident(groupKey, members) {
+  const worst = members.reduce((w, m) => (severityRank(m.severity) > severityRank(w.severity) ? m : w), members[0]);
+  const label = groupKey.startsWith("shard:") ? `shard ${groupKey.slice(6)}`
+    : groupKey.startsWith("symbol:") ? groupKey.slice(7) : groupKey;
+  const sources = [...new Set(members.map((m) => m.source))];
+  const latestTs = [...members].sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0].ts;
+  return {
+    key: `incident-${groupKey}`,
+    kind: "incident",
+    severity: worst.severity,
+    title: `${members.length} correlated alerts on ${label}`,
+    source: sources.join(" + "),
+    ts: latestTs,
+    members: [...members].sort((a, b) => severityRank(b.severity) - severityRank(a.severity)),
+  };
+}
+
 async function buildOpsAlerts() {
   const out = [];
   try {
@@ -126,6 +178,7 @@ async function buildOpsAlerts() {
           detail: `Queue ${queue.toLocaleString()} bytes, downstream lag ${lag.toLocaleString()}.`,
           source: "gateway/componentMetrics",
           ts: qStamp(),
+          groupKey: `shard:${row.shard}`,
         });
       }
       if (row.rdbConnected === false || row.wdbConnected === false) {
@@ -137,6 +190,7 @@ async function buildOpsAlerts() {
           detail: `RDB connected=${String(row.rdbConnected)} WDB connected=${String(row.wdbConnected)}.`,
           source: "gateway/componentMetrics",
           ts: qStamp(),
+          groupKey: `shard:${row.shard}`,
         });
       }
     }
@@ -153,6 +207,7 @@ async function buildOpsAlerts() {
           detail: `${row.shard}/${row.table} has elevated pipeline delay.`,
           source: "gateway/transitLag",
           ts: qStamp(),
+          groupKey: `shard:${row.shard}`,
         });
       }
     }
@@ -203,6 +258,7 @@ async function buildMarketAlerts(prevMap) {
             detail: `Last ${last.price.toFixed(2)} vs previous ${prev.toFixed(2)}.`,
             source: "trade tape",
             ts: String(last.time || qStamp()),
+            groupKey: `symbol:${sym}`,
           });
         }
       }
@@ -220,6 +276,7 @@ async function buildMarketAlerts(prevMap) {
             detail: `Last size ${Math.round(spike)} vs avg ${Math.round(avg)}.`,
             source: "trade tape",
             ts: String(last.time || qStamp()),
+            groupKey: `symbol:${sym}`,
           });
         }
       }
@@ -262,6 +319,60 @@ async function buildExecutionAlerts() {
         source: "order blotter",
         ts: qStamp(),
       });
+    }
+  } catch (_) {
+    // no-op: best effort
+  }
+  return out;
+}
+
+// Surfaces the watchdog's own self-healing activity (app/routers/audit.py's
+// /audit endpoint, populated by watchdog/watchdog.py's report() calls) -
+// previously only visible by digging through the raw Audit Log page, even
+// though "something broke and the platform fixed it automatically" is
+// exactly the kind of thing this page exists to surface. detect_failure is
+// the "noticed something's wrong" half; auto_heal is the outcome half -
+// shown as its own alert so a recovery that needed multiple attempts (or
+// escalated past the watchdog's own retry budget) is visible, not just the
+// initial detection.
+// service names are "<tier>-<shard>" (rdb-s0, tp-s1, idb-s0, ...) or the
+// shardless "gateway" - same shape RecoveryWatch.jsx's tierLabelFor parses.
+function shardOf(serviceName) {
+  const m = /^(?:rdb|idb|wdb|tp|hdb)-(.+)$/.exec(serviceName || "");
+  return m ? m[1] : null;
+}
+
+async function buildSelfHealAlerts() {
+  const out = [];
+  try {
+    const events = await api.listAudit(50);
+    for (const e of events) {
+      if (e.actor !== "watchdog") continue;
+      const shard = shardOf(e.target);
+      if (e.action === "detect_failure") {
+        out.push({
+          key: `heal-detect-${e.id}`,
+          kind: "self-heal",
+          severity: "warning",
+          title: `${e.target} failure detected`,
+          detail: e.detail,
+          source: "watchdog",
+          ts: e.timestamp,
+          groupKey: shard ? `shard:${shard}` : undefined,
+        });
+      } else if (e.action === "auto_heal") {
+        const failed = e.outcome === "failure" || e.outcome === "escalated";
+        out.push({
+          key: `heal-outcome-${e.id}`,
+          kind: "self-heal",
+          severity: failed ? "critical" : "info",
+          title: `${e.target} ${failed ? "auto-heal failed" : "auto-healed"}`,
+          detail: e.detail,
+          source: "watchdog",
+          ts: e.timestamp,
+          groupKey: shard ? `shard:${shard}` : undefined,
+        });
+      }
     }
   } catch (_) {
     // no-op: best effort

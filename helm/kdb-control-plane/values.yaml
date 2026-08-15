@@ -34,6 +34,16 @@ secrets:
   jwtSecret: "dev-secret-change-in-deploy"
   watchdogSharedSecret: "dev-watchdog-secret-change-in-deploy"
   nl2qLlmApiKey: ""            # API key for whichever nl2q.llmProvider is set below; blank is fine for "none" or a keyless local model server
+  licenseKey: ""                # 32-char product licence key (control-api/app/licensing.py's mint()) - see licensing.deploymentEnv below for whether it's mandatory
+
+# --------------------------------------------------------------- licensing
+# Helm is the pilot/production path (see docs/README.md's "which path"
+# table) - a valid licence key is MANDATORY by default here, unlike a bare
+# `docker compose up` on a laptop. control-api refuses to start without one
+# unless you deliberately override deploymentEnv to "local".
+licensing:
+  deploymentEnv: "customer"    # "customer" (default here) = licence mandatory; "local" = unenforced
+  enforce: ""                  # explicit true/false override, wins over deploymentEnv either way; blank = use the deploymentEnv default
 
 # ------------------------------------------------------ natural-language-to-q
 # The query workspace's plain-English box. "none" (default) uses the
@@ -51,7 +61,7 @@ nl2q:
 # KDB-X binary + license are NOT bundled in the image for licensing reasons -
 # mount them from a Secret you create yourself:
 #   kubectl create secret generic kdbx-license -n kdb-control-plane \
-#     --from-file=q=./q --from-file=k4.lic=./k4.lic
+#     --from-file=q=./q --from-file=kc.lic=./kc.lic
 kdbx:
   licenseSecretName: kdbx-license
 
@@ -74,6 +84,59 @@ dataPlane:
   resources:
     requests: { cpu: "250m", memory: "256Mi" }
     limits: { memory: "1Gi" }
+  # secondary threads (kdb+ -s) for rdb/wdb/hdb only - tp/idb/gateway never
+  # peach so reserving threads for them costs memory/thread overhead for no
+  # benefit (see data-plane/docker/kdb-entrypoint.sh's own comment on this,
+  # which the docker-compose path follows exactly). rdb uses its threads for
+  # parallel warm-start recovery (.rdb.loadWarm); once a query can actually
+  # reach hdb (control-api's /query/run tier routing), hdb's threads matter
+  # for real: kdb+ automatically parallelizes a partitioned-table select
+  # across multiple date partitions when -s>0, no extra q code needed - this
+  # is what makes a wide historical scan (e.g. a multi-month VWAP) actually
+  # use more than one core once it reaches hdb.
+  #
+  # UNLIKE the docker-compose path, this is a fixed integer, not "auto": Helm
+  # has no runtime "read this pod's own CPU count" step the way
+  # kdb-entrypoint.sh's shell does, so there's no equivalent to size this
+  # from cgroup limits at template-render time. Set it to roughly
+  # dataPlane.resources.requests.cpu rounded down (leave the main thread a
+  # core), capped at 4 (kdb+'s licensed secondary-thread ceiling on the
+  # KX-X build this chart targets - asking for more makes q print "Max
+  # number of secondary threads 4" and exit, which crash-loops the pod under
+  # the Deployment's default restart policy). 0 disables (-s not passed).
+  kdbThreads: 2
+
+# Optional PER-COMPONENT resource overrides (keys: tickerplant, wdb, rdb,
+# idb, hdb, gateway), layered on top of dataPlane.resources above - a
+# component with no entry here just uses the shared default. This is what
+# fleet_agent/tickhouse_render.py's render_helm_sets() actually targets when
+# it turns a TickHouse blueprint's per-component hardware auto-tuning
+# (control-api/app/tickhouse.py's auto_hardware - vcpus/memory sized per
+# profile x component, e.g. rdb gets more memory than gateway) into
+# `--set resources.<type>.requests.cpu=... --set resources.<type>.requests.memory=...`;
+# before this existed those --set values had nowhere to land (kdb-services.yaml
+# only read dataPlane.resources, a single block shared by every component
+# regardless of profile) and were silently dropped. Setting BOTH requests.cpu
+# and limits.cpu to the same value is what makes a pod eligible for
+# Kubernetes' Guaranteed QoS class - a prerequisite for the kubelet's static
+# CPUManager policy to grant it exclusive whole-core pinning (a cluster-level
+# kubelet flag, not something this chart turns on by itself - see
+# docs/hardening.md's NUMA section for the full mechanism and how to verify
+# it's actually active). Example:
+#   resources:
+#     rdb: { requests: { cpu: "4", memory: "32Gi" }, limits: { cpu: "4", memory: "32Gi" } }
+resources: {}
+
+# Optional NUMA-aware scheduling: pins a component's pods to nodes carrying a
+# matching label (e.g. a node pool you've labeled by NUMA/socket locality).
+# Off by default (empty map = no nodeSelector added, current behavior
+# unchanged). Same component keys as `resources` above. This complements,
+# doesn't replace, Guaranteed QoS + static CPUManager - nodeSelector picks
+# which NODE a pod can land on; CPUManager decides which CORES on that node
+# it gets exclusive use of.
+#   nodeSelectors:
+#     hdb: { numa-node: "0" }
+nodeSelectors: {}
 
 # ------------------------------------------------------ end-of-day lifecycle
 # hourUtc: which UTC hour the trading day rolls over at (0 = midnight UTC;
@@ -95,6 +158,28 @@ rdb:
   retentionMin: 2
 hdb:
   retentionDays: 0
+
+# ------------------------------------------------------------------ gateway
+# Unlike the data plane (which scales on shardCount, not replicas - see
+# dataPlane's own comment), the gateway IS a horizontally-scalable, stateless
+# router: it holds no state of its own (its shards.json routing table is a
+# mounted ConfigMap, same content on every replica) and every other pod
+# reaches it by the `gateway` Service name, which Kubernetes load-balances
+# across however many replicas are Ready - so replicaCount here has no other
+# moving parts to coordinate, unlike a shardCount change. Bump replicaCount
+# directly for a manual scale, or enable autoscaling for a real HPA (CPU-
+# based - see the Autoscale page's own recommendation for a per-request-rate-
+# informed suggestion, which applies via the same reconcile path as the data
+# plane's shard-count Apply, since request rate isn't a metric the stock k8s
+# metrics-server exposes without a custom-metrics adapter this chart doesn't
+# assume you have).
+gateway:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
 
 feeds:
   bpipeRateHz: 20

@@ -33,6 +33,7 @@ export default function Overview({ onNavigate }) {
   const [clusters, setClusters] = useState([]);
   const [feeds, setFeeds] = useState([]);
   const [pressure, setPressure] = useState(null);
+  const [health, setHealth] = useState(null);
   const prev = useRef(null);
 
   useEffect(() => {
@@ -40,6 +41,12 @@ export default function Overview({ onNavigate }) {
     pull();
     api.listTickhouses().then(setClusters).catch(() => setClusters([]));
     api.listConnectors().then(setFeeds).catch(() => setFeeds([]));
+    // Own, slower cadence (not REFRESH_MS/1s) - this rolls up infra/
+    // tickhouse/security/trading state, none of which meaningfully changes
+    // second to second the way live throughput does.
+    const pullHealth = () => api.platformHealth().then(setHealth).catch(() => setHealth(null));
+    pullHealth();
+    const healthId = setInterval(pullHealth, 15000);
     const id = setInterval(pull, REFRESH_MS);
     // Pressure comes from the SAME websocket snapshot below (s.componentMetrics),
     // not a separate REST poll - a second independent /metrics/snapshot call
@@ -64,7 +71,7 @@ export default function Overview({ onNavigate }) {
     });
     ws.onclose = () => setConnected(false);
     ws.onerror = () => setConnected(false);
-    return () => { clearInterval(id); ws.close(); };
+    return () => { clearInterval(id); clearInterval(healthId); ws.close(); };
   }, []);
 
   const svc = Object.entries(topo);
@@ -88,6 +95,27 @@ export default function Overview({ onNavigate }) {
         </div>
         <span className={`live-pill ${connected ? "on" : "off"}`}>{connected ? "● LIVE" : "○ offline"}</span>
       </div>
+
+      {/* One-glance platform health - composes the same infra/tickhouse/
+          security/trading checks Topology, Metrics and Audit log each show
+          separately, so "is everything healthy" doesn't require visiting
+          all three. See routers/platform_health.py. */}
+      {health && (
+        <div className="kpi-row" style={{ marginBottom: "0.75rem" }}>
+          {Object.entries(health.components).map(([name, c]) => (
+            <div className="kpi" key={name} style={{ cursor: "pointer" }}
+                 onClick={() => onNavigate?.(
+                   name === "infrastructure" ? "topology" : name === "tickhouse" ? "metrics"
+                   : name === "security" ? "audit" : "orders")}>
+              <div className="kpi-label">{name}</div>
+              <div className="kpi-value" style={{ fontSize: "0.95rem" }}>
+                <span className={`health-dot ${c.status}`} /> {c.status}
+              </div>
+              <div className="kpi-sub">{c.detail}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Honest, actionable state banner — never a dead screen */}
       {stream === "no-tp" && (

@@ -8,7 +8,7 @@ from ..db import get_session, log_event
 from ..models import Connector
 from ..orchestrator import orchestrator
 from ..provider_catalog import PROVIDER_CATALOG
-from .auth import CurrentUser, require_tenant_scope
+from .auth import CurrentUser, require_admin, require_tenant_scope
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
 
@@ -51,7 +51,7 @@ def list_connectors(user: CurrentUser = Depends(require_tenant_scope),
 
 
 @router.post("/{connector_id}/toggle")
-def toggle_connector(connector_id: int, user: CurrentUser = Depends(require_tenant_scope),
+def toggle_connector(connector_id: int, user: CurrentUser = Depends(require_admin),
                       session: Session = Depends(get_session)):
     connector = session.get(Connector, connector_id)
     if connector is None or connector.tenant_id != user.tenant_id:
@@ -84,7 +84,7 @@ class SymbolsBody(BaseModel):
 
 @router.put("/{connector_id}/symbols")
 def set_connector_symbols(connector_id: int, body: SymbolsBody,
-                           user: CurrentUser = Depends(require_tenant_scope),
+                           user: CurrentUser = Depends(require_admin),
                            session: Session = Depends(get_session)):
     """Scope a connector to a symbol group. Persists immediately; if the
     connector is currently enabled and its feed supports a live symbol-scope

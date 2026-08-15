@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mkdir -p /usr/local/kdbx
 
 ENV QHOME=/usr/local/kdbx
-ENV QLIC=/usr/local/kdbx/k4.lic
+ENV QLIC=/usr/local/kdbx/kc.lic
 ENV PATH="/usr/local/kdbx:${PATH}"
 
 WORKDIR /app

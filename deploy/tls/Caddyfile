@@ -1,4 +1,4 @@
-# TickForge HTTPS edge. Caddy terminates TLS for the domain, auto-obtains and
+# Vantik HTTPS edge. Caddy terminates TLS for the domain, auto-obtains and
 # renews a Let's Encrypt certificate, redirects all HTTP to HTTPS, and proxies
 # inward to the web-ui (which serves the app and proxies /api to control-api).
 # The domain and ACME email come from the environment (see .env.example), so the
@@ -14,7 +14,7 @@
 	# local_certs
 }
 
-{$TICKFORGE_DOMAIN} {
+{$TLS_DOMAIN} {
 	encode zstd gzip
 
 	# HSTS + baseline hardening. HSTS tells browsers to only ever use HTTPS.

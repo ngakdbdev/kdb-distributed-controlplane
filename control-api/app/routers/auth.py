@@ -81,3 +81,19 @@ def require_platform_admin(user: CurrentUser = Depends(get_current_user)) -> Cur
     if user.role != "platform_admin":
         raise HTTPException(status_code=403, detail="platform admin only")
     return user
+
+
+def require_admin(user: CurrentUser = Depends(require_tenant_scope)) -> CurrentUser:
+    """tenant_admin ("Admin" in the UI, full access within their own tenant)
+    - platform_admin never has a tenant_id, so require_tenant_scope already
+      rejects it here, which is correct: creating a TickHouse/infra profile/
+      user is that tenant's own admin's job, not the SaaS operator's (who
+      manages tenants themselves via /tenants, not their infrastructure).
+    Gates infra-provisioning and user-management actions (TickHouse/Fleet
+    create-delete-provision, connector/subscriber config, infra profiles,
+    user management) so a functional_user/quant_analyst can operate
+    day-to-day without also being able to reshape the tenant's
+    infrastructure or other people's accounts."""
+    if user.role != "tenant_admin":
+        raise HTTPException(status_code=403, detail="admin access required")
+    return user

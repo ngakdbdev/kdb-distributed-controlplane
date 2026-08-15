@@ -195,14 +195,18 @@ function Metric({ label, value, cls }) {
 
 function CorrelationMatrix({ matrix }) {
   if (!matrix?.length) return <p className="muted">Not enough overlapping tape to compute correlations yet.</p>;
+  // fixed column count (not auto-fit) so a row can never silently wrap a
+  // value onto its own line - see styles.css's .corr-row comment. Wider
+  // than the panel just scrolls horizontally instead.
+  const rowStyle = { "--corr-cols": matrix.length };
   return (
     <div className="corr-matrix">
-      <div className="corr-row corr-header">
+      <div className="corr-row corr-header" style={rowStyle}>
         <span className="corr-cell corr-corner">sym</span>
         {matrix.map((row) => <span key={row.symbol} className="corr-cell corr-label">{row.symbol}</span>)}
       </div>
       {matrix.map((row) => (
-        <div key={row.symbol} className="corr-row">
+        <div key={row.symbol} className="corr-row" style={rowStyle}>
           <span className="corr-cell corr-label">{row.symbol}</span>
           {row.values.map((cell) => (
             <span key={`${row.symbol}-${cell.symbol}`} className={`corr-cell ${corrClass(cell.value)}`} title={`${row.symbol}/${cell.symbol}: ${fmt(cell.value, 2)}`}>

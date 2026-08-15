@@ -58,14 +58,24 @@ class HelmBackend:
         v = values.get("shardCount")
         return int(v) if isinstance(v, (int, str)) and str(v).isdigit() else None
 
-    def reconcile(self, shard_count: int) -> ReconcileResult:
+    def reconcile(self, shard_count: int, gateway_replicas: Optional[int] = None) -> ReconcileResult:
         args = ["helm", "upgrade", "--install", self.release, self.chart_path,
                 "-n", self.namespace, "--create-namespace",
-                "--set", f"shardCount={shard_count}", "--wait", "--timeout", "10m"]
+                "--set", f"shardCount={shard_count}"]
+        step_desc = f"--set shardCount={shard_count}"
+        if gateway_replicas is not None:
+            # explicit replicaCount wins over the chart's own HPA-driven
+            # replicas: omission (see kdb-services.yaml) - an explicit scale
+            # request from the Autoscale page should take effect immediately,
+            # not wait for the HPA's own CPU-based reaction.
+            args += ["--set", f"gateway.replicaCount={gateway_replicas}",
+                     "--set", "gateway.autoscaling.enabled=false"]
+            step_desc += f", --set gateway.replicaCount={gateway_replicas}"
+        args += ["--wait", "--timeout", "10m"]
         for k, v in self.extra_set.items():
             args += ["--set", f"{k}={v}"]
         rc, out = _run(args)
-        steps = [f"helm upgrade --install {self.release} --set shardCount={shard_count}"]
+        steps = [f"helm upgrade --install {self.release} {step_desc}"]
         if rc != 0:
             return ReconcileResult(ok=False, shard_count=shard_count,
                                    detail=f"helm upgrade failed: {out[-500:]}", steps=steps)
@@ -121,7 +131,7 @@ class ComposeBackend:
         except Exception:  # noqa: BLE001
             return None
 
-    def reconcile(self, shard_count: int) -> ReconcileResult:
+    def reconcile(self, shard_count: int, gateway_replicas: Optional[int] = None) -> ReconcileResult:
         steps = []
         rc, out = _run([self.python, "scripts/gen_topology.py",
                         "--shards", str(shard_count),
@@ -132,9 +142,28 @@ class ComposeBackend:
         if rc != 0:
             return ReconcileResult(ok=False, shard_count=shard_count,
                                    detail=f"topology generation failed: {out[-500:]}", steps=steps)
-        rc, out = _run(["docker", "compose", "up", "-d", "--remove-orphans"],
-                       cwd=self.project_dir)
-        steps.append("docker compose up -d --remove-orphans")
+        # fleet_agent running at all means this IS a customer's own
+        # environment by definition (see module docstring) - force
+        # DEPLOYMENT_ENV=customer regardless of whatever's in this box's own
+        # .env/.env.example, rather than trusting the tenant's local file to
+        # have it right. See control-api/app/licensing.py.
+        env = {**os.environ, "DEPLOYMENT_ENV": "customer"}
+        cmd = ["docker", "compose", "up", "-d", "--remove-orphans"]
+        cmd_desc = "docker compose up -d --remove-orphans"
+        if gateway_replicas is not None:
+            # the gateway has no fixed container_name and every other
+            # service reaches it by the compose-DNS service name `gateway`
+            # (Docker's embedded DNS round-robins across however many
+            # containers answer to that name), so --scale is a genuine,
+            # working horizontal scale-out here, not just a Kubernetes-only
+            # capability.
+            cmd += ["--scale", f"gateway={gateway_replicas}"]
+            cmd_desc += f" --scale gateway={gateway_replicas}"
+        proc = subprocess.run(cmd, cwd=self.project_dir, env=env,
+                              capture_output=True, text=True, timeout=900)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        rc = proc.returncode
+        steps.append(cmd_desc)
         if rc != 0:
             return ReconcileResult(ok=False, shard_count=shard_count,
                                    detail=f"compose up failed: {out[-500:]}", steps=steps)
@@ -165,7 +194,11 @@ class ComposeBackend:
         if rc != 0:
             return ReconcileResult(ok=False, shard_count=n,
                                    detail=f"topology generation failed: {out[-500:]}", steps=steps)
-        env = {**os.environ, **render_compose_env(desired)}
+        # fleet_agent running at all means this IS a customer's own
+        # environment by definition - force DEPLOYMENT_ENV=customer
+        # regardless of what's in this box's own .env. See
+        # control-api/app/licensing.py.
+        env = {**os.environ, **render_compose_env(desired), "DEPLOYMENT_ENV": "customer"}
         proc = subprocess.run(["docker", "compose", "up", "-d", "--remove-orphans"],
                               cwd=self.project_dir, env=env, capture_output=True, text=True, timeout=900)
         steps.append(f"docker compose up -d ({summarize(desired)})")

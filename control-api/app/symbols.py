@@ -55,7 +55,8 @@ _SEED = [
     ("ENB", "Enbridge Inc.", "TSX", "CAD"),
 ]
 
-SYMBOLS = [{"symbol": s, "name": n, "market": m, "currency": c, "source": "seed"} for s, n, m, c in _SEED]
+SYMBOLS = [{"symbol": s, "name": n, "market": m, "currency": c, "source": "seed",
+           "asset_class": "equity"} for s, n, m, c in _SEED]
 _SEED_SYMS = {r["symbol"] for r in SYMBOLS}
 
 _live_lock = threading.Lock()
@@ -67,21 +68,33 @@ _live_symbols: dict[str, dict] = {}  # symbol -> reference row, source="live"
 # a false-positive on a shorter suffix.
 _CONCAT_QUOTES = ("USDT", "USDC", "BUSD", "USD", "EUR", "GBP", "BTC", "ETH")
 
+# Fiat currencies - used to tell an FX pair (both sides are currencies, e.g.
+# EUR/USD) apart from a crypto pair (base is a coin ticker, e.g. BTC-USD)
+# when both share the same BASE-QUOTE/BASE/QUOTE shape.
+_FIAT = {"USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "CNY", "HKD",
+         "SGD", "INR", "ZAR", "MXN", "BRL", "TRY", "SEK", "NOK", "DKK", "PLN", "KRW"}
 
-def _infer_market(sym: str) -> tuple[str, str]:
-    """Best-effort (market, currency) guess for a symbol discovered live, not
-    from the curated seed - crypto pairs are self-describing (BASE-QUOTE,
-    BASE/QUOTE, or BASEQUOTE with no separator at all); anything else just
-    gets tagged LIVE with an unknown currency rather than guessed wrong."""
+
+def classify(sym: str) -> tuple[str, str, str]:
+    """Best-effort (market, currency, asset_class) guess for a symbol
+    discovered live, not from the curated seed - crypto/FX pairs are
+    self-describing (BASE-QUOTE, BASE/QUOTE, or BASEQUOTE with no separator
+    at all); anything else just gets tagged LIVE/unknown rather than
+    guessed wrong. asset_class is one of equity/crypto/fx/unknown (seed
+    rows are always "equity" - see SYMBOLS above - this only classifies
+    what the seed doesn't already know)."""
     for sep in ("-", "/"):
         if sep in sym:
-            _base, _, quote = sym.partition(sep)
-            return "CRYPTO", quote.upper()
+            base, _, quote = sym.partition(sep)
+            base_u, quote_u = base.upper(), quote.upper()
+            if base_u in _FIAT and quote_u in _FIAT:
+                return "FX", quote_u, "fx"
+            return "CRYPTO", quote_u, "crypto"
     up = sym.upper()
     for quote in _CONCAT_QUOTES:
         if up.endswith(quote) and len(up) > len(quote):
-            return "CRYPTO", quote
-    return "LIVE", ""
+            return "CRYPTO", quote, "crypto"
+    return "LIVE", "", "unknown"
 
 
 def merge_live_symbols(live_syms) -> set:
@@ -94,9 +107,10 @@ def merge_live_symbols(live_syms) -> set:
         for sym in live_syms:
             if sym in _SEED_SYMS or sym in _live_symbols:
                 continue
-            market, currency = _infer_market(sym)
+            market, currency, asset_class = classify(sym)
             _live_symbols[sym] = {"symbol": sym, "name": sym, "market": market,
-                                  "currency": currency, "source": "live"}
+                                  "currency": currency, "source": "live",
+                                  "asset_class": asset_class}
             added.add(sym)
     return added
 

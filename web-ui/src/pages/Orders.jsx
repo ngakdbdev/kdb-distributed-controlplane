@@ -51,13 +51,38 @@ export default function Orders({ initial, onNavigate }) {
     try { setOrders(await api.listOrders()); } catch { /* best effort */ }
   }
 
+  const modeLabel = {
+    paper: "PAPER", "alpaca-paper": "ALPACA PAPER", "alpaca-live": "⚠ ALPACA LIVE — REAL MONEY",
+    "ibkr-paper": "IBKR PAPER", "ibkr-live": "⚠ IBKR LIVE — REAL MONEY",
+    misconfigured: "⚠ MISCONFIGURED",
+  }[perm.mode] || "PAPER";
+  const modeCopy = {
+    paper: "Place and manage paper orders — simulated fills only, nothing leaves this box.",
+    "alpaca-paper": "Orders route to a real Alpaca account's paper-trading simulation — real order mechanics against live prices, zero real money at risk.",
+    "alpaca-live": "Orders route to a real Alpaca account with REAL MONEY. This is not a drill — every fill here is a real trade.",
+    "ibkr-paper": "Orders route to a real Interactive Brokers account's paper-trading simulation via a Client Portal Gateway — zero real money at risk.",
+    "ibkr-live": "Orders route to a real Interactive Brokers account with REAL MONEY. This is not a drill — every fill here is a real trade.",
+    misconfigured: `Order routing is misconfigured: ${perm.error || "both Alpaca and IBKR appear to be configured at once"}. Orders are refused until this is fixed.`,
+  }[perm.mode] || "Place and manage paper orders — simulated fills only, nothing leaves this box.";
+
+  const loudBadge = perm.live_routing || perm.mode === "misconfigured";
   return (
     <div className="page">
-      <h2>Orders <span className="paper-badge">PAPER</span></h2>
+      <h2>Orders <span className={`paper-badge${loudBadge ? " live" : ""}`}>{modeLabel}</span></h2>
       <p className="muted">
-        Place and manage paper orders — no live market routing, ever (see the root README on what's
-        real vs. simulated here). {perm.can_trade ? "" : "You don't have trading permission; ask an admin to grant it."}
+        {modeCopy} {perm.can_trade ? "" : "You don't have trading permission; ask an admin to grant it."}
       </p>
+      {perm.live_routing && (
+        <div className="ops-banner err">
+          <div>Live order routing is active for this deployment ({perm.mode === "ibkr-live" ? "IBKR_TRADING_MODE" : "ALPACA_TRADING_MODE"}=live).
+          Every order placed here trades real money in a real brokerage account.</div>
+        </div>
+      )}
+      {perm.mode === "misconfigured" && (
+        <div className="ops-banner err">
+          <div>{perm.error}</div>
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
 
       <div className="card">

@@ -13,7 +13,7 @@ from sqlmodel import Session, select
 from .. import tickhouse as th
 from ..db import get_session, log_event
 from ..models import Agent, Command, TickHouse
-from .auth import CurrentUser, require_tenant_scope
+from .auth import CurrentUser, require_admin, require_tenant_scope
 
 router = APIRouter(prefix="/tickhouses", tags=["tickhouses"])
 
@@ -49,6 +49,31 @@ def meta(user: CurrentUser = Depends(require_tenant_scope)):
             "config_fields": {c: th.config_fields(c) for c in th.CLOUDS}}
 
 
+class SuggestBody(BaseModel):
+    tick_to_trade_target_ms: float | None = None
+    peak_msgs_per_sec: int | None = None
+    symbol_count: int | None = None
+    cross_region: bool = False
+
+
+@router.post("/suggest")
+def suggest(body: SuggestBody, user: CurrentUser = Depends(require_tenant_scope)):
+    """SLA-driven starting point: 'my tick-to-trade target is 100ms and I
+    expect 8000 msgs/sec peak' -> a suggested profile, shard count, and an
+    estimated (explicitly caveated) latency budget breakdown. Purely
+    advisory and stateless - nothing is persisted here. The wizard pre-fills
+    /preview's profile/shard_ranges fields from this response so the operator
+    reviews and can override before /preview -> /create -> /provision, the
+    same explicit multi-step approval this wizard already requires for every
+    other path - this endpoint doesn't add a way to skip that."""
+    return th.suggest_blueprint(
+        tick_to_trade_target_ms=body.tick_to_trade_target_ms,
+        peak_msgs_per_sec=body.peak_msgs_per_sec,
+        symbol_count=body.symbol_count,
+        cross_region=body.cross_region,
+    )
+
+
 @router.post("/preview")
 def preview(body: HighLevelSpec, user: CurrentUser = Depends(require_tenant_scope)):
     """Auto-tune a full spec from the high-level choices and return it with any
@@ -61,9 +86,11 @@ def preview(body: HighLevelSpec, user: CurrentUser = Depends(require_tenant_scop
 
 
 @router.post("")
-def create(body: HighLevelSpec, user: CurrentUser = Depends(require_tenant_scope),
+def create(body: HighLevelSpec, user: CurrentUser = Depends(require_admin),
            session: Session = Depends(get_session)):
-    """Persist a tick cluster definition (auto-tuned from the high-level choices)."""
+    """Persist a tick cluster definition (auto-tuned from the high-level choices).
+    Admin-only (require_admin) - defining infrastructure is a provisioning
+    action, not something a functional_user/quant_analyst needs day-to-day."""
     try:
         spec = _build(body)
     except ValueError as exc:
@@ -99,7 +126,7 @@ def get_tickhouse(th_id: int, user: CurrentUser = Depends(require_tenant_scope),
 
 
 @router.delete("/{th_id}")
-def delete_tickhouse(th_id: int, user: CurrentUser = Depends(require_tenant_scope),
+def delete_tickhouse(th_id: int, user: CurrentUser = Depends(require_admin),
                      session: Session = Depends(get_session)):
     row = _load(th_id, user, session)
     session.delete(row)
@@ -114,7 +141,7 @@ class ProvisionBody(BaseModel):
 
 @router.post("/{th_id}/provision")
 def provision(th_id: int, body: ProvisionBody,
-              user: CurrentUser = Depends(require_tenant_scope),
+              user: CurrentUser = Depends(require_admin),
               session: Session = Depends(get_session)):
     """Queue the full spec to the tenant's agent for this cluster's location.
     The agent renders it into helm/compose and stands the cluster up."""
