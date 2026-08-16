@@ -34,9 +34,29 @@ export default function Markets({ onNavigate, initial }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [indicators, setIndicators] = useState({ ema9: true, ema21: false, bb: false, macd: false });
+  const [tab, setTab] = useState("overview");
+  const [news, setNews] = useState([]);
+  const [newsSources, setNewsSources] = useState({});
 
   useEffect(() => { saveWatchlist(syms); }, [syms]);
   useEffect(() => { if (!syms.includes(focus)) setFocus(syms[0] || ""); }, [syms, focus]);
+
+  // News is minutes-scale by nature (Finnhub/Alpha Vantage, see
+  // news_feed.py) - same 15s cadence as PredictiveSignals.jsx, not the
+  // page's 1s live-trading refresh. Refetches whenever the focused symbol
+  // changes so the News tab is always about the instrument you're looking at.
+  useEffect(() => {
+    if (!focus) return;
+    let closed = false;
+    const pull = () => api.newsFeed(focus, 20).then((r) => {
+      if (closed) return;
+      setNews(r.items || []);
+      setNewsSources(r.sources || {});
+    }).catch(() => {});
+    pull();
+    const id = setInterval(pull, 15000);
+    return () => { closed = true; clearInterval(id); };
+  }, [focus]);
 
   useEffect(() => {
     const pullPressure = () => api.metricsSnapshot().then((snap) => setPressure(summarizePressure(snap))).catch(() => {});
@@ -183,22 +203,33 @@ export default function Markets({ onNavigate, initial }) {
         {watchlist.length === 0 ? (
           <p className="muted" style={{ padding: "0.5rem 0" }}>Add a symbol above to start watching it.</p>
         ) : (
-          <div>
-            {watchlist.map((row) => (
-                    <button key={row.symbol} className={`list-row ${row.symbol === focus ? "active" : ""}`} style={{ width: "100%", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}
-                      onClick={() => setFocus(row.symbol)}>
-                <span className="list-row-icon" style={row.symbol === focus ? { background: "var(--accent)", color: "#fff" } : undefined}>{row.symbol.slice(0, 2)}</span>
-                <div className="list-row-main">
-                  <div className="list-row-title">{row.symbol}</div>
-                  <div className="list-row-sub">{row.n ? `${row.n} recent prints` : "no data yet"}</div>
-                </div>
-                <div className="list-row-spark"><Sparkline data={row.series} width={72} height={28} /></div>
-                <div className="list-row-value">
-                  <b>{row.last != null ? fmt(row.last) : "—"}</b>
-                  <span className={row.changePct >= 0 ? "up" : "down"}>{row.n ? `${row.changePct >= 0 ? "▲" : "▼"} ${fmt(Math.abs(row.changePct), 2)}%` : ""}</span>
-                </div>
-              </button>
-            ))}
+          <div className="table-scroll">
+            <table className="data-table market-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Last</th>
+                  <th>Change</th>
+                  <th>Volume</th>
+                  <th>Trend</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {watchlist.map((row) => (
+                  <tr key={row.symbol} className={row.symbol === focus ? "is-selected" : ""} onClick={() => setFocus(row.symbol)}>
+                    <td className="market-table-symbol">{row.symbol}</td>
+                    <td className="tabular">{row.last != null ? fmt(row.last) : "—"}</td>
+                    <td className={row.n ? (row.changePct >= 0 ? "up" : "down") : ""}>
+                      {row.n ? `${row.changePct >= 0 ? "▲" : "▼"} ${fmt(Math.abs(row.changePct), 2)}%` : "—"}
+                    </td>
+                    <td className="tabular">{row.volume ? fmt(row.volume) : "—"}</td>
+                    <td><Sparkline data={row.series} width={72} height={22} /></td>
+                    <td><span className={`market-status-dot ${row.n ? "live" : "idle"}`} title={row.n ? `${row.n} recent prints` : "no data yet"} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
@@ -230,56 +261,139 @@ export default function Markets({ onNavigate, initial }) {
         </>
       )}
 
-      {focusRows.length > 0 && (
-        <div className="card">
-          <div className="section-head"><h3>Symbol drilldown</h3><span className="muted">{focus}</span></div>
-          <div className="indicator-row">
-            <button className={`chip ${indicators.ema9 ? "indicator-active" : ""}`}
-                    onClick={() => setIndicators((i) => ({ ...i, ema9: !i.ema9 }))}>EMA 9</button>
-            <button className={`chip ${indicators.ema21 ? "indicator-active" : ""}`}
-                    onClick={() => setIndicators((i) => ({ ...i, ema21: !i.ema21 }))}>EMA 21</button>
-            <button className={`chip ${indicators.bb ? "indicator-active" : ""}`}
-                    onClick={() => setIndicators((i) => ({ ...i, bb: !i.bb }))}>BB 20 2</button>
-            <button className={`chip ${indicators.macd ? "indicator-active" : ""}`}
-                    onClick={() => setIndicators((i) => ({ ...i, macd: !i.macd }))}>MACD 12 26 9</button>
+      {/* Instrument Workspace - one symbol, every real view of it, tabbed
+          instead of stacked (chart/book/news/trades no longer compete for
+          the same scroll position). Options/Fundamentals are honestly
+          marked "soon" - there's no options-chain or fundamentals data
+          source anywhere in this deployment (Orders' greeks card is a
+          pricing calculator, not a chain), so those tabs say so instead
+          of pretending. */}
+      {focus && (
+        <div className="card instrument-workspace">
+          <div className="instrument-tabs" role="tablist" aria-label={`${focus} workspace`}>
+            {WORKSPACE_TABS.map((t) => (
+              <button key={t.id} role="tab" aria-selected={tab === t.id}
+                      className={`instrument-tab ${tab === t.id ? "active" : ""}`}
+                      onClick={() => setTab(t.id)}>
+                {t.label}{t.soon && <span className="soon-pill">soon</span>}
+              </button>
+            ))}
           </div>
-          <div className="drilldown-grid">
-            <div>
-              <Candlestick bars={bucketOHLC(focusRows, 5000)} height={220} showBollinger={indicators.bb}
-                          emaPeriods={[indicators.ema9 && 9, indicators.ema21 && 21].filter(Boolean)} />
-              {indicators.macd && (
+
+          <div className="instrument-tab-panel">
+            {tab === "overview" && <ForecastPanel forecast={forecast} symbol={focus} />}
+
+            {tab === "chart" && (
+              focusRows.length === 0 ? <NoTabData symbol={focus} /> : (
                 <>
-                  <div className="macd-label">MACD (12, 26, close, 9 EMA)</div>
-                  <MacdPanel bars={bucketOHLC(focusRows, 5000)} height={90} />
+                  <div className="indicator-row">
+                    <button className={`chip ${indicators.ema9 ? "indicator-active" : ""}`}
+                            onClick={() => setIndicators((i) => ({ ...i, ema9: !i.ema9 }))}>EMA 9</button>
+                    <button className={`chip ${indicators.ema21 ? "indicator-active" : ""}`}
+                            onClick={() => setIndicators((i) => ({ ...i, ema21: !i.ema21 }))}>EMA 21</button>
+                    <button className={`chip ${indicators.bb ? "indicator-active" : ""}`}
+                            onClick={() => setIndicators((i) => ({ ...i, bb: !i.bb }))}>BB 20 2</button>
+                    <button className={`chip ${indicators.macd ? "indicator-active" : ""}`}
+                            onClick={() => setIndicators((i) => ({ ...i, macd: !i.macd }))}>MACD 12 26 9</button>
+                  </div>
+                  <div className="drilldown-grid">
+                    <div>
+                      <Candlestick bars={bucketOHLC(focusRows, 5000)} height={220} showBollinger={indicators.bb}
+                                  emaPeriods={[indicators.ema9 && 9, indicators.ema21 && 21].filter(Boolean)} />
+                      {indicators.macd && (
+                        <>
+                          <div className="macd-label">MACD (12, 26, close, 9 EMA)</div>
+                          <MacdPanel bars={bucketOHLC(focusRows, 5000)} height={90} />
+                        </>
+                      )}
+                    </div>
+                    <div className="drilldown-stats">
+                      <div className="drill-row"><span>Last print</span><b>{fmt(market?.last)}</b></div>
+                      <div className="drill-row"><span>Session change</span><b className={market?.change >= 0 ? "up" : "down"}>{fmt(market?.change)} ({fmt(market?.change_pct)}%)</b></div>
+                      <div className="drill-row"><span>Range</span><b>{fmt(market?.low)} - {fmt(market?.high)}</b></div>
+                      <div className="drill-row"><span>VWAP</span><b>{fmt(market?.vwap)}</b></div>
+                    </div>
+                  </div>
                 </>
-              )}
-            </div>
-            <div className="drilldown-stats">
-              <div className="drill-row"><span>Last print</span><b>{fmt(market?.last)}</b></div>
-              <div className="drill-row"><span>Session change</span><b className={market?.change >= 0 ? "up" : "down"}>{fmt(market?.change)} ({fmt(market?.change_pct)}%)</b></div>
-              <div className="drill-row"><span>Range</span><b>{fmt(market?.low)} - {fmt(market?.high)}</b></div>
-              <div className="drill-row"><span>VWAP</span><b>{fmt(market?.vwap)}</b></div>
-            </div>
-          </div>
-        </div>
-      )}
+              )
+            )}
 
-      <ForecastPanel forecast={forecast} symbol={focus} />
+            {tab === "orderbook" && (
+              focusRows.length === 0 ? <NoTabData symbol={focus} /> : <DepthPanel rows={focusRows} levels={5} />
+            )}
 
-      {focusRows.length > 0 && (
-        <div className="trading-grid">
-          <div className="card">
-            <h3>Tape <span className="muted" style={{ fontWeight: 400 }}>{focus}</span></h3>
-            <LiveTape rows={focusRows} maxRows={25} />
-          </div>
-          <div className="card">
-            <h3>Depth <span className="muted" style={{ fontWeight: 400 }}>{focus}</span></h3>
-            <DepthPanel rows={focusRows} levels={5} />
+            {tab === "news" && <NewsTab news={news} sources={newsSources} symbol={focus} />}
+
+            {tab === "trades" && (
+              focusRows.length === 0 ? <NoTabData symbol={focus} /> : <LiveTape rows={focusRows} maxRows={25} />
+            )}
+
+            {tab === "options" && (
+              <ComingSoon text={`No options-chain data source is configured for this deployment. There's a Black-Scholes greeks calculator (manual strike/vol/rate entry) on the Orders page you can use in the meantime.`}
+                          action={{ label: "Open Orders →", onClick: () => onNavigate?.("orders", { symbol: focus }) }} />
+            )}
+
+            {tab === "fundamentals" && (
+              <ComingSoon text="No fundamentals data source (P/E, market cap, EPS, ...) is configured for this deployment." />
+            )}
           </div>
         </div>
       )}
     </div>
   );
+}
+
+const WORKSPACE_TABS = [
+  { id: "overview", label: "Overview" },
+  { id: "chart", label: "Chart" },
+  { id: "orderbook", label: "Order Book" },
+  { id: "news", label: "News" },
+  { id: "trades", label: "Trades" },
+  { id: "options", label: "Options", soon: true },
+  { id: "fundamentals", label: "Fundamentals", soon: true },
+];
+
+function NoTabData({ symbol }) {
+  return <p className="muted" style={{ padding: "0.5rem 0" }}>No trade prints for {symbol} on the cluster yet.</p>;
+}
+
+function ComingSoon({ text, action }) {
+  return (
+    <div className="coming-soon">
+      <p className="muted" style={{ margin: 0 }}>{text}</p>
+      {action && <button className="chip" onClick={action.onClick} style={{ marginTop: "0.6rem" }}>{action.label}</button>}
+    </div>
+  );
+}
+
+function NewsTab({ news, sources, symbol }) {
+  const noSource = sources && !sources.finnhub && !sources.alphavantage;
+  if (noSource) {
+    return <ComingSoon text="No news source is configured for this deployment (set FINNHUB_API_KEY and/or ALPHAVANTAGE_API_KEY)." />;
+  }
+  if (!news.length) {
+    return <p className="muted" style={{ padding: "0.5rem 0" }}>No recent news for {symbol}.</p>;
+  }
+  return (
+    <div className="news-feed">
+      {news.map((a, i) => (
+        <a className="news-item" key={i} href={a.url || "#"} target="_blank" rel="noreferrer">
+          <div className="news-item-head">
+            <span className={`news-sentiment-pill ${sentimentTone(a.sentiment_score)}`}>
+              {a.sentiment_score > 0 ? "▲" : a.sentiment_score < 0 ? "▼" : "•"} {fmt(a.sentiment_score, 2)}
+            </span>
+            <span className="news-region">{a.region}</span>
+          </div>
+          <div className="news-headline">{a.headline}</div>
+          <div className="muted news-source">{a.source} · {(a.symbols || []).join(", ")}</div>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function sentimentTone(score) {
+  return score > 0.15 ? "up" : score < -0.15 ? "down" : "";
 }
 
 function Metric({ label, value, cls }) {
@@ -291,7 +405,8 @@ function buildWatchRow(symbol, rows) {
   const last = prices.length ? prices[prices.length - 1] : null;
   const first = prices.length ? prices[0] : null;
   const changePct = first ? ((last - first) / first) * 100 : 0;
-  return { symbol, series: prices, last, changePct, n: prices.length };
+  const volume = rows.reduce((sum, r) => sum + (Number(r.size) || 0), 0);
+  return { symbol, series: prices, last, changePct, volume, n: prices.length };
 }
 
 function explainQueryFailure(err) {

@@ -80,6 +80,24 @@ dataPlane:
   dbVolumeSize: 20Gi
   hdbVolumeSize: 100Gi   # cumulative historical storage - grows every trading day
   tpLogVolumeSize: 5Gi
+  # Per-PVC-type StorageClass override, blank = fall back to
+  # global.storageClassName (unchanged default behavior). The one this is
+  # actually for: pointing hdb at a high-performance filesystem
+  # StorageClass (AWS FSx for Lustre / Azure Managed Lustre / Google Cloud
+  # Parallelstore - see terraform/{aws,azure,gcp}/README.md's own
+  # "high-performance filesystem" section for how that StorageClass gets
+  # created) for a TickHouse whose hdb serves wide historical scans to
+  # many concurrent gateway queries. Deliberately NOT the cluster default
+  # (global.storageClassName) - these filesystems have a real multi-TiB
+  # minimum footprint most TickHouses don't need; opt in per-PVC-type here
+  # instead. db/tpLog rarely benefit the same way (smaller, less
+  # scan-heavy) but the override exists for all three for consistency.
+  #   storageClassNames:
+  #     hdb: fsx-lustre        # or azure-lustre / parallelstore - the StorageClass name each cloud's README creates
+  storageClassNames:
+    db: ""
+    hdb: ""
+    tpLog: ""
   # per-shard pod resource requests/limits (each shard runs 5 q processes)
   resources:
     requests: { cpu: "250m", memory: "256Mi" }
@@ -215,3 +233,45 @@ ingress:
   className: ""                # "alb" on EKS, "azure-application-gateway" on AKS, "gce" on GKE, "nginx" on-prem
   host: ""                      # e.g. demo.yourcompany.com
   tls: false
+
+# ------------------------------------------------------------- monitoring
+# GET /metrics (control-api/app/prometheus_metrics.py) is always there,
+# unconditionally, once you're on this chart version - real gauges read
+# live from the same data the JSON dashboard endpoints use (tickerplant
+# throughput/latency, row counts, order counts, watchdog self-heal
+# events), see that module's own docstring for exactly what's real.
+#
+# These three flags only control whether Kubernetes objects that WIRE it
+# into a kube-prometheus-stack installation get created - all three
+# reference Custom Resources (ServiceMonitor/PrometheusRule) or a
+# convention (the Grafana sidecar's dashboard-discovery label) that only
+# exist once you've separately installed kube-prometheus-stack.
+# `helm install`/`helm upgrade` FAILS if you enable these without it (the
+# CRDs won't exist) - see docs/predeploy-kubernetes.md's monitoring
+# section for the one-time `helm install kube-prometheus-stack ...`
+# command this assumes you've already run.
+monitoring:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    # kube-prometheus-stack's own Prometheus CR only picks up
+    # ServiceMonitors matching ITS OWN serviceMonitorSelector (by default,
+    # a `release: <that release's name>` label) - blank here means "no
+    # extra labels," which only works if you've relaxed that selector.
+    # Set this to match your own installation, e.g.:
+    #   additionalLabels: { release: kube-prometheus-stack }
+    additionalLabels: {}
+  prometheusRule:
+    enabled: false
+    additionalLabels: {}
+    # Real thresholds grounded in this app's own existing conventions -
+    # not arbitrary. subscriberLagBytes matches Overview.jsx's own
+    # ELEVATED_BYTES early-warning constant (2MB, ~4% of tick.q's real
+    # 50MB SLOW_SUB_MAX_BYTES drop threshold) so the UI banner and the
+    # Prometheus alert fire at the same point, not two different ideas of
+    # "elevated."
+    thresholds:
+      publishLatencyUs: 1000
+      subscriberLagBytes: 2097152
+  grafanaDashboard:
+    enabled: false

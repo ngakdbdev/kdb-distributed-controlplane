@@ -1,0 +1,27 @@
+{{/*
+  Wires control-api's Service (see templates/control-api.yaml's named
+  "http" port) into a kube-prometheus-stack Prometheus - see
+  values.yaml's monitoring.serviceMonitor comment for the CRD prerequisite
+  and additionalLabels note.
+*/}}
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: control-api
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: control-api
+    {{- with .Values.monitoring.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels: { app: control-api }
+  namespaceSelector:
+    matchNames: [{{ .Values.global.namespace }}]
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+{{- end }}

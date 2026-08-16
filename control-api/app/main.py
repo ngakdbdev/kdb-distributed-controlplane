@@ -1,13 +1,15 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from sqlmodel import Session
 
 from . import bot_scheduler
 from . import metrics_history
 from . import symbol_discovery
-from .db import init_db
+from .db import get_session, init_db
 from . import licensing
+from . import prometheus_metrics
 from .routers import (audit, auth, auth_ldap, auth_sso, backtest as backtest_router, bot,
                       connectors, export, feedhandlers, fleet, infra_profiles, license as license_router,
                       llm_config, metrics, migration, platform_health, query, signals,
@@ -92,3 +94,13 @@ def _check_license():
 @app.get("/health")
 def health():
     return {"status": "up"}
+
+
+@app.get("/metrics")
+def prometheus(session: Session = Depends(get_session)):
+    """Prometheus exposition format - see app/prometheus_metrics.py's own
+    docstring for exactly what's real here (every value is read live from
+    the same data JSON /metrics/snapshot and the Orders/Audit tables
+    already serve) and why it's unauthenticated like that endpoint."""
+    body, content_type = prometheus_metrics.render_metrics(session)
+    return Response(content=body, media_type=content_type)

@@ -3,16 +3,15 @@ import {
   Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid,
 } from "recharts";
 import { api, metricsSocket } from "../api.js";
-import { PRODUCT } from "../brand.js";
-import Sparkline from "../components/Sparkline.jsx";
 
 const TOOLTIP_STYLE = {
-  background: "#161b26", border: "1px solid #232938", borderRadius: 10,
-  color: "#eef1f7", fontSize: "0.82rem", boxShadow: "0 12px 28px rgba(0,0,0,.4)",
+  background: "var(--panel-2)", border: "1px solid var(--border)", borderRadius: 10,
+  color: "var(--text)", fontSize: "0.82rem", boxShadow: "0 12px 28px rgba(0,0,0,.4)",
 };
-const TOOLTIP_LABEL_STYLE = { color: "#838ba1" };
+const TOOLTIP_LABEL_STYLE = { color: "var(--muted)" };
 
 const MAX = 60;
+const TP_POLL_MS = 3000;
 
 // compact large-number formatter: 1234 -> 1.2K, 3.4e9 -> 3.4B
 function fmt(n) {
@@ -32,6 +31,7 @@ export default function Overview({ onNavigate }) {
   const [rate, setRate] = useState([]);       // msgs/sec history
   const [clusters, setClusters] = useState([]);
   const [feeds, setFeeds] = useState([]);
+  const [tps, setTps] = useState(null);       // real per-tickerplant health (Data Fabric strip)
   const [pressure, setPressure] = useState(null);
   const [health, setHealth] = useState(null);
   const prev = useRef(null);
@@ -48,10 +48,13 @@ export default function Overview({ onNavigate }) {
     pullHealth();
     const healthId = setInterval(pullHealth, 15000);
     const id = setInterval(pull, REFRESH_MS);
-    // Pressure comes from the SAME websocket snapshot below (s.componentMetrics),
-    // not a separate REST poll - a second independent /metrics/snapshot call
-    // every second was computing the identical gateway snapshot twice over,
-    // doubling real gateway IPC load for no benefit.
+    // Same real per-tickerplant data Tickerplants.jsx shows in full detail
+    // (dropped count, publish latency, sequence-check pass/fail) - this
+    // page only needs the aggregate, so it polls at Tickerplants.jsx's own
+    // slower 3s cadence rather than every second.
+    const pullTps = () => api.tickerplants().then((d) => setTps(d.tickerplants || [])).catch(() => setTps([]));
+    pullTps();
+    const tpId = setInterval(pullTps, TP_POLL_MS);
     const ws = metricsSocket((s) => {
       setConnected(true);
       setPressure(summarizePressure(s));
@@ -60,10 +63,10 @@ export default function Overview({ onNavigate }) {
       const now = Date.now();
       if (prev.current) {
         const dt = Math.max(0.001, (now - prev.current.ts) / 1000);
-        const tps = Math.max(0, (trade - prev.current.trade) / dt);
+        const tps_ = Math.max(0, (trade - prev.current.trade) / dt);
         const rps = Math.max(0, (risk - prev.current.risk) / dt);
         setRate((r) => {
-          const next = [...r, { t: new Date().toLocaleTimeString().slice(0, 8), tps, rps, mps: tps + rps }];
+          const next = [...r, { t: new Date().toLocaleTimeString().slice(0, 8), tps: tps_, rps, mps: tps_ + rps }];
           return next.length > MAX ? next.slice(-MAX) : next;
         });
       }
@@ -71,51 +74,47 @@ export default function Overview({ onNavigate }) {
     });
     ws.onclose = () => setConnected(false);
     ws.onerror = () => setConnected(false);
-    return () => { clearInterval(id); clearInterval(healthId); ws.close(); };
+    return () => { clearInterval(id); clearInterval(healthId); clearInterval(tpId); ws.close(); };
   }, []);
 
   const svc = Object.entries(topo);
   const running = svc.filter(([, s]) => s === "running").length;
-  const shardCount = new Set(svc.map(([n]) => (n.match(/-s(\d+)$/) || [])[1]).filter((x) => x != null)).size;
   const tp = svc.filter(([n]) => n.startsWith("tp-"));
   const tpUp = tp.some(([, s]) => s === "running");
-  const feedsUp = feeds.some((f) => (f.status || f.state || "").toLowerCase() === "running" || f.active || f.enabled);
   const totalMsgs = totals.trade + totals.risk;
   const mps = rate.length ? rate[rate.length - 1].mps : 0;
 
   // health of the whole stream path, used to drive the honest banner
   const stream = !svc.length ? "unknown" : !tpUp ? "no-tp" : (totalMsgs === 0 || (rate.length > 3 && mps === 0)) ? "no-feed" : "live";
 
+  // ---- Data Fabric strip: real per-tickerplant health, rolled up to one
+  // calm line instead of individual TP pills fighting for attention here
+  // (that detail lives at Data > Tickerplants). Every number below reads
+  // straight off api.tickerplants()'s real IPC counters - nothing here is
+  // synthesized. Sequence integrity specifically has no numeric "gap
+  // count" anywhere in the backend (only a per-TP pass/fail check), so
+  // this reports how many tickerplants have that check failing rather
+  // than inventing a gap count that doesn't exist.
+  const liveTps = (tps || []).filter((t) => t.ok);
+  const feedCount = feeds.filter((f) => f.enabled).length;
+  const tpCount = (tps || []).length;
+  const droppedTotal = liveTps.reduce((sum, t) => sum + (t.stats?.dropped || 0), 0);
+  const latencies = liveTps.map((t) => t.stats?.pubLatencyUs).filter((v) => v != null);
+  const maxLatency = latencies.length ? Math.max(...latencies) : null;
+  const seqFailing = liveTps.filter((t) => t.health?.checks?.sequence === false).length;
+  const fabricHealthy = tps !== null && tpCount > 0 && liveTps.length === tpCount
+    && liveTps.every((t) => t.health?.overall) && droppedTotal === 0 && seqFailing === 0;
+  const fabricKnown = tps !== null;
+
   return (
-    <div className="page ops ops-premium">
+    <div className="page ops">
       <div className="ops-head">
         <div>
-          <h2>{PRODUCT} operations</h2>
-          <p className="muted" style={{ margin: 0 }}>Live control plane — throughput, cluster health, and self-healing at a glance. <span className="live-cadence">Low-latency mode: refresh every second.</span></p>
+          <h2>Overview</h2>
+          <p className="muted" style={{ margin: 0 }}>Platform status and live data flow. <span className="live-cadence">Refreshing every second.</span></p>
         </div>
         <span className={`live-pill ${connected ? "on" : "off"}`}>{connected ? "● LIVE" : "○ offline"}</span>
       </div>
-
-      {/* One-glance platform health - composes the same infra/tickhouse/
-          security/trading checks Topology, Metrics and Audit log each show
-          separately, so "is everything healthy" doesn't require visiting
-          all three. See routers/platform_health.py. */}
-      {health && (
-        <div className="kpi-row" style={{ marginBottom: "0.75rem" }}>
-          {Object.entries(health.components).map(([name, c]) => (
-            <div className="kpi" key={name} style={{ cursor: "pointer" }}
-                 onClick={() => onNavigate?.(
-                   name === "infrastructure" ? "topology" : name === "tickhouse" ? "metrics"
-                   : name === "security" ? "audit" : "orders")}>
-              <div className="kpi-label">{name}</div>
-              <div className="kpi-value" style={{ fontSize: "0.95rem" }}>
-                <span className={`health-dot ${c.status}`} /> {c.status}
-              </div>
-              <div className="kpi-sub">{c.detail}</div>
-            </div>
-          ))}
-        </div>
-      )}
 
       {/* Honest, actionable state banner — never a dead screen */}
       {stream === "no-tp" && (
@@ -144,48 +143,56 @@ export default function Overview({ onNavigate }) {
         </div>
       )}
 
-      {/* headline hero stat — the one number a viewer should see first */}
-      <div className="hero-stat">
-        <div className="hero-stat-main">
-          <div className="hero-stat-label">Throughput, both shards</div>
-          <div className="hero-stat-value">{fmt(mps)}<span className="kpi-unit">msg/s</span></div>
-          <span className={`hero-stat-delta ${mps > 0 ? "up" : "flat"}`}>
-            {mps > 0 ? "▲" : "•"} {stream === "live" ? "live ingest" : "waiting for data"}
-          </span>
-        </div>
-        <div className="hero-stat-spark">
-          <Sparkline data={rate.map((r) => r.mps)} width={160} height={48} strokeWidth={2.5} />
-        </div>
-      </div>
+      {/* Data Fabric — "is market data flowing correctly," one calm line,
+          not which tickerplant owns which shard letter range. */}
+      <button className="fabric-strip" onClick={() => onNavigate?.("tickerplants")} title="Open the tickerplant fabric view">
+        <span className={`fabric-dot ${!fabricKnown ? "unknown" : fabricHealthy ? "healthy" : "degraded"}`} />
+        <span className="fabric-label">Data Fabric</span>
+        <span className={`fabric-state ${!fabricKnown ? "unknown" : fabricHealthy ? "healthy" : "degraded"}`}>
+          {!fabricKnown ? "checking…" : fabricHealthy ? "healthy" : tpCount === 0 ? "no tickerplants" : "attention needed"}
+        </span>
+        <span className="fabric-metrics">
+          <span><strong>{feedCount}</strong> feeds</span>
+          <span><strong>{tpCount}</strong> tickerplants</span>
+          <span><strong>{fmt(mps)}</strong> msg/s</span>
+          <span><strong>{fmt(droppedTotal)}</strong> dropped</span>
+          <span><strong>{maxLatency != null ? fmt(maxLatency) : "—"}</strong> µs publish</span>
+          <span><strong>{fabricKnown ? (seqFailing === 0 ? "OK" : `${seqFailing} flagged`) : "—"}</strong> sequence</span>
+        </span>
+        <span className="fabric-go">Tickerplant fabric →</span>
+      </button>
 
-      <div className="kpi-row">
-        <div className="kpi">
-          <div className="kpi-label">Messages ingested</div>
-          <div className="kpi-value">{fmt(totalMsgs)}</div>
-          <div className="kpi-sub">{fmt(totals.trade)} trade · {fmt(totals.risk)} risk</div>
+      {/* One-glance platform health - composes the same infra/tickhouse/
+          security/trading checks Topology, Metrics and Audit log each show
+          separately, so "is everything healthy" doesn't require visiting
+          all three. See routers/platform_health.py. */}
+      {health && (
+        <div className="kpi-row" style={{ marginTop: "0.75rem" }}>
+          {Object.entries(health.components).map(([name, c]) => (
+            <div className="kpi" key={name} style={{ cursor: "pointer" }}
+                 onClick={() => onNavigate?.(
+                   name === "infrastructure" ? "topology" : name === "tickhouse" ? "metrics"
+                   : name === "security" ? "audit" : "orders")}>
+              <div className="kpi-label">{name}</div>
+              <div className="kpi-value" style={{ fontSize: "0.95rem" }}>
+                <span className={`health-dot ${c.status}`} /> {c.status}
+              </div>
+              <div className="kpi-sub">{c.detail}</div>
+            </div>
+          ))}
         </div>
-        <div className="kpi">
-          <div className="kpi-label">Shards</div>
-          <div className="kpi-value">{shardCount || "—"}</div>
-          <div className="kpi-sub">{svc.length} processes</div>
-        </div>
-        <div className={`kpi ${svc.length && running === svc.length ? "ok" : running ? "" : "bad"}`}>
-          <div className="kpi-label">Healthy</div>
-          <div className="kpi-value">{svc.length ? `${running}/${svc.length}` : "—"}</div>
-          <div className="kpi-sub">self-healing {running === svc.length && svc.length ? "· all green" : "· watchdog active"}</div>
-        </div>
-      </div>
+      )}
 
       {/* live ingest chart */}
-      <div className="card">
+      <div className="card" style={{ marginTop: "0.75rem" }}>
         <div className="ov-section-head" style={{ margin: 0 }}>
-          <h3 style={{ margin: 0 }}>Live ingest rate</h3>
+          <h3 style={{ margin: 0 }}>Data throughput</h3>
           <button className="link-btn" onClick={() => onNavigate?.("metrics")}>Full metrics →</button>
         </div>
         {rate.length < 2 ? (
           <p className="muted">{connected ? "Collecting samples…" : "Waiting for the metrics stream…"}</p>
         ) : (
-          <ResponsiveContainer width="100%" height={220}>
+          <ResponsiveContainer width="100%" height={200}>
             <AreaChart data={rate} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
@@ -203,22 +210,16 @@ export default function Overview({ onNavigate }) {
         )}
       </div>
 
-      {/* cluster health grid — the self-healing story */}
-      <div className="ov-section-head"><h3>Cluster health</h3>
-        <button className="link-btn" onClick={() => onNavigate?.("topology")}>Control processes →</button></div>
-      {svc.length === 0 ? (
-        <div className="card"><p className="muted" style={{ margin: 0 }}>no resource found — no processes are reporting yet.</p></div>
-      ) : (
-        <div className="health-grid">
-          {svc.sort(([a], [b]) => a.localeCompare(b)).map(([name, status]) => (
-            <button key={name} className={`health-tile s-${status}`} onClick={() => onNavigate?.("topology")} title={`${name}: ${status}`}>
-              <span className="ht-dot" />
-              <span className="ht-name">{name}</span>
-              <span className="ht-status">{status}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Process-level detail (self-healing, individual container status)
+          intentionally isn't duplicated here as a grid of pills - that's
+          Topology's job. One line, not "N processes" cluttering the home
+          screen. */}
+      <div className="fabric-footnote">
+        <span className={running === svc.length && svc.length ? "ok" : "warn"}>
+          {svc.length ? `${running}/${svc.length} processes healthy` : "no processes reporting"}
+        </span>
+        <button className="link-btn" onClick={() => onNavigate?.("topology")}>Process control →</button>
+      </div>
 
       {/* clusters + quant nav, condensed */}
       <div className="ov-section-head"><h3>Your TickHouses</h3>
@@ -240,8 +241,8 @@ export default function Overview({ onNavigate }) {
       )}
 
       <div className="ov-cards" style={{ marginTop: "1rem" }}>
+        <NavCard title="Markets" onGo={() => onNavigate?.("markets")} desc="Instrument watchlist, candlestick drilldown, calendar-horizon forecast." />
         <NavCard title="Query workspace" onGo={() => onNavigate?.("query")} desc="Run q across live targets; rows render as a grid." />
-        <NavCard title="Markets" onGo={() => onNavigate?.("markets")} desc="Market metrics, candlestick drilldown, calendar-horizon forecast." />
         <NavCard title="Live metrics" onGo={() => onNavigate?.("metrics")} desc="Streaming row counts and transit lag per shard." />
       </div>
     </div>

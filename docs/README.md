@@ -38,7 +38,7 @@ in [deployment-process.md](deployment-process.md) above.
 - [predeploy-aws.md](predeploy-aws.md) — single-VM demo on EC2
 - [predeploy-gcp.md](predeploy-gcp.md) — single-VM demo on Compute Engine
 - [predeploy-azure.md](predeploy-azure.md) — single-VM demo on an Azure VM
-- [predeploy-kubernetes.md](predeploy-kubernetes.md) — EKS / AKS / GKE / on-prem via the Helm chart (the path to take once "demo" turns into "pilot")
+- [predeploy-kubernetes.md](predeploy-kubernetes.md) — EKS / AKS / GKE / on-prem via the Helm chart (the path to take once "demo" turns into "pilot" or a real, at-scale deployment) — see that guide's own section 0 if you don't have a cluster yet (`terraform/{aws,azure,gcp}/`)
 
 ## Which path
 
@@ -46,18 +46,21 @@ The single-VM `deploy/<cloud>/` scripts and the Kubernetes Helm chart are **not*
 same thing — they're two different maturity stages of the same product, and the repo is honest about
 that split (see the root `README.md`'s "what's built" section):
 
-| | Single VM (`deploy/aws\|gcp\|azure/`) | Kubernetes (`helm/`) |
+| | Single VM (`deploy/aws\|gcp\|azure/`) | Kubernetes (`helm/`), optionally cluster-provisioned by `terraform/` |
 |---|---|---|
-| Intended use | Sales demo, one prospect, throwaway | Pilot / longer-lived single-tenant deployment |
+| Intended use | Sales demo, one prospect, throwaway | Pilot, longer-lived single-tenant deployment, or a real production/enterprise-scale environment |
+| Cluster provisioning | N/A — one VM, no orchestrator | `terraform/{aws,azure,gcp}/` (VPC, managed Kubernetes, KMS-backed secrets encryption, standard + high-performance-filesystem storage tiers) if you don't already have a cluster — see each module's own README.md |
 | Topology control | `/topology` router talks to the Docker socket directly | Same router talks to the Kubernetes API instead — same UI, different orchestrator backend |
 | Multi-tenant hosted SaaS path | Not this — that's the `/fleet` + `fleet_agent` path, out of scope for both guides above | Out of scope here too — `fleet_agent` runs *inside a tenant's own cluster*, invoked separately |
 | Blast radius if it falls over | One VM, one prospect's demo | Depends on what else shares the cluster |
 | Config drift risk | Low — one box, one `.env` | Higher — `values.yaml` vs. `existingSecret` vs. `--set` at install time; pick one pattern and stick to it |
+| Monitoring | Ad hoc (`docker compose logs`, the app's own live UI) | Real GET /metrics + optional Prometheus/Grafana wiring — see predeploy-kubernetes.md's monitoring section |
 
 If you're not sure which you're doing: if the next step after this is a sales call, use the VM path.
-If the next step is "the client wants this running for their own team to poke at for a few weeks,"
-use Kubernetes and a real (non-SQLite) database from day one — retrofitting a database migration
-under a live pilot is exactly the kind of unforced error these guides exist to prevent.
+If the next step is "the client wants this running for their own team to poke at for a few weeks" (or
+longer, at real scale), use Kubernetes and a real (non-SQLite) database from day one — retrofitting a
+database migration under a live pilot is exactly the kind of unforced error these guides exist to
+prevent.
 
 ## Shared checklist — do this before any of the four guides
 

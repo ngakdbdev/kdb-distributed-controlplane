@@ -1,0 +1,23 @@
+# Local Terraform working state - never commit real state or plan output,
+# both can contain resource attribute values (some sensitive) in plaintext.
+# Use a remote backend (S3/GCS/Azure Blob + state locking) for anything
+# beyond a single operator's laptop - see each cloud subdirectory's
+# README.md for the exact backend config block to add.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# .terraform.lock.hcl SHOULD be committed (pins exact provider versions) -
+# deliberately not listed here.
+
+# Real tfvars almost always carry account-specific (sometimes sensitive)
+# values - commit only *.tfvars.example files.
+*.tfvars
+!*.tfvars.example

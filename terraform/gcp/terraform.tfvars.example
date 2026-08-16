@@ -1,0 +1,27 @@
+# Copy to terraform.tfvars and fill in the required values below.
+
+project_id  = "your-gcp-project-id"
+environment = "prod1"
+
+# REQUIRED - no default.
+bastion_access_cidr  = "203.0.113.4/32"
+gke_api_access_cidrs = ["203.0.113.4/32"]
+
+# region          = "us-central1"
+# cluster_profile = "ha"              # "ha" | "performance" | "cost_optimized"
+# kubernetes_version = ""             # blank = GKE's current "regular" release channel default
+
+# --- storage ---
+# storage_tier = "standard"           # "standard" (pd-balanced) | "performance" (hyperdisk-extreme)
+# enable_secrets_encryption = true
+
+# --- high-performance filesystem (Google Cloud Parallelstore) - opt-in,
+# see storage.tf's own comment on the post-apply CSI driver install step. ---
+# enable_high_performance_storage = false
+# parallelstore_capacity_gib      = 12000
+
+# --- bring-your-own VPC instead of letting this module create one ---
+# network_id         = "projects/your-project/global/networks/your-vpc"
+# existing_subnet_id = "projects/your-project/regions/us-central1/subnetworks/your-subnet"
+
+# tags = { costcenter = "trading-tech", owner = "platform-team" }

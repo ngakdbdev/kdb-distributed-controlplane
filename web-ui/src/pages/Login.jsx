@@ -68,9 +68,6 @@ export default function Login({ onLoggedIn }) {
     setThemeMode(next);
   }
 
-  const signalPath = "M20 130 C100 100 150 155 230 128 C300 105 360 158 440 128 C510 100 590 140 670 115 C742 92 800 132 880 100 C940 76 1010 100 1080 68";
-  const liquidityPath = "M20 92 C90 72 156 110 226 96 C302 80 354 60 436 82 C508 100 578 66 654 82 C724 96 786 64 856 76 C930 88 1002 54 1080 68";
-
   const marketNodes = [
     { label: "Ingestion", sub: "Multi-provider feed connectors" },
     { label: "Signal Core", sub: "Real-time analytics + risk gates" },
@@ -148,32 +145,30 @@ export default function Login({ onLoggedIn }) {
         <div
           className="vantik-brand-visual"
           role="img"
-          aria-label="Animated tick architecture reel showing self-healing and data flow to quant and portfolio teams"
+          aria-label="Animated diagram showing live tick data flowing through Vantik's ingestion, signal, execution, and portfolio pipeline, with automatic recovery"
         >
-          <div className="vantik-wave-stage">
-            <svg viewBox="0 0 1100 160" className="vantik-wave" preserveAspectRatio="none">
-              <path d={liquidityPath} className="liq" />
-              <path d={signalPath} className="sig" />
-            </svg>
-            <div className="vantik-video-head">
-              <span className="vantik-video-dot" />
-              <strong>Architecture Reel</strong>
-              <span>live simulation</span>
-            </div>
+          <div className="vantik-reel-head">
+            <span className="vantik-video-dot" />
+            <strong>Architecture Reel</strong>
+            <span>live simulation</span>
+          </div>
+
+          <div className="vantik-flow-track" aria-hidden="true">
+            <span className="vantik-flow-line" />
+            <span className="vantik-flow-dot" style={{ "--dot-delay": "0s" }} />
+            <span className="vantik-flow-dot" style={{ "--dot-delay": "0.9s" }} />
+            <span className="vantik-flow-dot" style={{ "--dot-delay": "1.8s" }} />
           </div>
 
           <div className="vantik-node-row">
-            {marketNodes.map((node) => (
-              <article key={node.label} className="vantik-node">
-                <strong>{node.label}</strong>
+            {marketNodes.map((node, i) => (
+              <article key={node.label} className="vantik-node" style={{ "--node-index": i }}>
+                <div className="vantik-node-top">
+                  <span className="vantik-node-dot" />
+                  <strong>{node.label}</strong>
+                </div>
                 <span>{node.sub}</span>
               </article>
-            ))}
-          </div>
-
-          <div className="vantik-fleet-grid" aria-hidden="true">
-            {Array.from({ length: 18 }).map((_, i) => (
-              <span key={`fleet-${i}`} className={`vantik-fleet-cell ${i % 5 === 0 ? "healing" : ""}`} style={{ "--fleet-delay": `${i * 120}ms` }} />
             ))}
           </div>
 

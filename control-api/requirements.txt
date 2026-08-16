@@ -24,3 +24,7 @@ python-multipart==0.0.9
 websockets==13.1
 ldap3>=2.9
 anthropic>=0.40.0
+# real Prometheus exposition-format /metrics endpoint (app/prometheus_metrics.py) -
+# renders from the SAME live data the JSON dashboard endpoints already use,
+# not a separate collection pipeline.
+prometheus-client==0.21.0

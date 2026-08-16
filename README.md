@@ -46,6 +46,10 @@ web-ui/                React dashboard (Vite), dark Trading-212-inspired design 
 docs/                  Developer/usage/admin/troubleshooting/deployment guides, plus
                        pre-deployment checklists (one per target) - read before deploy/ or helm/
 deploy/gcp|aws|azure/ per-cloud provisioning, networking, docker install, deploy, and teardown scripts
+                       (single-VM demo path)
+terraform/gcp|aws|azure/ per-cloud IaC: VPC, managed Kubernetes cluster, KMS-backed secrets
+                       encryption, storage tiers incl. an optional high-performance shared filesystem
+                       (enterprise/at-scale path - provisions what helm/ installs onto)
 helm/kdb-control-plane/ Kubernetes chart + per-cloud values-aws/azure/gcp.yaml overlays
 reference/              KX's own public tick.q reference (submodule, read-only, not a build dependency - see reference/README.md)
 docker-compose.yml     Ties the whole stack together (GENERATED - see scripts/gen_topology.py)

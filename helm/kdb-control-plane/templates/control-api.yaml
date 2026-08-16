@@ -97,7 +97,8 @@ metadata:
 spec:
   selector: { app: control-api }
   ports:
-    - port: {{ .Values.controlApi.port }}
+    - name: http # named so templates/servicemonitor.yaml can target it by name, not just port number
+      port: {{ .Values.controlApi.port }}
       targetPort: {{ .Values.controlApi.port }}
 {{- if .Values.controlApi.autoscaling.enabled }}
 ---

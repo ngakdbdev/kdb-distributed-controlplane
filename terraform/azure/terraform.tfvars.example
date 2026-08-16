@@ -1,0 +1,26 @@
+# Copy to terraform.tfvars and fill in the required values below.
+
+environment = "prod1"
+
+# REQUIRED - no default.
+bastion_access_cidr  = "203.0.113.4/32"
+aks_api_access_cidrs = ["203.0.113.4/32"]
+
+# location        = "eastus"
+# cluster_profile = "ha"              # "ha" | "performance" | "cost_optimized"
+# kubernetes_version = ""             # blank = AKS's current default GA version
+
+# --- storage ---
+# storage_tier = "standard"           # "standard" (Premium_LRS) | "performance" (PremiumV2_LRS)
+# enable_secrets_encryption = true
+
+# --- high-performance filesystem (Azure Managed Lustre) - opt-in, see
+# storage.tf's own comment on the post-apply CSI driver install step. ---
+# enable_high_performance_storage = false
+# lustre_storage_capacity_tib     = 4
+
+# --- bring-your-own VNet instead of letting this module create one ---
+# vnet_id            = "/subscriptions/.../resourceGroups/.../providers/Microsoft.Network/virtualNetworks/..."
+# existing_subnet_id = "/subscriptions/.../subnets/..."
+
+# tags = { CostCenter = "trading-tech", Owner = "platform-team" }
