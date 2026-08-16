@@ -49,7 +49,7 @@ export default function Connectors() {
   }
 
   return (
-    <div className="page">
+    <div className="page connectors-page">
       <h2>Feed connectors</h2>
       <p className="muted">
         These are synthetic generators shaped like real vendor feeds (B-PIPE equities, CRIMS-style risk data) -

@@ -14,8 +14,21 @@ from .. import tickhouse as th
 from ..db import get_session, log_event
 from ..models import Agent, Command, TickHouse
 from .auth import CurrentUser, require_admin, require_tenant_scope
+from .feedhandlers import build_feed_handler_row
 
 router = APIRouter(prefix="/tickhouses", tags=["tickhouses"])
+
+
+class FeedHandlerAttachment(BaseModel):
+    """Shape mirrors routers.feedhandlers.FeedHandlerIn minus tickhouse_id
+    (this TickHouse's own id, which doesn't exist yet at request time -
+    it's filled in after the TickHouse row is created below)."""
+    provider: str
+    feed: str
+    display_name: str = ""
+    enabled: bool = False
+    config: dict = {}
+    secrets: dict = {}
 
 
 class HighLevelSpec(BaseModel):
@@ -30,6 +43,7 @@ class HighLevelSpec(BaseModel):
     ldap_ref: str = ""
     gateway_config: dict | None = None
     target_config: dict | None = None  # cloud/k8s coordinates (non-secret)
+    feed_handler: FeedHandlerAttachment | None = None  # optional - activate a market-data source into this TickHouse in the same step
 
 
 def _build(body: "HighLevelSpec"):
@@ -108,7 +122,33 @@ def create(body: HighLevelSpec, user: CurrentUser = Depends(require_admin),
     log_event(session, user.email, "tickhouse_created", spec.name,
               detail=f"{spec.location}/{spec.profile}/{len(spec.shards)} shards",
               tenant_id=user.tenant_id)
-    return _to_api(row)
+
+    result = _to_api(row)
+    if body.feed_handler is not None:
+        # Same validation (known provider/feed, required credentials,
+        # tenant ownership) POST /feedhandlers itself uses - see
+        # build_feed_handler_row's own docstring on why this is shared
+        # rather than reimplemented here. A bad feed_handler block fails
+        # the WHOLE request (the TickHouse row above isn't rolled back by
+        # this exception, matching this codebase's other multi-step
+        # creation flows where an already-committed prerequisite step
+        # stands even if a later step 400s - the operator retries just the
+        # feed handler attachment via PUT/POST /feedhandlers afterward,
+        # same as any other "create X, wire it to Y" partial-failure case).
+        fh = body.feed_handler
+        fh_row = build_feed_handler_row(session, user.tenant_id, user.email, fh.provider, fh.feed,
+                                        fh.display_name, fh.enabled, fh.config, fh.secrets, tickhouse_id=row.id)
+        session.add(fh_row)
+        session.commit()
+        session.refresh(fh_row)
+        log_event(session, user.email, "feedhandler_created", target=f"feedhandler:{fh_row.id}",
+                 detail=f"{fh_row.provider}/{fh_row.feed} -> tickhouse:{row.id}", tenant_id=user.tenant_id)
+        result["feed_handler"] = {
+            "id": fh_row.id, "provider": fh_row.provider, "feed": fh_row.feed,
+            "display_name": fh_row.display_name, "enabled": fh_row.enabled,
+            "has_secrets": bool(fh_row.secrets_json),
+        }
+    return result
 
 
 @router.get("")

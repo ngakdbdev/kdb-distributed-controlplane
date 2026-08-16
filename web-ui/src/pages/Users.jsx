@@ -35,7 +35,7 @@ export default function Users() {
   }
 
   return (
-    <div className="page">
+    <div className="page users-page">
       <h2>Users</h2>
       <p className="muted">
         People with a login into this tenant, and what they can do. Admin has full access (including this

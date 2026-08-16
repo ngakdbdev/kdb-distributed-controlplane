@@ -160,7 +160,7 @@ export default function Autoscale() {
   }
 
   return (
-    <div className="page">
+    <div className="page autoscale-page">
       <h2>Autoscaling</h2>
       <p className="muted">
         Recommends a shard count from live ingest volume against the policy below, and applies it via

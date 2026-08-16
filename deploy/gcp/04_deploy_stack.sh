@@ -4,6 +4,13 @@
 # data-plane/docker/kdbx/ (see README.md in this deploy/gcp folder).
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/free_tier.sh
+source "$SCRIPT_DIR/../lib/free_tier.sh"
+# shellcheck source=../lib/kx_license.sh
+source "$SCRIPT_DIR/../lib/kx_license.sh"
+detect_lean_mode
+
 # 03_install_docker.sh grants docker-group membership, but that only takes
 # effect in a FRESH shell session - if you ran 03 then 04 back-to-back in
 # the same SSH session, this fails with a permission error that has
@@ -35,12 +42,9 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-if [ ! -f data-plane/docker/kdbx/q ] || [ ! -f data-plane/docker/kdbx/kc.lic ]; then
-  echo "Missing KDB-X binary/license at data-plane/docker/kdbx/"
-  echo "Download KDB-X Community Edition from the KX Developer Center and place"
-  echo "the linux 'q' binary and 'kc.lic' license file there, then re-run this script."
-  exit 1
-fi
+apply_lean_mode
+
+check_kx_binary_and_license || exit 1
 
 echo "== building all images (this is the slow step the first time) =="
 docker compose build

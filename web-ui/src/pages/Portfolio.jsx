@@ -56,7 +56,7 @@ export default function Portfolio({ onNavigate }) {
   const focusPosition = portfolio?.positions?.find((p) => p.symbol === focus) || null;
 
   return (
-    <div className="page">
+    <div className="page portfolio-page">
       <h2>Portfolio</h2>
       <p className="muted">Positions, P&amp;L, a 10-minute exposure forecast per holding, and basket correlation. Paper positions only.</p>
 

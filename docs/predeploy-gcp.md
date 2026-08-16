@@ -71,6 +71,10 @@ remove it, it's what gives this VM double the normal per-VM bandwidth cap, which
 or subscriber count climbs. Disk: bump `DISK_SIZE_GB` past the default for any session where the `hdb`
 will accumulate more than a day or two of history.
 
+Going the other direction — a free-tier project can't fit any of the above. `01_provision_vm.sh` and
+`04_deploy_stack.sh` detect that automatically and fall back to a 1-shard, ollama-off topology on an
+`e2-micro`; see [deploy/gcp/README.md](../deploy/gcp/README.md#deploying-on-a-free-tier--brand-new-gcp-project).
+
 ## 6. Post-deploy verification checklist
 
 - [ ] `curl http://<external-ip>:8000/health` returns healthy.

@@ -1,6 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { PRODUCT, COMPANY, TAGLINE, COPYRIGHT } from "../brand.js";
+import { currentMode, setMode, watchSystemTheme } from "../lib/theme.js";
+
+const MINI_THEME_MODES = [
+  { id: "light", label: "Light" },
+  { id: "dark", label: "Dark" },
+];
 
 export default function Login({ onLoggedIn }) {
   const [email, setEmail] = useState("");
@@ -8,6 +14,12 @@ export default function Login({ onLoggedIn }) {
   const [slug, setSlug] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [themeMode, setThemeMode] = useState(() => {
+    const mode = currentMode();
+    return mode === "light" || mode === "dark" ? mode : "dark";
+  });
+
+  useEffect(() => watchSystemTheme(), []);
 
   async function submit(e) {
     e.preventDefault();
@@ -51,59 +63,197 @@ export default function Login({ onLoggedIn }) {
     window.location.href = api.ssoLoginUrl(slug.trim());
   }
 
+  function chooseTheme(next) {
+    setMode(next);
+    setThemeMode(next);
+  }
+
+  const signalPath = "M20 130 C100 100 150 155 230 128 C300 105 360 158 440 128 C510 100 590 140 670 115 C742 92 800 132 880 100 C940 76 1010 100 1080 68";
+  const liquidityPath = "M20 92 C90 72 156 110 226 96 C302 80 354 60 436 82 C508 100 578 66 654 82 C724 96 786 64 856 76 C930 88 1002 54 1080 68";
+
+  const marketNodes = [
+    { label: "Ingestion", sub: "Multi-provider feed connectors" },
+    { label: "Signal Core", sub: "Real-time analytics + risk gates" },
+    { label: "Execution", sub: "Broker-aware smart routing" },
+    { label: "Portfolio", sub: "P/L, margin, and post-trade state" },
+  ];
+
+  const productCards = [
+    {
+      title: "Vantik Pulse",
+      body: "A latency-first ingestion mesh that normalizes institutional and crypto venues into one canonical event stream.",
+      tag: "Products",
+    },
+    {
+      title: "Vantik Forge",
+      body: "A control plane for topology orchestration, autoscaling, and resilient shard-aware market data routing.",
+      tag: "Technology",
+    },
+    {
+      title: "Vantik Orbit",
+      body: "Execution intelligence with risk controls, signal composition, and portfolio-aware trade lifecycle automation.",
+      tag: "Markets",
+    },
+  ];
+
   return (
-    <div className="login-fullscreen">
-      <section className="login-hero">
-        <div className="login-hero-inner">
-          <div className="login-logo">
-            <span className="login-logo-mark">{PRODUCT.slice(0, 2)}</span>
-            <span className="login-logo-name">{PRODUCT}</span>
+    <div className="vantik-shell vantik-auth-layout">
+      <div className="vantik-grid-bg" aria-hidden="true" />
+      <div className="vantik-radial-a" aria-hidden="true" />
+      <div className="vantik-radial-b" aria-hidden="true" />
+
+      <aside className="vantik-brand-panel">
+        <header className="vantik-topbar vantik-topbar-inline">
+          <a className="vantik-wordmark" href="#hero" aria-label="Vantik home">
+            <span className="vantik-wordmark-mark">{PRODUCT.slice(0, 2)}</span>
+            <span className="vantik-wordmark-name">{PRODUCT}</span>
+          </a>
+          <nav className="vantik-nav" aria-label="Primary">
+            <a href="#products">Products</a>
+            <a href="#technology">Technology</a>
+            <a href="#markets">Markets</a>
+            <a href="#about">About</a>
+            <a href="#contact">Contact</a>
+          </nav>
+          <div className="vantik-mini-theme" role="radiogroup" aria-label="Theme">
+            {MINI_THEME_MODES.map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                role="radio"
+                aria-checked={themeMode === mode.id}
+                className={`vantik-mini-theme-btn ${themeMode === mode.id ? "active" : ""}`}
+                onClick={() => chooseTheme(mode.id)}
+                title={`${mode.label} mode`}
+              >
+                {mode.label}
+              </button>
+            ))}
           </div>
-          <h1 className="login-hero-title">{TAGLINE}</h1>
-          <ul className="login-hero-points">
-            <li>Define &amp; provision tick clusters across AWS, Azure, GCP and on-prem</li>
-            <li>Live query workspace with federated scatter-gather across gateways</li>
-            <li>Stream real market data in, export history to your lakehouse</li>
-          </ul>
-          <div className="login-hero-foot">{COMPANY}</div>
+        </header>
+
+        <div className="vantik-brand-copy" id="hero">
+          <p className="vantik-eyebrow">Contact</p>
+          <h1 className="vantik-hero-title">Secure access to your Vantik control plane.</h1>
+          <p className="vantik-hero-body">
+            {TAGLINE}. Vantik unifies ingestion, analytics, execution, and portfolio intelligence in one deeply modern trading technology fabric.
+          </p>
+
+          <div className="vantik-hero-actions">
+            <a className="vantik-cta" href="#contact">Contact</a>
+            <a className="vantik-link" href="#products">Explore the stack</a>
+          </div>
         </div>
-      </section>
 
-      <section className="login-panel">
-        <form className="login-form" onSubmit={submit}>
-          <h2>Sign in</h2>
-          <p className="muted">Welcome back. Sign in to manage your deployment.</p>
+        <div
+          className="vantik-brand-visual"
+          role="img"
+          aria-label="Animated tick architecture reel showing self-healing and data flow to quant and portfolio teams"
+        >
+          <div className="vantik-wave-stage">
+            <svg viewBox="0 0 1100 160" className="vantik-wave" preserveAspectRatio="none">
+              <path d={liquidityPath} className="liq" />
+              <path d={signalPath} className="sig" />
+            </svg>
+            <div className="vantik-video-head">
+              <span className="vantik-video-dot" />
+              <strong>Architecture Reel</strong>
+              <span>live simulation</span>
+            </div>
+          </div>
 
-          <label>
-            Email or username
-            <input value={email} onChange={(e) => setEmail(e.target.value)}
-                   placeholder="you@yourbank.com" autoFocus />
-          </label>
-          <label>
-            Password
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-          </label>
-          <label>
-            Organisation ID <span className="muted">(for SSO / LDAP)</span>
-            <input value={slug} onChange={(e) => setSlug(e.target.value)}
-                   placeholder="your-bank" />
-          </label>
+          <div className="vantik-node-row">
+            {marketNodes.map((node) => (
+              <article key={node.label} className="vantik-node">
+                <strong>{node.label}</strong>
+                <span>{node.sub}</span>
+              </article>
+            ))}
+          </div>
 
-          {error && <div className="error">{error}</div>}
+          <div className="vantik-fleet-grid" aria-hidden="true">
+            {Array.from({ length: 18 }).map((_, i) => (
+              <span key={`fleet-${i}`} className={`vantik-fleet-cell ${i % 5 === 0 ? "healing" : ""}`} style={{ "--fleet-delay": `${i * 120}ms` }} />
+            ))}
+          </div>
 
-          <button type="submit" className="login-submit" disabled={busy}>
-            {busy ? "Signing in…" : (slug.trim() ? "Sign in with LDAP / AD" : "Sign in")}
-          </button>
+          <div className="vantik-video-captions" aria-hidden="true">
+            <p className="active">A data node failed and recovered itself in 1.2 seconds — no one paged</p>
+            <p>Scaled to 18 synchronized nodes with zero downtime</p>
+            <p>Every tick reaches trading and portfolio teams the instant it lands</p>
+          </div>
 
-          <div className="sso-divider"><span>or</span></div>
+          <div className="vantik-video-footer" aria-hidden="true">
+            <span className="tag">Always on</span>
+            <span className="tag">Self-healing</span>
+            <span className="tag">Real-time delivery</span>
+          </div>
+        </div>
 
-          <button type="button" className="sso-button" onClick={ssoSignIn}>
-            Sign in with Microsoft Entra
-          </button>
+        <div className="vantik-card-row vantik-brand-cards" id="products">
+          {productCards.map((item, i) => (
+            <article key={item.title} className="vantik-card" style={{ "--delay": `${i * 100}ms` }}>
+              <span>{item.tag}</span>
+              <h3>{item.title}</h3>
+              <p>{item.body}</p>
+            </article>
+          ))}
+        </div>
+      </aside>
 
-          <div className="login-copyright">{COPYRIGHT}</div>
-        </form>
-      </section>
+      <main className="vantik-auth-panel" id="contact">
+        <section className="vantik-login-card">
+          <div className="vantik-login-head">
+            <p className="vantik-eyebrow">Contact</p>
+            <h3>Sign in</h3>
+            <p className="muted">Use local credentials, LDAP, or Microsoft Entra SSO.</p>
+          </div>
+
+          <form className="vantik-login" onSubmit={submit}>
+            <label>
+              Email or username
+              <input
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@yourfirm.com"
+                autoFocus
+                autoComplete="username"
+              />
+            </label>
+            <label>
+              Password
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+            </label>
+            <label>
+              Organisation ID <span className="muted">(for SSO / LDAP)</span>
+              <input
+                value={slug}
+                onChange={(e) => setSlug(e.target.value)}
+                placeholder="your-org"
+              />
+            </label>
+
+            {error && <div className="error" role="alert">{error}</div>}
+
+            <button type="submit" className="vantik-login-submit" disabled={busy}>
+              {busy ? "Signing in…" : (slug.trim() ? "Sign in with LDAP / AD" : "Sign in")}
+            </button>
+
+            <div className="sso-divider"><span>or</span></div>
+
+            <button type="button" className="sso-button" onClick={ssoSignIn}>
+              Sign in with Microsoft Entra
+            </button>
+
+            <p className="vantik-copyright">{COPYRIGHT}</p>
+          </form>
+        </section>
+      </main>
     </div>
   );
 }

@@ -490,6 +490,36 @@ services:
     depends_on: [tp-s0, tp-s1]
     restart: on-failure
 
+  # C++ feed-handler engine (opt-in) - protocol/venue adapter platform
+  # (data-plane/feedhandler-cpp/), distinct from the Python provider
+  # simulators above: real binary-protocol decoders (MoldUDP64/ITCH, SBE,
+  # FIX, SoupBinTCP) plus the same WebSocket+JSON crypto-provider shape,
+  # activated/configured per FeedHandlerInstance via the admin portal
+  # (control-api's app/routers/feedhandlers.py) rather than a CLI flag.
+  # FH_MODE=sim (default) publishes synthetic NASDAQ-ITCH-shaped and
+  # Coinbase-shaped trades on a repeating interval - no real exchange/
+  # vendor connectivity involved - see that directory's own README for
+  # FH_MODE=live (a real config JSON + credentials) once you have real
+  # entitlements to point it at.
+  #   docker compose --profile providers up -d feedhandler-cpp
+  feedhandler-cpp:
+    build:
+      context: ./data-plane/feedhandler-cpp
+      dockerfile: docker/Dockerfile
+    profiles: ["providers"]
+    environment:
+      FH_MODE: "${FEEDHANDLER_MODE:-sim}"
+      FH_KDB_HOST: "tp-s0"
+      FH_KDB_PORT: "5010"
+      FH_SHARD: "s0"
+      FH_SIM_INTERVAL_SEC: "${FEEDHANDLER_SIM_INTERVAL_SEC:-5}"
+      FH_STATUS_PORT: "9200"
+      FH_CONFIG_JSON: "${FEEDHANDLER_CONFIG_JSON:-}"
+    ports:
+      - "${FEEDHANDLER_STATUS_PORT:-9200}:9200"
+    depends_on: [tp-s0]
+    restart: on-failure
+
   # ------------------------------------------------------------------ control
   # Optional local Postgres for testing the real-database path (see
   # control-api/README-database.md). Opt in with:
@@ -576,7 +606,14 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8000:8000"
-    depends_on: [gateway, ollama]
+    # ollama is intentionally NOT in depends_on even though NL2Q_LLM_BASE_URL
+    # points at it by default - control-api never calls it at startup (only
+    # lazily, per NL2Q request - see app/main.py's on_startup, which touches
+    # neither nl2q nor ollama), so there's no real boot-order requirement,
+    # and a hard depends_on would break `docker compose up -d` on a box
+    # that's excluded ollama's ["llm"] profile (see below) since Compose
+    # refuses to start a service depending on one that's profile-excluded.
+    depends_on: [gateway]
 
   # Open-weights model server for the query workspace's natural-language-to-q
   # box (control-api/app/nl2q.py) - the default NL2Q_LLM_* above point here.
@@ -588,9 +625,20 @@ services:
   #   docker exec kdb-control-plane-ollama-1 ollama pull qwen2.5-coder:3b
   # On a beefier / GPU host, bump NL2Q_LLM_MODEL to qwen2.5-coder:7b or
   # :32b for materially better query generation (pull that tag instead).
+  #
+  # profiles: ["llm"] - opt-in like postgres/providers below, NOT because
+  # it's unwanted by default (.env.example ships COMPOSE_PROFILES=llm so a
+  # documented `cp .env.example .env` deploy still gets it automatically -
+  # same "on by default via .env, opt-out by clearing COMPOSE_PROFILES" as
+  # DEPLOYMENT_ENV) but because it costs ~2.4GB RAM held permanently
+  # (OLLAMA_KEEP_ALIVE=-1 below) that a free-tier-class cloud VM (~1GB RAM)
+  # cannot spare - the deploy/*/04_deploy_stack.sh scripts clear
+  # COMPOSE_PROFILES on a detected free-tier box (deploy/lib/free_tier.sh)
+  # specifically to exclude this.
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
+    profiles: ["llm"]
     environment:
       # Default keep_alive is 5 minutes of inactivity before Ollama unloads
       # the model - confirmed empirically to cost ~9s to reload from disk on

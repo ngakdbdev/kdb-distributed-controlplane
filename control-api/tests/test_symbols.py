@@ -16,6 +16,20 @@ def test_search_exact_symbol_ranks_first():
     assert hits[0]["symbol"] == "BP"
 
 
+def test_live_symbols_rank_before_seed_for_equally_good_prefix_matches():
+    # AMZZ-USD (live, injected) shares the "AM" prefix with the real seed
+    # entry AMZN - neither is an exact match, so without the live/seed
+    # tiebreak this would fall back to plain alphabetical (AMZN < AMZZ-USD)
+    # and put the seed entry first even though it has no real price behind
+    # it on this deployment. See symbols.py's search() for why that's backwards
+    # for a symbol picker whose whole point is finding something tradeable.
+    symref.merge_live_symbols(["AMZZ-USD"])
+    hits = symref.search("AM", limit=200)
+    amzn_idx = next(i for i, r in enumerate(hits) if r["symbol"] == "AMZN")
+    live_idx = next(i for i, r in enumerate(hits) if r["symbol"] == "AMZZ-USD")
+    assert live_idx < amzn_idx
+
+
 def test_search_filters_by_market():
     hits = symref.search("", market="NSE", limit=100)
     assert hits and all(r["market"] == "NSE" for r in hits)

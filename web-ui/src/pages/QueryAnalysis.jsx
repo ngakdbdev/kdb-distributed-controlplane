@@ -37,7 +37,7 @@ export default function QueryAnalysis() {
   const { entries = [], stats = {} } = history;
 
   return (
-    <div className="page">
+    <div className="page query-analysis-page">
       <h2>Query analysis</h2>
       <p className="muted">
         Recent query executions across every target, with profiling (connection vs. query time) and

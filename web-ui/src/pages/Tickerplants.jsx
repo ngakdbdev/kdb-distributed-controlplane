@@ -63,9 +63,23 @@ export default function Tickerplants({ onNavigate }) {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
+  const liveTps = tps || [];
+  const healthyCount = liveTps.filter((tp) => tp.ok).length;
+  const totalRecv = liveTps.reduce((sum, tp) => sum + (tp.ok ? (tp.stats?.recv ?? 0) : 0), 0);
+  const totalQueue = liveTps.reduce((sum, tp) => sum + (tp.ok ? (tp.stats?.queueDepth ?? 0) : 0), 0);
+  const degradedCount = liveTps.length - healthyCount;
+
   return (
-    <div className="page">
-      <h2>Tickerplant monitor</h2>
+    <div className="page tickerplants-page">
+      <div className="tp-hero">
+        <div>
+          <div className="tp-kicker">Operations</div>
+          <h2>Tickerplant monitor</h2>
+        </div>
+        <div className="tp-legend">
+          <span className="tp-legend-dot live" /> Live data path
+        </div>
+      </div>
       <p className="muted">Live per-tickerplant throughput, queues, sequence, and health — polled every {POLL_MS / 1000}s.</p>
 
       {tps === null && <p className="muted">Loading…</p>}
@@ -73,6 +87,31 @@ export default function Tickerplants({ onNavigate }) {
         <div className="ops-banner warn">
           <div><strong>No tickerplants reachable.</strong> Start the stack (or provision a cluster) — this view reads each TP's live counters over IPC.</div>
           <button className="primary" onClick={() => onNavigate?.("topology")}>Open Topology →</button>
+        </div>
+      )}
+
+      {tps && tps.length > 0 && (
+        <div className="tp-summary-grid">
+          <div className="tp-summary-card">
+            <span className="tp-summary-label">Active TPs</span>
+            <strong>{healthyCount}/{liveTps.length}</strong>
+            <small>{degradedCount ? `${degradedCount} degraded` : "All healthy"}</small>
+          </div>
+          <div className="tp-summary-card">
+            <span className="tp-summary-label">Total ingest</span>
+            <strong>{fmt(totalRecv)} msg/s</strong>
+            <small>Across all live TPs</small>
+          </div>
+          <div className="tp-summary-card">
+            <span className="tp-summary-label">Queue depth</span>
+            <strong>{bytes(totalQueue)}</strong>
+            <small>Current backlog in memory</small>
+          </div>
+          <div className="tp-summary-card">
+            <span className="tp-summary-label">Health state</span>
+            <strong className={degradedCount ? "warn" : "ok"}>{degradedCount ? "Watch" : "Healthy"}</strong>
+            <small>{degradedCount ? "attention needed" : "steady state"}</small>
+          </div>
         </div>
       )}
 
@@ -112,14 +151,36 @@ function TpCard({ tp, rate, onNavigate }) {
     ["log size", bytes(s.logBytes)],
   ];
 
+  const primaryMetrics = [
+    { label: "Ingress", value: `${fmt(rate?.recvps ?? 0)} msg/s` },
+    { label: "Publish", value: `${fmt(rate?.pubps ?? 0)} msg/s` },
+    { label: "Queue", value: bytes(s.queueDepth) },
+    { label: "Subscribers", value: fmt(s.subs) },
+  ];
+
   return (
-    <div className="tp-card">
+    <div className={`tp-card ${overall ? "healthy" : "degraded"}`}>
       <div className="tp-head">
-        <h3>{tp.label}</h3>
+        <div className="tp-entity">
+          <span className="tp-entity-mark">TP</span>
+          <div>
+            <h3>{tp.label}</h3>
+            <small>{tp.id}</small>
+          </div>
+        </div>
         <span className={`tp-pill ${overall ? "ok" : "warn"}`}>{overall ? "HEALTHY" : "DEGRADED"}</span>
       </div>
 
-      <div className="tp-metrics">
+      <div className="tp-inline-metrics">
+        {primaryMetrics.map((metric) => (
+          <div className="tp-stat" key={metric.label}>
+            <span>{metric.label}</span>
+            <strong>{metric.value}</strong>
+          </div>
+        ))}
+      </div>
+
+      <div className="tp-secondary-grid">
         {metrics.map(([k, v]) => (
           <div className="tp-metric" key={k}><span className="tp-k">{k}</span><span className="tp-v">{v}</span></div>
         ))}

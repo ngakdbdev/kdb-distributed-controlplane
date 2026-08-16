@@ -91,6 +91,10 @@ roughly linearly if you regenerate the topology with more shards. Bump the OS di
 session where the `hdb` will accumulate more than a day or two of history — the default is sized for
 a demo, not a pilot.
 
+Going the other direction — a free/trial subscription can't fit any of the above. `01_provision_vm.sh`
+and `04_deploy_stack.sh` detect that automatically and fall back to a 1-shard, ollama-off topology on a
+`Standard_B1s`; see [deploy/azure/README.md](../deploy/azure/README.md#deploying-on-a-free-tier--brand-new-azure-subscription).
+
 ## 6. Post-deploy verification checklist
 
 - [ ] `curl http://<public-ip>:8000/health` returns healthy.

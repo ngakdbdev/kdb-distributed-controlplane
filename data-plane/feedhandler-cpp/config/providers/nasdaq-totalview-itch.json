@@ -1,0 +1,21 @@
+{
+  "provider": "NASDAQ",
+  "feed": "TOTALVIEW_ITCH",
+  "environment": "production",
+  "enabled": false,
+  "transport": {
+    "type": "udp_multicast",
+    "interface": "REPLACE_WITH_YOUR_NIC_IP",
+    "group": "REPLACE_WITH_NASDAQ_MULTICAST_GROUP",
+    "port": "REPLACE_WITH_PORT"
+  },
+  "protocol": { "type": "moldudp64" },
+  "venue_adapter": "nasdaq_itch",
+  "recovery": { "enabled": true },
+  "ab_feed_enabled": true,
+  "field_mapping": {
+    "trading_day_epoch_ns": "0"
+  },
+  "credentials": { "required": [] },
+  "_note": "Illustrative starting point, NOT a live-tested config - real values (multicast group/port/interface, cross-connect, market data entitlement) must come from your NASDAQ market data agreement. See docs/feedhandler-admin.md."
+}

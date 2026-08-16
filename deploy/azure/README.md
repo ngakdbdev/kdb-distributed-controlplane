@@ -117,6 +117,29 @@ check the Audit log. For a scripted walkthrough plus load numbers, run `demokit`
   `data-plane/docker/kdbx/`, or being the wrong architecture. See
   `docs/troubleshooting.md`.
 
+## Deploying on a free-tier / brand-new Azure subscription
+
+`01_provision_vm.sh` checks this automatically, with a real quota lookup
+(not a guess): if no `VM_SIZE` is set and your subscription's regional
+vCPU quota is too low for the default `Standard_D8s_v5`, it falls back on
+its own to `Standard_B1s` (Azure's actual free-account VM size) with a
+30GB disk, and skips accelerated networking + the proximity placement
+group (B-series doesn't support the former, and neither is useful with one
+box). You'll see a message explaining what it did and why.
+
+Already know you're on a free/trial subscription? Skip straight there:
+```
+FREE_TIER=1 ./01_provision_vm.sh
+```
+
+`04_deploy_stack.sh` (step 4) does the matching check on the stack side -
+it reads the box's own actual RAM (not a cloud API - works the same however
+the box was created) and, below ~3.5GB, regenerates `docker-compose.yml`
+for 1 shard instead of 2 and turns off the `ollama` service (NL2Q's
+natural-language-to-q box, ~2.4GB RAM held permanently) so the rest of the
+stack actually fits. Force it either way with `FREE_TIER=1`/`FREE_TIER=0`.
+See `deploy/lib/free_tier.sh` for exactly what it changes.
+
 ## Honest note on FPGA (why there isn't one)
 
 Azure's FPGA family, the **NP-series** (AMD/Xilinx Alveo U250), is being wound

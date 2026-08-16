@@ -8,6 +8,7 @@ export default function TickHouses() {
   const [clusters, setClusters] = useState([]);
   const [agents, setAgents] = useState([]);
   const [infraProfiles, setInfraProfiles] = useState([]);
+  const [feedCatalog, setFeedCatalog] = useState([]);
   const [error, setError] = useState("");
 
   async function refresh() {
@@ -21,13 +22,17 @@ export default function TickHouses() {
     // is selected. Readable by any authenticated user (not just admins),
     // same as the endpoint itself.
     api.listInfraProfiles().then(setInfraProfiles).catch(() => {});
+    // Feed-handler provider catalog (see Admin -> Feed handlers) - lets this
+    // wizard offer "activate a market-data source into this TickHouse" as
+    // part of creation, not a separate trip to another page afterward.
+    api.feedhandlerCatalog().then((r) => setFeedCatalog(r.providers)).catch(() => {});
     refresh();
     const id = setInterval(refresh, 4000);
     return () => clearInterval(id);
   }, []);
 
   return (
-    <div className="page">
+    <div className="page tickhouses-page">
       <h2>TickHouses</h2>
       <p className="muted">
         Define a tick cluster declaratively &mdash; deployment target (AWS/Azure/GCP/on-prem) with its
@@ -36,7 +41,7 @@ export default function TickHouses() {
         then provision end-to-end through your agent.
       </p>
       {error && <div className="error">{error}</div>}
-      {meta && <CreateWizard meta={meta} infraProfiles={infraProfiles} onCreated={refresh} onError={setError} />}
+      {meta && <CreateWizard meta={meta} infraProfiles={infraProfiles} feedCatalog={feedCatalog} onCreated={refresh} onError={setError} />}
 
       <h3 style={{ marginTop: "1.5rem" }}>Defined clusters</h3>
       {clusters.length === 0 && <p className="muted">None yet.</p>}
@@ -47,13 +52,18 @@ export default function TickHouses() {
   );
 }
 
-function CreateWizard({ meta, infraProfiles, onCreated, onError }) {
+function CreateWizard({ meta, infraProfiles, feedCatalog, onCreated, onError }) {
   const [form, setForm] = useState({
     name: "", location: meta.clouds[0], os: meta.os_types[0], profile: meta.profiles[0],
     shard_ranges: "a-m, n-z", idb: false, ldap_ref: "",
     sharding_policy: "letter-range",
   });
   const [config, setConfig] = useState({});
+  // Optional feed handler activated into this TickHouse in the same create
+  // call - "" means "none selected", matching form.location's own pattern
+  // of an empty/unset string rather than null for a <select>'s value.
+  const [feedProviderKey, setFeedProviderKey] = useState("");
+  const [feedSecrets, setFeedSecrets] = useState({});
   // Which default profile (if any) config was last auto-filled from, for
   // this location - a field still equal to what that profile provided
   // shows "inherited from Global Settings"; editing it counts as an
@@ -106,10 +116,21 @@ function CreateWizard({ meta, infraProfiles, onCreated, onError }) {
     if (suggestion) set("profile", suggestion.profile);
   }
 
+  const feedEntry = feedCatalog.find((e) => `${e.provider}/${e.feed}` === feedProviderKey) || null;
+  const feedMissingCreds = feedEntry
+    ? feedEntry.credentials_required.filter((f) => !feedSecrets[f]?.trim())
+    : [];
+
   function body() {
     const b = { ...form, target_config: config };
     if (form.sharding_policy === "explicit-symbols") {
       b.shard_symbols = symShards.filter((s) => s.symbols.length);
+    }
+    if (feedEntry) {
+      b.feed_handler = {
+        provider: feedEntry.provider, feed: feedEntry.feed, display_name: feedEntry.display_name,
+        enabled: true, config: feedEntry.default_config, secrets: feedSecrets,
+      };
     }
     return b;
   }
@@ -121,8 +142,18 @@ function CreateWizard({ meta, infraProfiles, onCreated, onError }) {
     finally { setBusy(false); }
   }
   async function doCreate() {
+    if (feedEntry && feedMissingCreds.length) {
+      onError(`Missing required credential(s) for ${feedEntry.display_name}: ${feedMissingCreds.join(", ")}`);
+      return;
+    }
     setBusy(true);
-    try { await api.createTickhouse(body()); setPreview(null); onCreated(); }
+    try {
+      await api.createTickhouse(body());
+      setPreview(null);
+      setFeedProviderKey("");
+      setFeedSecrets({});
+      onCreated();
+    }
     catch (err) { onError(String(err)); }
     finally { setBusy(false); }
   }
@@ -258,6 +289,34 @@ function CreateWizard({ meta, infraProfiles, onCreated, onError }) {
             + add shard
           </button>
         </div>
+      )}
+
+      <div className="wizard-section-label">Feed handler (optional)</div>
+      <div className="form-row wrap">
+        <select value={feedProviderKey} onChange={(e) => { setFeedProviderKey(e.target.value); setFeedSecrets({}); }}>
+          <option value="">none - attach one later from Admin &rarr; Feed handlers</option>
+          {feedCatalog.filter((e) => e.engine_support !== "catalog_only").map((e) => (
+            <option key={`${e.provider}/${e.feed}`} value={`${e.provider}/${e.feed}`}>{e.display_name}</option>
+          ))}
+        </select>
+      </div>
+      {feedEntry && (
+        <>
+          <p className="muted" style={{ fontSize: "0.8rem" }}>{feedEntry.coverage}</p>
+          {feedEntry.credentials_required.length > 0 && (
+            <div className="form-row wrap">
+              {feedEntry.credentials_required.map((f) => (
+                <input key={f} type={f.toLowerCase().includes("password") ? "password" : "text"} placeholder={f}
+                       value={feedSecrets[f] || ""}
+                       onChange={(e) => setFeedSecrets((s) => ({ ...s, [f]: e.target.value }))} />
+              ))}
+            </div>
+          )}
+          <div className="muted" style={{ fontSize: "0.78rem" }}>
+            Activates {feedEntry.display_name} and links it to this TickHouse in the same step - see
+            Admin &rarr; Feed handlers to review or edit its connection config afterward.
+          </div>
+        </>
       )}
 
       <div className="form-row">

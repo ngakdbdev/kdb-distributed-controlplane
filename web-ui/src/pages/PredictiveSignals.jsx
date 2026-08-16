@@ -67,7 +67,7 @@ export default function PredictiveSignals({ onNavigate }) {
   const sentimentTone = (score) => (score > 0.15 ? "up" : score < -0.15 ? "down" : "");
 
   return (
-    <div className="page">
+    <div className="page signals-page">
       <h2>Predictive Signals</h2>
       <p className="muted">
         A weighted, multi-factor composite score per symbol — momentum, volatility-scaled momentum,

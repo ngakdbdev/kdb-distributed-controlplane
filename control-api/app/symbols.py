@@ -145,7 +145,14 @@ def search(query: str = "", market: str | None = None, limit: int = 25) -> list:
         hits = list(pool)
     else:
         hits = [r for r in pool if q in r["symbol"].upper() or q in r["name"].upper()]
-    # exact-symbol matches first, then prefix, then the rest
+    # exact-symbol match first, then prefix match, then symbols with REAL
+    # incoming trade data ahead of the static reference seed (a seed entry
+    # from an exchange no feed here actually covers - NSE, XETRA, TSE - has
+    # no real price to trade against; a live-discovered one does), then
+    # alphabetical. Browsing with an empty query (the picker's default
+    # "what's actually flowing right now" view - see SymbolPicker.jsx) is
+    # driven entirely by the live-vs-seed tiebreak, since the first two
+    # keys don't discriminate anything when q="".
     hits.sort(key=lambda r: (r["symbol"].upper() != q, not r["symbol"].upper().startswith(q),
-                             r["symbol"]))
+                             r["source"] != "live", r["symbol"]))
     return hits[:max(1, min(limit, 200))]

@@ -146,6 +146,10 @@ the `hdb` volume grows every trading day the stack stays up, so bump it (or move
 separately-sized `hdb` PVC, see [predeploy-kubernetes.md](predeploy-kubernetes.md)) for anything
 long-running.
 
+Going the other direction — a free-tier account can't fit any of the above. `01_provision_vm.sh` and
+`04_deploy_stack.sh` detect that automatically and fall back to a 1-shard, ollama-off topology on a
+`t3.micro`; see [deploy/aws/README.md](../deploy/aws/README.md#deploying-on-a-free-tier--brand-new-aws-account).
+
 ## 6. Post-deploy verification checklist
 
 - [ ] `curl http://<public-ip>:8000/health` returns healthy (the deploy script already polls this for

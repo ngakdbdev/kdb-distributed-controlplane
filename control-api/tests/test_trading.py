@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as m
+from app import alpaca_broker
 from app import greeks as gk
 from app import portfolio as pf
 from app import market as mkt
@@ -169,6 +170,44 @@ def test_alpaca_router_wraps_fill_wait_failures_as_order_error():
     client = _FakeAlpacaClient(raise_on_wait=RuntimeError("order rejected"))
     with pytest.raises(oms.OrderError, match="alpaca order failed"):
         oms.AlpacaRouter(client).fill("buy", 1, "market", 100, None, symbol="AAPL")
+
+
+# ---- pre-flight tradability check - confirmed live: a symbol this platform's
+# own live-discovered universe includes but Alpaca doesn't list (e.g. a
+# crypto cross-rate like BTC-GBP) used to reach Alpaca's API and come back a
+# raw HTTP 422 with Alpaca's own JSON error text, surfaced verbatim to
+# whoever placed the order. fill() now rejects it BEFORE ever calling the
+# broker, with a message that actually says what's wrong.
+
+def test_alpaca_router_rejects_a_symbol_the_broker_does_not_list(monkeypatch):
+    # ZZTEST-prefixed - see test_symbols.py's own convention: the
+    # tradability cache is module-global for the whole pytest run, so a
+    # symbol another test file's assertions could also touch is worth
+    # avoiding rather than relying on test ordering to stay collision-free.
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"is_tradable": lambda self, sym: False})())
+    client = _FakeAlpacaClient()
+    with pytest.raises(oms.OrderError, match="not a tradable asset"):
+        oms.AlpacaRouter(client).fill("buy", 1, "market", 100, None, symbol="ZZTEST-GBP")
+    assert client.submitted is None  # never reached the broker at all
+
+
+def test_alpaca_router_proceeds_when_broker_confirms_tradable(monkeypatch):
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"is_tradable": lambda self, sym: True})())
+    client = _FakeAlpacaClient(filled_price=180.5)
+    fill = oms.AlpacaRouter(client).fill("buy", 1, "market", 100, None, symbol="ZZTEST-TRADABLE")
+    assert fill.price == 180.5
+    assert client.submitted is not None
+
+
+def test_alpaca_router_skips_the_check_when_no_broker_is_configured():
+    # the common case in every existing test in this file: no ALPACA_* env
+    # vars set -> client_from_env() is None -> nothing to check against,
+    # so the pre-flight check must never block an otherwise-fine order.
+    client = _FakeAlpacaClient(filled_price=99.0)
+    fill = oms.AlpacaRouter(client).fill("buy", 1, "market", 100, None, symbol="ZZTEST-NOBROKER")
+    assert fill.price == 99.0
 
 
 # ---- trading.py's router selection (_router()) - the safe-by-default seam -

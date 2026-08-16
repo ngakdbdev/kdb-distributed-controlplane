@@ -41,7 +41,7 @@ export default function Execution({ onNavigate }) {
   const recent = orders.slice(0, 50);
 
   return (
-    <div className="page">
+    <div className="page execution-page">
       <h2>Execution quality</h2>
       <p className="muted">
         {connected ? "● live" : "○ reconnecting..."} - one-second refresh for order flow, fill quality, and execution pressure.

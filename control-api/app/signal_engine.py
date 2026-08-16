@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import time
 from typing import Callable, Optional
 
 from sqlmodel import Session, select
@@ -45,34 +44,12 @@ _SHARD_COUNT = int(os.environ.get("SHARD_COUNT", "2"))
 
 ConnectFn = Callable[[str], object]
 
-# How long a broker-tradability check is trusted before re-checking - an
-# asset's tradable status doesn't change minute to minute, and this module
-# runs on a tight poll (bot_scheduler.py's BOT_POLL_SEC, ~12s). Confirmed
-# live: without this cache, a symbol the broker rejects gets re-checked -
-# and, without the check at all, re-ATTEMPTED as a real doomed order - on
-# literally every single poll, forever.
-_TRADABILITY_TTL_SEC = 3600
-_tradability_cache: dict[str, tuple[bool, float]] = {}
-
-
-def _is_broker_tradable(symbol: str) -> bool:
-    """True if there's no real broker to check against (PaperRouter accepts
-    any symbol) or the configured broker confirms it lists this one. This
-    platform's own auto-mode screens the cluster's ACTUAL live symbol
-    universe, which includes symbols from simulated/demo feeds that were
-    never meant to be tradable anywhere real - without this check, the bot
-    would keep trying to open a real Alpaca position in one of those and
-    getting rejected, forever, one wasted order attempt per poll."""
-    client = alpaca_broker.client_from_env()
-    if client is None:
-        return True
-    now = time.monotonic()
-    cached = _tradability_cache.get(symbol)
-    if cached is not None and (now - cached[1]) < _TRADABILITY_TTL_SEC:
-        return cached[0]
-    tradable = client.is_tradable(symbol)
-    _tradability_cache[symbol] = (tradable, now)
-    return tradable
+# Cached broker-tradability check - shared with oms.AlpacaRouter.fill's own
+# pre-flight check (and thus with manual order placement too) via
+# app.alpaca_broker.cached_is_tradable; see that function's own docstring
+# for why this matters and why it's cached. Kept as a module-level alias
+# here so this file's own call site below doesn't change.
+_is_broker_tradable = alpaca_broker.cached_is_tradable
 
 
 def _connect_shard(shard_id: str):

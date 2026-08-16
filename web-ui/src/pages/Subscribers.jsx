@@ -51,7 +51,7 @@ export default function Subscribers({ onNavigate }) {
   }
 
   return (
-    <div className="page">
+    <div className="page subscribers-page">
       <h2>Subscribers & entitlements</h2>
       <p className="muted">Who or what may subscribe to which table, and whether a live stream exists to subscribe to.</p>
       {tpUp === false && (

@@ -172,3 +172,36 @@ def client_from_env() -> Optional[AlpacaClient]:
     if not key_id or not secret_key:
         return None
     return AlpacaClient(key_id, secret_key, live=(mode == "live"))
+
+
+# How long a broker-tradability check is trusted before re-checking - an
+# asset's tradable status doesn't change minute to minute. Shared by both
+# the auto-mode bot (signal_engine.py, which polls every ~12s and would
+# otherwise re-check/re-attempt a doomed order every single poll) and
+# manual order placement (oms.AlpacaRouter.fill, below) - one cache, one
+# TTL, not two independently-drifting copies of the same idea.
+_TRADABILITY_TTL_SEC = 3600
+_tradability_cache: dict[str, tuple[bool, float]] = {}
+
+
+def cached_is_tradable(symbol: str) -> bool:
+    """True if there's no real broker configured to check against
+    (PaperRouter/no client - accepts any symbol) or the configured Alpaca
+    account confirms it lists this one. Confirmed live: this platform's
+    live-discovered symbol universe (see app/symbol_discovery.py) includes
+    plenty of pairs (crypto cross-rates like BTC-GBP, symbols from
+    simulated/demo feeds) that a real feed happily prints trades for but
+    that Alpaca has never heard of - without this check, an order for one
+    of those reaches Alpaca's API and comes back a raw HTTP 422 with
+    Alpaca's own JSON error text, which is both confusing to a trader and,
+    for the auto-bot, a wasted doomed order attempt every poll forever."""
+    client = client_from_env()
+    if client is None:
+        return True
+    now = time.monotonic()
+    cached = _tradability_cache.get(symbol)
+    if cached is not None and (now - cached[1]) < _TRADABILITY_TTL_SEC:
+        return cached[0]
+    tradable = client.is_tradable(symbol)
+    _tradability_cache[symbol] = (tradable, now)
+    return tradable

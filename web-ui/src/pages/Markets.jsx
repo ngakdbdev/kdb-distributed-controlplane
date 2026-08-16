@@ -137,7 +137,7 @@ export default function Markets({ onNavigate, initial }) {
   const watchlist = syms.map((sym) => buildWatchRow(sym, basketRows[sym] || []));
 
   return (
-    <div className="page">
+    <div className="page markets-page">
       <h2>Markets</h2>
       <p className="muted">
         Every symbol in your basket gets a live watchlist row below; click one to open its full
@@ -178,14 +178,14 @@ export default function Markets({ onNavigate, initial }) {
 
       {sample && <div className="sample-note">Showing <span className="sample-badge">SAMPLE</span> data for {focus} — illustrative only, not live market figures.</div>}
 
-      <div className="card" style={{ padding: "0.4rem 1rem" }}>
+      <div className="card market-watch-card" style={{ padding: "0.4rem 1rem" }}>
         <h3>Watchlist</h3>
         {watchlist.length === 0 ? (
           <p className="muted" style={{ padding: "0.5rem 0" }}>Add a symbol above to start watching it.</p>
         ) : (
           <div>
             {watchlist.map((row) => (
-              <button key={row.symbol} className="list-row" style={{ width: "100%", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}
+                    <button key={row.symbol} className={`list-row ${row.symbol === focus ? "active" : ""}`} style={{ width: "100%", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}
                       onClick={() => setFocus(row.symbol)}>
                 <span className="list-row-icon" style={row.symbol === focus ? { background: "var(--accent)", color: "#fff" } : undefined}>{row.symbol.slice(0, 2)}</span>
                 <div className="list-row-main">
@@ -213,11 +213,11 @@ export default function Markets({ onNavigate, initial }) {
                 {market.change >= 0 ? "▲" : "▼"} {fmt(market.change)} ({fmt(market.change_pct)}%)
               </span>
             </div>
-            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <div className="market-hero-actions" style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
               <Sparkline data={focusRows.map((r) => Number(r.price)).filter((v) => !Number.isNaN(v))} width={140} height={44} strokeWidth={2.5} />
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                <button className="primary" style={{ background: "var(--success)" }} onClick={() => onNavigate?.("orders", { symbol: focus, side: "buy" })}>Buy {focus}</button>
-                <button className="primary" style={{ background: "var(--danger)" }} onClick={() => onNavigate?.("orders", { symbol: focus, side: "sell" })}>Sell {focus}</button>
+              <div className="market-trade-cta" style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                <button className="primary trade-cta buy" style={{ background: "var(--success)" }} onClick={() => onNavigate?.("orders", { symbol: focus, side: "buy" })}>Buy {focus}</button>
+                <button className="primary trade-cta sell" style={{ background: "var(--danger)" }} onClick={() => onNavigate?.("orders", { symbol: focus, side: "sell" })}>Sell {focus}</button>
               </div>
             </div>
           </div>

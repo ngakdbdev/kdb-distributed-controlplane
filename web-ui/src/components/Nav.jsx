@@ -1,4 +1,5 @@
 import { PRODUCT } from "../brand.js";
+import ThemeToggle from "./ThemeToggle.jsx";
 
 // Grouped, left-sidebar nav (Databricks/Snowflake-style) instead of a
 // single row of 17 top tabs. Groups are purely a presentation grouping -
@@ -66,6 +67,7 @@ const TENANT_ADMIN_GROUP = {
     { id: "autoscale", label: "Autoscaling", mark: "AS" },
     { id: "fleet", label: "Fleet", mark: "FL" },
     { id: "infra-settings", label: "Infrastructure settings", mark: "IS" },
+    { id: "feed-handlers", label: "Feed handlers", mark: "FH" },
     { id: "users", label: "Users", mark: "US" },
     { id: "audit", label: "Audit log", mark: "AU" },
   ],
@@ -104,6 +106,7 @@ export default function Nav({ active, onChange, onLogout, role }) {
           </div>
         ))}
       </div>
+      <ThemeToggle />
       <button className="sidenav-logout" onClick={onLogout}>
         <span className="sidenav-item-mark">↩</span>
         <span className="sidenav-item-label">Log out</span>

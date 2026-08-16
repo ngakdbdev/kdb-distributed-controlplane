@@ -87,7 +87,7 @@ export default function Overview({ onNavigate }) {
   const stream = !svc.length ? "unknown" : !tpUp ? "no-tp" : (totalMsgs === 0 || (rate.length > 3 && mps === 0)) ? "no-feed" : "live";
 
   return (
-    <div className="page ops">
+    <div className="page ops ops-premium">
       <div className="ops-head">
         <div>
           <h2>{PRODUCT} operations</h2>

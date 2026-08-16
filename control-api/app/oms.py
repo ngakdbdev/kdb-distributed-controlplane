@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import alpaca_broker
+
 
 class OrderError(RuntimeError):
     pass
@@ -102,6 +104,20 @@ class AlpacaRouter:
              symbol: str = "") -> Fill:
         if not symbol:
             raise OrderError("alpaca order routing needs a symbol")
+        # Pre-flight, not just error handling after the fact: this
+        # platform's live-discovered symbol universe (crypto cross-rates,
+        # symbols from simulated/demo feeds) routinely includes things
+        # Alpaca has never heard of. Confirmed live: without this check,
+        # that reaches Alpaca's API and comes back a raw HTTP 422 with
+        # Alpaca's own JSON error text surfaced verbatim to whoever placed
+        # the order - technically accurate, not remotely actionable. Every
+        # caller of AlpacaRouter.fill (manual orders AND the auto-bot) gets
+        # the same clear rejection from this one choke point.
+        if not alpaca_broker.cached_is_tradable(symbol):
+            raise OrderError(
+                f"{symbol} is not a tradable asset on your configured Alpaca account - "
+                "check the symbol format (Alpaca's own naming, e.g. BTC/USD not BTC-GBP) "
+                "or that this instrument is listed there at all")
         try:
             placed = self.client.submit_order(
                 symbol=symbol, side=side, qty=qty, order_type=order_type,

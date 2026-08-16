@@ -14,6 +14,7 @@ import Export from "./pages/Export.jsx";
 import Fleet from "./pages/Fleet.jsx";
 import TickHouses from "./pages/TickHouses.jsx";
 import InfraSettings from "./pages/InfraSettings.jsx";
+import FeedHandlers from "./pages/FeedHandlers.jsx";
 import Login from "./pages/Login.jsx";
 import Markets from "./pages/Markets.jsx";
 import Metrics from "./pages/Metrics.jsx";
@@ -39,6 +40,7 @@ const PAGES = {
   "query-analysis": QueryAnalysis,
   "model-settings": ModelSettings,
   "infra-settings": InfraSettings,
+  "feed-handlers": FeedHandlers,
   markets: Markets,
   orders: Orders,
   portfolio: Portfolio,
@@ -108,7 +110,7 @@ export default function App() {
   // hits the backend's own role check, so this is a UX courtesy, not the
   // enforcement boundary.
   const platformAdminOnlyPages = ["model-settings"];
-  const tenantAdminOnlyPages = ["tickhouses", "autoscale", "fleet", "infra-settings", "users", "audit"];
+  const tenantAdminOnlyPages = ["tickhouses", "autoscale", "fleet", "infra-settings", "feed-handlers", "users", "audit"];
   const blocked =
     (platformAdminOnlyPages.includes(active) && role !== "platform_admin") ||
     (tenantAdminOnlyPages.includes(active) && role !== "tenant_admin");

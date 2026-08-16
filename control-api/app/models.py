@@ -464,3 +464,49 @@ class LLMConfig(SQLModel, table=True):
     timeout_sec: float = 20.0
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     updated_by: str = ""
+
+
+# --------------------------------------------------------------------------- feed handler (data-plane/feedhandler-cpp)
+class FeedHandlerInstance(SQLModel, table=True):
+    """One tenant's activated market-data feed - the admin-portal-managed
+    counterpart to data-plane/feedhandler-cpp's C++ engine (see that
+    directory's README for the protocol/venue adapter platform this
+    configures). A row here is "NASDAQ TotalView-ITCH, my prod config, my
+    credentials" - the engine itself reads the shape this produces via
+    GET /feedhandlers/{id}/config (config_json merged with the DECRYPTED
+    secrets_json) rather than the control plane pushing config to it, the
+    same pull-based shape the fleet agent already uses elsewhere in this
+    codebase.
+
+    config_json holds ONLY non-secret coordinates (transport/protocol/venue
+    adapter selection, host/port/multicast group, field mappings) - the
+    exact shape data-plane/feedhandler-cpp/config/providers/*.json ships as
+    illustrative defaults. secrets_json is Fernet-encrypted at rest (see
+    app/crypto.py, the same encryption LLMConfig/TenantIdP/TenantLDAP
+    already use this session) and only ever decrypted in memory when the
+    engine's own config endpoint is called - never returned by any list/get
+    response otherwise.
+
+    tickhouse_id is nullable and deliberately the FK direction (a feed
+    handler points at ONE TickHouse, not the reverse) - one TickHouse's
+    tickerplants can legitimately ingest from several feed handlers at once
+    (e.g. NASDAQ ITCH and a crypto WebSocket feed both landing in the same
+    cluster), so TickHouse doesn't hold a single feed_handler_id back.
+    Nullable because a feed handler can be activated stand-alone (see
+    KdbPublisherConfig's own env-var-driven default target) before ever
+    being tied to a specific declared TickHouse - association is optional,
+    not required to activate a source."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenant.id", index=True)
+    tickhouse_id: Optional[int] = Field(default=None, foreign_key="tickhouse.id", index=True)
+    provider: str = Field(index=True)            # catalog key, e.g. "NASDAQ", "COINBASE" - see feedhandler_catalog.py
+    feed: str = ""                                # e.g. "TOTALVIEW_ITCH", "MATCHES"
+    display_name: str = ""
+    enabled: bool = False
+    config_json: str = "{}"                       # FeedConfig-shaped JSON, non-secret (see class docstring)
+    secrets_json: str = ""                        # Fernet-encrypted credential values, "" if the provider needs none
+    status: str = "configured"                    # configured | validating | live | degraded | error - operator-set/last-known, not live-polled (see routers/feedhandlers.py)
+    last_error: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_by: str = ""

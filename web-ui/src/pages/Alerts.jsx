@@ -48,7 +48,7 @@ export default function Alerts({ onNavigate }) {
   }), [alerts]);
 
   return (
-    <div className="page">
+    <div className="page alerts-page">
       <h2>Alerts center</h2>
       <p className="muted">
         {connected ? "● live" : "○ reconnecting..."} - low-latency mode, refreshed every second from market, execution, and platform pressure signals.

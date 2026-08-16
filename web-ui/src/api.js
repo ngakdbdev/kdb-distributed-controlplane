@@ -41,7 +41,18 @@ async function request(path, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
   }
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+    // FastAPI's standard error shape is {"detail": "..."} - extract it so
+    // callers (and their `.replace(/^Error:\s*/, "")` display logic) show
+    // a clean sentence instead of the raw JSON body verbatim. Falls back
+    // to the raw text for anything that isn't that shape (a proxy/gateway
+    // error page, an empty body, etc).
+    let message = body;
+    try {
+      const parsed = JSON.parse(body);
+      if (typeof parsed?.detail === "string") message = parsed.detail;
+      else if (parsed?.detail != null) message = JSON.stringify(parsed.detail);
+    } catch { /* not JSON - use the raw body as-is */ }
+    throw new Error(`${res.status}: ${message}`);
   }
   const text = await res.text();
   return text ? JSON.parse(text) : null;
@@ -100,6 +111,18 @@ export const api = {
   createInfraProfile: (body) => request("/infra-profiles", { method: "POST", body: JSON.stringify(body) }),
   updateInfraProfile: (id, body) => request(`/infra-profiles/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteInfraProfile: (id) => request(`/infra-profiles/${id}`, { method: "DELETE" }),
+
+  // Feed-handler admin portal (control-api/app/routers/feedhandlers.py) -
+  // the C++ protocol/venue-adapter engine (data-plane/feedhandler-cpp/):
+  // browse the provider catalog, activate a source with its config +
+  // credentials (encrypted at rest), fetch the decrypted engine-config an
+  // operator hands to a real deployment.
+  feedhandlerCatalog: () => request("/feedhandlers/catalog"),
+  listFeedHandlers: () => request("/feedhandlers"),
+  createFeedHandler: (body) => request("/feedhandlers", { method: "POST", body: JSON.stringify(body) }),
+  updateFeedHandler: (id, body) => request(`/feedhandlers/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteFeedHandler: (id) => request(`/feedhandlers/${id}`, { method: "DELETE" }),
+  feedHandlerEngineConfig: (id) => request(`/feedhandlers/${id}/engine-config`),
 
   // Per-tenant user management (control-api/app/routers/users.py) - an
   // Admin (tenant_admin) creating/editing logins within their own tenant.

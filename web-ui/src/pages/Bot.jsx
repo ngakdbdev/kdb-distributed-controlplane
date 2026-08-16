@@ -152,7 +152,7 @@ export default function Bot() {
   const loudBadge = perm.live_routing || perm.mode === "misconfigured";
 
   if (loading) {
-    return <div className="page"><h2>Trading bot <span className={`paper-badge${loudBadge ? " live" : ""}`}>{modeLabel}</span></h2><p className="muted">Loading…</p></div>;
+    return <div className="page bot-page"><h2>Trading bot <span className={`paper-badge${loudBadge ? " live" : ""}`}>{modeLabel}</span></h2><p className="muted">Loading…</p></div>;
   }
 
   const openCount = positions.length;
@@ -183,7 +183,7 @@ export default function Bot() {
   }[perm.mode] || "no real broker, no bank account - every fill is simulated.";
 
   return (
-    <div className="page">
+    <div className="page bot-page">
       <h2>Trading bot <span className={`paper-badge${loudBadge ? " live" : ""}`}>{modeLabel}</span></h2>
       <p className="muted">
         A momentum-following bot with a hard <strong>{config.max_risk_pct}% capital risk cap</strong>,

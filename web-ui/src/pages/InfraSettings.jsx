@@ -47,7 +47,7 @@ export default function InfraSettings() {
   }));
 
   return (
-    <div className="page">
+    <div className="page infra-settings-page">
       <h2>Infrastructure settings</h2>
       <p className="muted">
         Reusable, named bundles of non-secret deployment coordinates (region, VPC/subnet, namespace,

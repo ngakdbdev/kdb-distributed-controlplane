@@ -119,6 +119,32 @@ red then back to green, then check the Audit log tab for the `detect_failure` â†
   `data-plane/docker/kdbx/`, or being the wrong architecture. See
   `docs/troubleshooting.md`.
 
+## Deploying on a free-tier / brand-new GCP project
+
+`01_provision_vm.sh` checks this automatically, with a real quota lookup
+(not a guess): if no `MACHINE_TYPE` is set and your project's regional CPU
+quota is too low for the default `c3-standard-8`, it falls back on its own
+to `e2-micro` (GCP's actual Always Free machine type) with a 30GB
+pd-standard disk, and skips the COMPACT placement policy + Tier_1/gVNIC
+networking (e2-micro doesn't support gVNIC, and neither is useful with one
+box). It also warns (doesn't block) if your zone isn't in one of GCP's
+genuinely-free regions (`us-west1`/`us-central1`/`us-east1`) - e2-micro
+runs fine elsewhere, it just isn't $0 there. You'll see a message
+explaining what it did and why.
+
+Already know you're on a free-tier project? Skip straight there:
+```
+FREE_TIER=1 ./01_provision_vm.sh
+```
+
+`04_deploy_stack.sh` (step 4) does the matching check on the stack side -
+it reads the box's own actual RAM (not a cloud API - works the same however
+the box was created) and, below ~3.5GB, regenerates `docker-compose.yml`
+for 1 shard instead of 2 and turns off the `ollama` service (NL2Q's
+natural-language-to-q box, ~2.4GB RAM held permanently) so the rest of the
+stack actually fits. Force it either way with `FREE_TIER=1`/`FREE_TIER=0`.
+See `deploy/lib/free_tier.sh` for exactly what it changes.
+
 ## Honest note on "FPGA" and "highest throughput"
 
 GCP does not offer an FPGA instance family - that's AWS F1/F2 territory. This deployment uses GCP's real

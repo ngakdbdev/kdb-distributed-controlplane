@@ -133,6 +133,40 @@ def test_provision_queues_spec_to_matching_agent(client, tadmin):
     assert payload["desired"]["components"][0]["hardware"] is not None
 
 
+def test_create_with_feed_handler_attaches_it_to_the_new_tickhouse(client, tadmin):
+    body = _hi(name="acme-coinbase")
+    body["feed_handler"] = {"provider": "COINBASE", "feed": "MATCHES", "enabled": True}
+    r = client.post("/tickhouses", json=body, headers=tadmin)
+    assert r.status_code == 200, r.text
+    result = r.json()
+    th_id = result["id"]
+    assert result["feed_handler"]["provider"] == "COINBASE"
+    assert result["feed_handler"]["has_secrets"] is False
+    fh_id = result["feed_handler"]["id"]
+
+    # the created FeedHandlerInstance really is linked, both directions
+    fh = client.get("/feedhandlers", headers=tadmin).json()
+    linked = next(f for f in fh if f["id"] == fh_id)
+    assert linked["tickhouse_id"] == th_id
+
+    scoped = client.get(f"/feedhandlers?tickhouse_id={th_id}", headers=tadmin).json()
+    assert [f["id"] for f in scoped] == [fh_id]
+
+
+def test_create_with_feed_handler_missing_credentials_fails(client, tadmin):
+    body = _hi(name="acme-fix")
+    body["feed_handler"] = {"provider": "GENERIC_FIX", "feed": "MARKET_DATA"}  # no secrets supplied
+    r = client.post("/tickhouses", json=body, headers=tadmin)
+    assert r.status_code == 400
+    assert "credential" in r.json()["detail"]
+
+
+def test_create_without_feed_handler_omits_the_field(client, tadmin):
+    r = client.post("/tickhouses", json=_hi(name="acme-no-feed"), headers=tadmin)
+    assert r.status_code == 200, r.text
+    assert "feed_handler" not in r.json()
+
+
 def test_provision_rejects_agent_in_wrong_cloud(client, tadmin):
     th_id = client.post("/tickhouses", json=_hi(name="acme-gcp", location="gcp"),
                         headers=tadmin).json()["id"]

@@ -4,6 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vantik — by Qbyte Computing Limited</title>
+    <script>
+      // Applied synchronously, before styles.css paints anything, so a
+      // stored "light" preference never flashes dark-then-light on load.
+      // Kept in sync with the storage key + mode values in src/lib/
+      // theme.js - both must agree or the toggle and this bootstrap would
+      // fight each other. A stored mode of "system" (or nothing stored
+      // yet) falls through to the OS/browser preference, same as
+      // theme.js's own systemTheme().
+      (function () {
+        try {
+          var v = localStorage.getItem("vantik_theme_v1");
+          var mode = v === "light" || v === "dark" ? v : "system";
+          var theme = mode === "system"
+            ? (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+            : mode;
+          document.documentElement.setAttribute("data-theme", theme);
+          document.documentElement.setAttribute("data-theme-mode", mode);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

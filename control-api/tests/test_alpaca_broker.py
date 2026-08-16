@@ -196,3 +196,60 @@ def test_wait_for_fill_times_out_if_never_filled(monkeypatch):
     # timeout_sec=0 means the while loop's deadline is already in the past
     with pytest.raises(alpaca_broker.AlpacaError, match="did not fill"):
         client.wait_for_fill("abc123", timeout_sec=0)
+
+
+# ---- cached_is_tradable(): shared by the auto-bot AND manual order placement
+# (oms.AlpacaRouter.fill) - one cache, one TTL, not two drifting copies.
+
+@pytest.fixture(autouse=True)
+def clean_tradability_cache():
+    """The cache is module-global (deliberately, so the bot's poll loop and
+    a human's order placement share hits) - reset it around each test so
+    one test's cached answer can't leak into another's assertions."""
+    alpaca_broker._tradability_cache.clear()
+    yield
+    alpaca_broker._tradability_cache.clear()
+
+
+def test_cached_is_tradable_true_when_no_broker_configured():
+    # ALPACA_TRADING_MODE unset (clean_env fixture) -> client_from_env() is
+    # None -> nothing to check against, same as PaperRouter accepting any symbol.
+    assert alpaca_broker.cached_is_tradable("ANYTHING-AT-ALL") is True
+
+
+def test_cached_is_tradable_reflects_the_client_and_caches_the_result(monkeypatch):
+    calls = {"n": 0}
+
+    class _FakeClient:
+        def is_tradable(self, symbol):
+            calls["n"] += 1
+            return symbol == "AAPL"
+
+    monkeypatch.setattr(alpaca_broker, "client_from_env", lambda: _FakeClient())
+    assert alpaca_broker.cached_is_tradable("AAPL") is True
+    assert alpaca_broker.cached_is_tradable("BTC-GBP") is False
+    assert calls["n"] == 2
+
+    # second call for the same symbols hits the cache, not the client again
+    assert alpaca_broker.cached_is_tradable("AAPL") is True
+    assert alpaca_broker.cached_is_tradable("BTC-GBP") is False
+    assert calls["n"] == 2
+
+
+def test_cached_is_tradable_rechecks_after_ttl_expires(monkeypatch):
+    calls = {"n": 0}
+
+    class _FakeClient:
+        def is_tradable(self, symbol):
+            calls["n"] += 1
+            return True
+
+    monkeypatch.setattr(alpaca_broker, "client_from_env", lambda: _FakeClient())
+    now = [1000.0]
+    monkeypatch.setattr(alpaca_broker.time, "monotonic", lambda: now[0])
+
+    alpaca_broker.cached_is_tradable("AAPL")
+    assert calls["n"] == 1
+    now[0] += alpaca_broker._TRADABILITY_TTL_SEC + 1
+    alpaca_broker.cached_is_tradable("AAPL")
+    assert calls["n"] == 2
