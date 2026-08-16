@@ -117,6 +117,13 @@ class AlpacaClient:
     def get_order(self, order_id: str) -> dict:
         return self._request("GET", f"/v2/orders/{order_id}")
 
+    def market_clock(self) -> dict:
+        """Alpaca's own real trading-session clock (US equities/NYSE calendar
+        - covers holidays/early closes, not just a naive Mon-Fri 9:30-16:00
+        check). Crypto has no such session (Alpaca crypto trades 24/7) so
+        this only meaningfully gates equity symbols - see market_status()."""
+        return self._request("GET", "/v2/clock")
+
     def is_tradable(self, symbol: str) -> bool:
         """True if Alpaca lists this symbol as an active, tradable asset.
         Confirmed live: a bot trading a symbol from this platform's own
@@ -205,3 +212,40 @@ def cached_is_tradable(symbol: str) -> bool:
     tradable = client.is_tradable(symbol)
     _tradability_cache[symbol] = (tradable, now)
     return tradable
+
+
+# Short TTL (unlike the 1-hour tradability cache above) - open/closed is the
+# whole point of this call and can flip at an exact minute (9:30/16:00 ET),
+# so this only exists to stop Bot.jsx's own ~few-second poll loop from
+# hitting Alpaca's API on every tick, not to tolerate a stale answer.
+_CLOCK_TTL_SEC = 20
+_clock_cache: Optional[tuple[dict, float]] = None
+
+
+def market_status() -> dict:
+    """{'configured': False} if no Alpaca client is set up (nothing to ask).
+    Otherwise {'configured': True, 'is_open': bool, 'next_open': iso str,
+    'next_close': iso str} from Alpaca's real /v2/clock - the NYSE equities
+    calendar, including holidays/early closes. Crypto orders aren't gated by
+    this (Alpaca crypto trades 24/7); this reflects equity-session status
+    only. Raises AlpacaError up to the caller on a real API failure rather
+    than guessing - unlike cached_is_tradable, there's no safe default to
+    fall back to for "is the market open" the way "assume tradable" is safe
+    for a symbol check."""
+    client = client_from_env()
+    if client is None:
+        return {"configured": False}
+    global _clock_cache
+    now = time.monotonic()
+    if _clock_cache is not None and (now - _clock_cache[1]) < _CLOCK_TTL_SEC:
+        clock = _clock_cache[0]
+    else:
+        clock = client.market_clock()
+        _clock_cache = (clock, now)
+    return {
+        "configured": True,
+        "is_open": bool(clock.get("is_open")),
+        "next_open": clock.get("next_open"),
+        "next_close": clock.get("next_close"),
+        "timestamp": clock.get("timestamp"),
+    }

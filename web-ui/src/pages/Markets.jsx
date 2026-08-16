@@ -4,6 +4,7 @@ import SymbolPicker from "../components/SymbolPicker.jsx";
 import Sparkline from "../components/Sparkline.jsx";
 import ForecastPanel from "../components/ForecastPanel.jsx";
 import { bucketOHLC, Candlestick, DepthPanel, LiveTape, MacdPanel } from "../components/TradingVisuals.jsx";
+import TradingViewChart from "../components/TradingViewChart.jsx";
 import { buildTimeForecast } from "../lib/timeForecast.js";
 import { fetchTradeTape, fmt, groupBySymbol, summarizePressure } from "../lib/tradingCore.js";
 import { loadWatchlist, saveWatchlist } from "../lib/watchlist.js";
@@ -328,6 +329,8 @@ export default function Markets({ onNavigate, initial }) {
               focusRows.length === 0 ? <NoTabData symbol={focus} /> : <LiveTape rows={focusRows} maxRows={25} />
             )}
 
+            {tab === "tradingview" && <TradingViewChart symbol={focus} />}
+
             {tab === "options" && (
               <ComingSoon text={`No options-chain data source is configured for this deployment. There's a Black-Scholes greeks calculator (manual strike/vol/rate entry) on the Orders page you can use in the meantime.`}
                           action={{ label: "Open Orders →", onClick: () => onNavigate?.("orders", { symbol: focus }) }} />
@@ -349,6 +352,7 @@ const WORKSPACE_TABS = [
   { id: "orderbook", label: "Order Book" },
   { id: "news", label: "News" },
   { id: "trades", label: "Trades" },
+  { id: "tradingview", label: "TradingView" },
   { id: "options", label: "Options", soon: true },
   { id: "fundamentals", label: "Fundamentals", soon: true },
 ];

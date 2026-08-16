@@ -25,10 +25,25 @@ set -e
 
 # resolve arch unless pinned via KX_ARCH
 if [ -z "$KX_ARCH" ]; then
-  case "$(uname -m)" in
+  uname_m="$(uname -m)"
+  case "$uname_m" in
     x86_64|amd64)   KX_ARCH=l64 ;;
     aarch64|arm64)  KX_ARCH=l64arm ;;
-    *)              KX_ARCH=l64 ;;
+    *)
+      # This container image only ever runs on Linux (Dockerfile.kdb is
+      # debian:bookworm-slim), so uname -m here reflects the CONTAINER's
+      # arch, not the Windows/macOS host running Docker Desktop above it -
+      # in practice this only fires for genuinely uncommon targets (32-bit
+      # ARM, riscv64, ppc64le, s390x). Guessing l64 here used to be silent;
+      # it still guesses l64 (unchanged behavior for anyone this already
+      # worked for), but now says so loudly, since a wrong guess fails
+      # further down with a much less obvious "no q binary for arch 'l64'"
+      # or a bare exec-format error instead of pointing at the real cause.
+      echo "kdb-entrypoint: unrecognized uname -m '$uname_m' - guessing KX_ARCH=l64." >&2
+      echo "  If this container is NOT x86_64, set KX_ARCH explicitly (e.g. l64arm)" >&2
+      echo "  rather than relying on this guess." >&2
+      KX_ARCH=l64
+      ;;
   esac
 fi
 

@@ -150,6 +150,16 @@ anything left running.
 
 ## 4. Kubernetes (Helm) - the pilot/production path
 
+**Don't have a cluster yet?** `terraform/{aws,azure,gcp}/` provisions one -
+VPC/subnets, the managed Kubernetes control plane, KMS-backed secrets
+encryption, standard + optional high-performance-filesystem storage
+classes. See `terraform/<cloud>/README.md` for exact commands; it ends
+with `terraform output configure_kubectl`, which points `kubectl`/`helm`
+below at the cluster it just created. See
+[predeploy-kubernetes.md](predeploy-kubernetes.md)'s section 0 for more
+detail - nothing past this point assumes you used it specifically, any
+cluster works.
+
 ```bash
 helm install demo ./helm/kdb-control-plane \
   -f helm/kdb-control-plane/values-aws.yaml \

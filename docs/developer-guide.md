@@ -24,6 +24,10 @@ watchdog/           auto-heal daemon - polls container health, runs runbooks
 fleet_agent/        remote provisioning agent (runs in a tenant's own cluster)
 vscode-extension/   VS Code extension for the query workspace
 helm/               Kubernetes chart (pilot/production path)
+terraform/          per-cloud IaC (aws/azure/gcp) that provisions the cluster
+                    the Helm chart above installs onto - VPC, managed
+                    Kubernetes, KMS-backed secrets encryption, optional
+                    high-performance filesystem storage tier
 deploy/             single-VM cloud scripts (AWS/GCP/Azure) + TLS overlays
 scripts/            gen_topology.py (generates docker-compose.yml/shards.json),
                     check_topology_sync.py, stage-kdbx.sh

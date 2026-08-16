@@ -448,6 +448,43 @@ class BotLogEntry(SQLModel, table=True):
     reason: str = ""
 
 
+# --------------------------------------------------------------------------- TradingView webhook
+class TradingViewWebhook(SQLModel, table=True):
+    """One tenant's inbound TradingView alert-webhook config (routers/
+    tradingview_webhook.py). One row per tenant (unique tenant_id) - same
+    "singleton config" shape as BotConfig, for the same reason: this is
+    another automated, unattended order-placing surface, so it gets the same
+    explicit-enable/hard-cap treatment as the signal bot, not a looser one
+    just because the trigger is external.
+
+    `token` is the ENTIRE auth mechanism - TradingView's alert webhooks
+    cannot send custom headers or a signed body on non-Enterprise plans, so
+    the shared secret has to live in the URL itself
+    (/webhooks/tradingview/{token}). Treat it as a bearer credential: anyone
+    who has it can place orders (within allowed_symbols/max_qty) against
+    this tenant. secrets.token_urlsafe(32) at creation, rotatable on demand
+    (routers/tradingview_webhook.py's rotate endpoint) - there is no way to
+    additionally verify the CALLER is really TradingView, only that they
+    knew the token.
+
+    allowed_symbols_json is a hard allowlist, not a suggestion: enabling
+    requires at least one symbol configured (mirrors BotConfig's own
+    "add a symbol before enabling" guard) specifically so a leaked/guessed
+    token can't be used to trade an arbitrary symbol the tenant never
+    intended to wire up. max_qty is a hard per-order cap re-clamped
+    server-side (routers/tradingview_webhook.py), same "don't trust what's
+    posted" posture as BotConfig.risk_pct."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenant.id", index=True, unique=True)
+    enabled: bool = False
+    token: str = Field(index=True, unique=True)
+    allowed_symbols_json: str = "[]"          # JSON list, e.g. '["AAPL","MSFT"]' - hard allowlist
+    max_qty: float = 1.0
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_by: str = ""
+    last_triggered_at: Optional[datetime] = None
+
+
 # --------------------------------------------------------------------------- llm config
 class LLMConfig(SQLModel, table=True):
     """Runtime-editable override for the natural-language-to-q / code-gen LLM

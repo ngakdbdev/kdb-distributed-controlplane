@@ -1,0 +1,44 @@
+# Force LF line endings on checkout for every text file, regardless of the
+# checking-out machine's own git config (core.autocrlf) or OS. Without this,
+# a Windows checkout with the very common core.autocrlf=true default
+# rewrites every text file - including every deploy/*.sh script and .env* -
+# to CRLF. Two concrete, confirmed failure modes that causes:
+#   1. Every bash script under deploy/ and scripts/ fails outright - either
+#      "bad interpreter: /bin/bash^M: no such file or directory" (CRLF in
+#      the shebang line) when run directly, or `$'\r': command not found`
+#      part-way through, depending on how it's invoked.
+#   2. deploy/lib/kx_license.sh's own `grep ... .env | cut -d= -f2-` value
+#      extraction (and any script that does the same) picks up a trailing
+#      \r on every value if the user's OWN .env also has CRLF - so
+#      `[ "$env_source" = "kx-portal" ]` silently evaluates false even on a
+#      correctly-configured .env, surfacing as "Missing KDB-X binary/
+#      license" with no obvious connection to line endings at all.
+# `eol=lf` normalizes the WORKING TREE to LF on checkout; it does not touch
+# the repo's stored blobs. A checkout that already happened before this file
+# existed needs a fresh `git add --renormalize .` (or a re-clone) to apply -
+# see docs/troubleshooting.md.
+* text=auto eol=lf
+
+*.sh eol=lf
+*.q eol=lf
+*.py eol=lf
+*.js eol=lf
+*.jsx eol=lf
+*.env eol=lf
+.env.example eol=lf
+Dockerfile* eol=lf
+*.yml eol=lf
+*.yaml eol=lf
+
+# Known binaries - never touched by text normalization, but explicit here so
+# a future `* text=auto` tweak can't accidentally start mangling them.
+*.zip binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary

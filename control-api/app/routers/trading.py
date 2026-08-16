@@ -176,6 +176,21 @@ def my_permission(user: CurrentUser = Depends(get_current_user),
             "mode": r.route_name}
 
 
+@router.get("/market-clock")
+def market_clock(user: CurrentUser = Depends(get_current_user)):
+    """Real Alpaca equities-session status (NYSE calendar via /v2/clock) -
+    {'configured': False} if no Alpaca broker is set up (ALPACA_TRADING_MODE
+    unset/off, or no credentials), regardless of role/permission - this is
+    read-only status, same visibility as /permission above. Doesn't apply to
+    crypto (Alpaca crypto trades 24/7) or to a deployment routing through
+    IBKR instead - equities-only, Alpaca-only, by design of what /v2/clock
+    itself reports."""
+    try:
+        return alpaca_broker.market_status()
+    except alpaca_broker.AlpacaError as exc:
+        raise HTTPException(status_code=502, detail=f"Alpaca clock unreachable: {exc}")
+
+
 class GrantBody(BaseModel):
     email: str
     can_trade: bool = True

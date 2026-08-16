@@ -257,6 +257,74 @@ def test_permission_endpoint_reports_misconfigured_instead_of_500ing(client, tad
     assert "both Alpaca and IBKR" in body["error"]
 
 
+# ---- alpaca_broker.market_status() / GET /trading/market-clock -------------
+
+def test_market_status_unconfigured_when_no_alpaca_client():
+    # no ALPACA_* env vars set - client_from_env() is None, same "nothing
+    # configured" case every other alpaca_broker test in this file defaults
+    # to when no monkeypatch touches the env.
+    assert alpaca_broker.market_status() == {"configured": False}
+
+
+def test_market_status_reports_real_clock_fields(monkeypatch):
+    fake_clock = {"is_open": True, "next_open": "2026-08-17T13:30:00Z",
+                  "next_close": "2026-08-17T20:00:00Z", "timestamp": "2026-08-17T15:00:00Z"}
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"market_clock": lambda self: fake_clock})())
+    monkeypatch.setattr(alpaca_broker, "_clock_cache", None)
+    status = alpaca_broker.market_status()
+    assert status == {"configured": True, "is_open": True,
+                      "next_open": "2026-08-17T13:30:00Z", "next_close": "2026-08-17T20:00:00Z",
+                      "timestamp": "2026-08-17T15:00:00Z"}
+
+
+def test_market_status_caches_within_ttl(monkeypatch):
+    calls = []
+
+    def fake_market_clock(self):
+        calls.append(1)
+        return {"is_open": False, "next_open": None, "next_close": None, "timestamp": None}
+
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"market_clock": fake_market_clock})())
+    monkeypatch.setattr(alpaca_broker, "_clock_cache", None)
+    alpaca_broker.market_status()
+    alpaca_broker.market_status()
+    assert len(calls) == 1  # second call served from cache, not a second real request
+
+
+def test_market_clock_endpoint_unconfigured(client, tadmin):
+    # no ALPACA_* env vars set anywhere in this test run's default state
+    r = client.get("/trading/market-clock", headers=tadmin)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"configured": False}
+
+
+def test_market_clock_endpoint_reports_open_status(client, tadmin, monkeypatch):
+    fake_clock = {"is_open": True, "next_open": "2026-08-17T13:30:00Z",
+                  "next_close": "2026-08-17T20:00:00Z", "timestamp": "2026-08-17T15:00:00Z"}
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"market_clock": lambda self: fake_clock})())
+    monkeypatch.setattr(alpaca_broker, "_clock_cache", None)
+    r = client.get("/trading/market-clock", headers=tadmin)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["configured"] is True
+    assert body["is_open"] is True
+
+
+def test_market_clock_endpoint_returns_502_on_alpaca_error(client, tadmin, monkeypatch):
+    def raise_error(self):
+        raise alpaca_broker.AlpacaError("Alpaca GET /v2/clock unreachable: timed out")
+
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"market_clock": raise_error})())
+    monkeypatch.setattr(alpaca_broker, "_clock_cache", None)
+    r = client.get("/trading/market-clock", headers=tadmin)
+    assert r.status_code == 502
+    assert "unreachable" in r.json()["detail"]
+
+
 # ---- oms.IBKRRouter ---------------------------------------------------------
 
 class _FakeIBKRClient:

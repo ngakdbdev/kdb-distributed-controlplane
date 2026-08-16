@@ -14,7 +14,7 @@ from .routers import (audit, auth, auth_ldap, auth_sso, backtest as backtest_rou
                       connectors, export, feedhandlers, fleet, infra_profiles, license as license_router,
                       llm_config, metrics, migration, platform_health, query, signals,
                       subscribers, symbols, tenants, tickhouse, tickerplants, topology, trading,
-                      users)
+                      tradingview_webhook, users)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -60,6 +60,8 @@ app.include_router(signals.router)
 app.include_router(llm_config.router)
 app.include_router(migration.router)
 app.include_router(feedhandlers.router)
+app.include_router(tradingview_webhook.router)
+app.include_router(tradingview_webhook.webhook_router)
 
 
 @app.on_event("startup")

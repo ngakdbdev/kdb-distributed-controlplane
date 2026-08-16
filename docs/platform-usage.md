@@ -122,6 +122,14 @@ seams exist:
 
 - `BrokerRouter` (generic FIX/broker adapter) - still unconditionally
   refuses; nothing is wired to it.
+- `IBKRRouter` (`app/ibkr_broker.py`) - order execution against a real
+  Interactive Brokers account via its Client Portal Web API (CPAPI), same
+  paper/live two-signal safety pattern as Alpaca below (`IBKR_TRADING_MODE`).
+  Requires a locally-running, already-authenticated Client Portal Gateway -
+  see that module's own docstring. IBKR is ALSO a market-data provider
+  (`data-plane/feeds/providers/ibkr.py`, Level 1 quotes via the same
+  gateway) - a separate concern from order execution, catalogued
+  independently on the Connectors page.
 - `AlpacaRouter` (`app/alpaca_broker.py`) - a real, working integration.
   Unconfigured (no `ALPACA_API_KEY_ID`/`ALPACA_API_SECRET_KEY`, or
   `ALPACA_TRADING_MODE=off`, the default), behavior is identical to before
@@ -152,6 +160,31 @@ fail-open behavior for desks that have consciously decided that tradeoff).
 Trading permission is a separate, explicit grant (`can_trade`) from tenant
 admin - viewing market data needs no special permission, placing orders
 does.
+
+**TradingView chart tab** (Markets page, "TradingView" tab) - an embedded
+TradingView Advanced Chart widget (their own free, documented `tv.js`
+embed). This is TradingView's own market data, not this platform's internal
+tick feed - it's for cross-checking and TradingView's own indicator
+library, alongside (not instead of) the real internal Chart tab. Ticker ->
+`EXCHANGE:SYMBOL` mapping is a best-effort guess
+(`components/TradingViewChart.jsx`'s `guessTradingViewSymbol`); there's a
+manual override input for whatever it guesses wrong.
+
+**TradingView alert webhooks** (`app/routers/tradingview_webhook.py`,
+configured from a card on the Bot page) - a second, independent automated
+order-placing surface: a TradingView alert (Pine Script strategy or manual)
+can `POST` to a per-tenant URL
+(`/webhooks/tradingview/{token}`) and place a real order through the exact
+same `place_market_order_internal` path and pre-trade risk gate as every
+other order in this codebase - no webhook-specific shortcut. Because
+TradingView's alert webhooks cannot send a custom header or a signed body
+on non-Enterprise plans, the `token` in the URL path is the *entire* auth
+mechanism - treat it as a bearer credential, rotate it if it ever leaks
+(the Bot page has a Rotate button). Two hard, server-enforced defenses
+against a leaked token: an explicit per-tenant symbol allowlist (a webhook
+can only ever trade symbols the tenant added, same "add a symbol before
+enabling" guard as the signal bot's basket) and a hard `max_qty` cap
+re-clamped server-side regardless of what the alert payload claims.
 
 ## Connectors
 

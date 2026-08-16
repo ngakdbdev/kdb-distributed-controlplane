@@ -16,12 +16,27 @@
 # Sourced by deploy/{aws,azure,gcp}/04_deploy_stack.sh AFTER .env is
 # confirmed to exist.
 check_kx_binary_and_license() {
-  local kx_dir="data-plane/docker/kdbx"
-  local env_source env_token env_b64 env_lic_path
-  env_source="$(grep -E '^KX_INSTALL_SOURCE=' .env 2>/dev/null | tail -1 | cut -d= -f2-)"
-  env_token="$(grep -E '^KX_BEARER_TOKEN=' .env 2>/dev/null | tail -1 | cut -d= -f2-)"
-  env_b64="$(grep -E '^KDB_LICENSE_B64=' .env 2>/dev/null | tail -1 | cut -d= -f2-)"
-  env_lic_path="$(grep -E '^KX_LICENSE_PATH=' .env 2>/dev/null | tail -1 | cut -d= -f2-)"
+  local env_source env_token env_b64 env_lic_path env_bin_dir
+  # `tr -d '\r'` guards against a .env saved with CRLF line endings (a
+  # Windows text editor, or a checkout of this repo that predates
+  # .gitattributes) - without it, a correctly-configured
+  # KX_INSTALL_SOURCE=kx-portal comes back as "kx-portal\r", every `=`
+  # comparison below silently evaluates false, and this reports "Missing
+  # KDB-X binary/license" on a .env that is actually fine. Confirmed live on
+  # a Windows-hosted deploy.
+  env_source="$(grep -E '^KX_INSTALL_SOURCE=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r')"
+  env_token="$(grep -E '^KX_BEARER_TOKEN=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r')"
+  env_b64="$(grep -E '^KDB_LICENSE_B64=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r')"
+  env_lic_path="$(grep -E '^KX_LICENSE_PATH=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r')"
+  env_bin_dir="$(grep -E '^KX_BINARIES_DIR=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r')"
+  # MUST match docker-compose.yml's own `${KX_BINARIES_DIR:-./data-plane/docker/kdbx}`
+  # default exactly - a prior version of this script hardcoded the default
+  # path and never read KX_BINARIES_DIR at all, so a deploy that staged its
+  # binary/license at a custom KX_BINARIES_DIR location (e.g. binaries
+  # copied over from another machine into a different path) failed this
+  # check every time, even though the actual container the compose file
+  # brings up would have found them just fine.
+  local kx_dir="${env_bin_dir:-data-plane/docker/kdbx}"
 
   local have_local_bin=0
   { [ -f "$kx_dir/q" ] || ls "$kx_dir"/*.zip >/dev/null 2>&1 \

@@ -173,6 +173,10 @@ export const api = {
 
   // Trading terminal
   tradingPermission: () => request("/trading/permission"),
+  marketClock: () => request("/trading/market-clock"),
+  getTradingViewWebhookConfig: () => request("/tradingview/config"),
+  putTradingViewWebhookConfig: (body) => request("/tradingview/config", { method: "PUT", body: JSON.stringify(body) }),
+  rotateTradingViewWebhookToken: () => request("/tradingview/rotate", { method: "POST" }),
   placeOrder: (body) => request("/trading/orders", { method: "POST", body: JSON.stringify(body) }),
   listOrders: () => request("/trading/orders"),
   cancelOrder: (id) => request(`/trading/orders/${id}/cancel`, { method: "POST" }),
