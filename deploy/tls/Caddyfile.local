@@ -21,3 +21,21 @@
 	}
 	reverse_proxy web-ui:80
 }
+
+# Plain-HTTP catch-all, no redirect - exists for tunnels (VS Code Dev
+# Tunnels, ngrok, etc.) fronting this box. Caddy's automatic HTTPS normally
+# 308s any bare HTTP request to https://<same Host it received>/ - fine on
+# a real domain, broken behind a tunnel: confirmed live, the tunnel's local
+# relay connects to this port with Host: localhost regardless of the
+# visitor's actual URL, so that redirect sends their browser to
+# https://localhost/ - THEIR OWN machine, not this one ("localhost is
+# currently unreachable"). The tunnel already terminates HTTPS for the
+# visitor; this block just serves the app directly over the tunnel's local
+# plaintext hop instead of trying to redirect it anywhere. Matches
+# {$TLS_DOMAIN}'s own block above unconditionally, before Caddy's global
+# auto-redirect would otherwise apply - so the domain-based HTTPS site
+# above is completely unaffected, this only changes what happens to a bare
+# HTTP request with a Host Caddy doesn't otherwise have a site for.
+:80 {
+	reverse_proxy web-ui:80
+}

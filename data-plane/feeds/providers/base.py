@@ -69,14 +69,21 @@ def iso_to_dt(s) -> Optional[datetime]:
         return None
 
 
-def http_get_json(url: str, timeout: float = 20.0) -> dict:
-    """Plain GET -> parsed JSON, stdlib only. Used by the crypto providers'
-    fetch_all_symbols() to pull an exchange's REAL current instrument list
-    (its own public REST endpoint), instead of a hardcoded guess that drifts
-    out of date the moment a pair is listed or delisted."""
+def http_get_json(url: str, timeout: float = 20.0, headers: Optional[dict] = None) -> dict:
+    """Plain GET -> parsed JSON, stdlib only. Used by each live provider's
+    fetch_all_symbols() to pull the venue's REAL current instrument list
+    (its own REST endpoint), instead of a hardcoded guess that drifts out
+    of date the moment a symbol is listed/delisted/halted. `headers` merges
+    into (and can override) the default User-Agent - the crypto venues'
+    instrument lists are public and need nothing extra, but Alpaca's
+    /v2/assets is an authenticated endpoint and passes its API key/secret
+    here."""
     import json
     import urllib.request
-    req = urllib.request.Request(url, headers={"User-Agent": "kdb-control-plane"})
+    req_headers = {"User-Agent": "kdb-control-plane"}
+    if headers:
+        req_headers.update(headers)
+    req = urllib.request.Request(url, headers=req_headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())
 

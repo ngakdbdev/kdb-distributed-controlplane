@@ -198,6 +198,18 @@ plugged in; never fake a connection). Alpaca's market-data feed and its
 order-routing seam (above) share credentials but are otherwise
 independent - enabling one doesn't enable the other.
 
+Each live provider's `docker-compose.yml` service takes `--symbols` (a
+plain comma list, e.g. `ALPACA_SYMBOLS=AAPL,MSFT`) or `--symbols all` for
+the providers whose venue exposes a real "give me every currently-tradable
+instrument" endpoint (`fetch_all_symbols()` in that provider's own module -
+the crypto venues plus Alpaca, whose `/v2/assets` returns its full active
+US-equity/ETF universe, several thousand symbols, pulled live rather than
+from a hardcoded list that would drift stale). A curated large-but-smaller
+subset instead of literally everything: put it in a file under
+`data-plane/feeds/symbols/` and set `PROVIDER_SYMBOLS_FILE` (see that
+folder's own README). `all` means real breadth, not necessarily useful
+density - most of a full equity universe rarely prints a trade.
+
 ## Autoscaling
 
 Computes shard-count recommendations from real ingest-rate metrics against
