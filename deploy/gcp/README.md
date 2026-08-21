@@ -70,21 +70,18 @@ bash deploy/gcp/03_install_docker.sh
 #    failure point: step 6 below fails with a permission error that has
 #    nothing to do with anything else if you don't do this first.
 
-# 5. Place your KDB-X binary + licence
-mkdir -p data-plane/docker/kdbx
-#    copy your downloaded `q` binary and `kc.lic` into
-#    data-plane/docker/kdbx/ now (scp from your laptop, or download
-#    directly on the VM)
-
-# 6. Deploy
+# 5. Deploy
 bash deploy/gcp/04_deploy_stack.sh
 #    If this refuses immediately with "cannot talk to the Docker daemon",
 #    that's step 4's docker-group timing issue - see its own error message.
 #    First run also copies .env.example to .env and stops so you can edit
-#    it - see docs/getting-started.md step 2, and set LICENSE_KEY /
-#    DEPLOYMENT_ENV as this script's own reminder says (this is a
-#    customer-facing path, DEPLOYMENT_ENV is set to "customer"
-#    automatically, which makes a valid LICENSE_KEY mandatory).
+#    it - see docs/getting-started.md step 2. Set KX_BEARER_TOKEN (a free
+#    KX Developer Portal token - the KDB-X binary is pulled automatically
+#    at container start, nothing to download/scp onto this box yourself)
+#    and KDB_LICENSE_B64, plus LICENSE_KEY / DEPLOYMENT_ENV as this
+#    script's own reminder says (this is a customer-facing path,
+#    DEPLOYMENT_ENV is set to "customer" automatically, which makes a
+#    valid LICENSE_KEY mandatory).
 ```
 
 **Verify it's actually up** before telling anyone the URL:
@@ -115,9 +112,8 @@ red then back to green, then check the Audit log tab for the `detect_failure` �
 - **`04_deploy_stack.sh` fails with a Docker permission error** — step 4's
   docker-group timing issue; see that step's note above.
 - **Containers keep restarting after `04_deploy_stack.sh`** — almost always
-  the KDB-X binary/licence (step 5) not actually being at
-  `data-plane/docker/kdbx/`, or being the wrong architecture. See
-  `docs/troubleshooting.md`.
+  `KX_BEARER_TOKEN` missing/invalid, or `KDB_LICENSE_B64`/`KX_LICENSE_PATH`
+  not set, in `.env`. See `docs/troubleshooting.md`.
 
 ## Deploying on a free-tier / brand-new GCP project
 

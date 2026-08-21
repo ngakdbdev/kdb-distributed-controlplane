@@ -91,18 +91,22 @@ Generate the bcrypt hash the same way as the VM path:
 And per [docs/README.md](README.md) item 1 — never reuse anything that ever appeared in the repo's
 `.env.example`, on a VM deploy or here.
 
-## 4. The KX-X license Secret — required, not optional
+## 4. The KX-X credentials Secret — required, not optional
 
-Every kdb+ container mounts a Secret named by `kdbx.licenseSecretName` (default `kdbx-license`) at
-`/usr/local/kdbx/{q,kc.lic}`. **Pods crash-loop without it** — create it before or immediately after
-install:
+Every kdb+ pod pulls its own binary from the KX portal at start (`kdb-entrypoint.sh`, same as the
+docker-compose path) — there's nothing to build or upload ahead of time. It still needs real
+credentials though: a Secret named by `kdbx.licenseSecretName` (default `kdbx-license`), injected
+into every kdb pod as environment variables (`envFrom`), holding your bearer token and license as
+plain key=value entries — **not** files. **Pods crash-loop without it** — create it before or
+immediately after install:
 ```bash
 kubectl create secret generic kdbx-license -n kdb-control-plane \
-  --from-file=q=./q --from-file=kc.lic=./kc.lic
+  --from-literal=KX_BEARER_TOKEN=<your KX Developer Portal bearer token> \
+  --from-literal=KDB_LICENSE_B64=<your license, base64-encoded>
 ```
-This is never chart-managed (licensing terms — same reason the binary isn't bundled anywhere else in
-this repo). If you're on the portal-pull path instead of a locally-staged binary, that mechanism is
-compose/`fleet_agent`-specific (`kx_installer.py`) — this chart expects a pre-staged Secret, full stop.
+(or `--from-literal=KX_LICENSE_PATH=...` instead of `KDB_LICENSE_B64`, if your license is mounted
+some other way). This is never chart-managed (licensing terms — same reason the binary isn't bundled
+anywhere else in this repo).
 
 ## 5. Database — the chart enforces this one for you
 

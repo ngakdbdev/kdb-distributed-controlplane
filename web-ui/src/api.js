@@ -102,6 +102,12 @@ export const api = {
     request(`/tickhouses/${id}/provision`, { method: "POST", body: JSON.stringify({ agent_id: agentId }) }),
   tickhouseStatus: (id) => request(`/tickhouses/${id}/status`),
 
+  cloudProvisionAws: (body) => request("/cloud-provision/aws", { method: "POST", body: JSON.stringify(body) }),
+  cloudProvisionAzure: (body) => request("/cloud-provision/azure", { method: "POST", body: JSON.stringify(body) }),
+  cloudProvisionGcp: (body) => request("/cloud-provision/gcp", { method: "POST", body: JSON.stringify(body) }),
+  listCloudProvisionRuns: () => request("/cloud-provision"),
+  getCloudProvisionRun: (id) => request(`/cloud-provision/${id}`),
+
   // Global infra profiles (control-api/app/routers/infra_profiles.py) -
   // reusable non-secret cloud/k8s coordinate bundles, platform-admin
   // managed, readable by any authenticated user (needed to auto-load one

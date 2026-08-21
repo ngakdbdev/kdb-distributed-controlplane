@@ -150,7 +150,18 @@ if[not `metrics in key `.; metrics::([] time:`timestamp$(); tbl:`symbol$(); metr
     @[{[dir;dt;tb] .Q.dpft[dir;dt;`sym;tb]}[hsym `$.wdb.hdbDir;d];
       tbl;
       {[tbl;d;e] -1 "[wdb] EOD seal FAILED for ",string[tbl]," on ",string[d],": ",e}[tbl;d]];
-    ![`.;();0b;enlist tbl];
+    / TRUNCATE, not delete - confirmed live: a full `![`.;();0b;enlist tbl]`
+    / removed the global var entirely, freeing memory same as a truncate
+    / would, but left nothing for a LATER `get tbl` fallback (a few lines up,
+    / the hasScratch=0b branch) to find - the very next iteration of this
+    / same each-loop (trade seals fine, then risk has no scratch file for
+    / this date) hit exactly that: `get `risk` errored '`risk` because the
+    / global no longer existed, an uncaught error that crash-looped this
+    / process (336 restarts observed) every time catch-up reached a date
+    / with one table sealed but not the other. Truncating to 0 rows frees
+    / the same memory (nothing legitimate was relying on the deleted
+    / variable NOT existing) while keeping `get tbl` valid forever after.
+    set[tbl; 0#get tbl];
     if[hasScratch; hdel f];
     -1 "[wdb ",string[.wdb.shard],"] sealed ",string[count rows]," ",string[tbl]," rows -> hdb partition ",string d;
     }[d] each `trade`risk;

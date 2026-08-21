@@ -31,25 +31,29 @@ WDB = topology.TIER_PORTS["wdb"]
 GW = topology.TIER_PORTS["gateway"]
 HDB = topology.TIER_PORTS["hdb"]
 
-# The data folder of KX binaries, mounted read-only into every kdb service. The
-# container's entrypoint picks the right <arch>/q at start (docker/kdb-entrypoint.sh),
-# so one image runs on amd64 or arm64. Override the host path with KX_BINARIES_DIR.
-# The kx-cache volume is writable scratch for the portal-pull fallback.
-KX_BIN_MOUNT = "${KX_BINARIES_DIR:-./data-plane/docker/kdbx}:/kdbx:ro"
+# Every kdb service pulls its own binary from the KX portal at container
+# start (docker/kdb-entrypoint.sh) using KX_BEARER_TOKEN - no local binary
+# folder is mounted anymore (that model only worked on whichever one machine
+# a human had manually unzipped a binary onto). KX_CACHE_MOUNT is a
+# container-local writable cache of a binary THIS container already pulled
+# itself, purely so a restart doesn't re-download - not something anyone is
+# expected to populate by hand.
 KX_CACHE_MOUNT = "kx-cache:/kdbx-cache"
 
-# KX binary source for the kdb containers: 'local' uses the staged data folder;
-# 'kx-portal' pulls <arch>.zip with the bearer token when it isn't staged. All
-# non-secret defaults; the token is empty unless set in the environment.
+# KX credentials for the kdb containers - all non-secret DEFAULTS; the real
+# values are empty unless set in the environment. KX_BEARER_TOKEN is
+# mandatory (see kdb-entrypoint.sh); license is either KDB_LICENSE_B64
+# (inline) or KX_LICENSE_PATH (a file mounted some other way - a Kubernetes
+# Secret, a secrets-manager sidecar). Neither license form has a local-file
+# default anymore, for the same reason there's no local binary folder.
 KX_ENV_ANCHOR = """\
 x-kdb-env: &kdb-env
-  KX_INSTALL_SOURCE: "${KX_INSTALL_SOURCE:-local}"
   KX_BEARER_TOKEN: "${KX_BEARER_TOKEN:-}"
   KDB_LICENSE_B64: "${KDB_LICENSE_B64:-}"
   KX_VERSION: "${KX_VERSION:-4.1}"
   KX_CHANNEL: "${KX_CHANNEL:-~latest~}"
   KX_ARCH: "${KX_ARCH:-}"
-  KX_LICENSE_PATH: "${KX_LICENSE_PATH:-/kdbx/kc.lic}"
+  KX_LICENSE_PATH: "${KX_LICENSE_PATH:-}"
 """
 
 
@@ -77,7 +81,6 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
       KDB_NUMA_NODE: "${{TP_NUMA_NODE:-}}"
     restart: unless-stopped
     volumes:
-      - {KX_BIN_MOUNT}
       - {KX_CACHE_MOUNT}
       - tp-log-{sid}:/app/log
 
@@ -105,7 +108,6 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
     restart: unless-stopped
     depends_on: [tp-{sid}]
     volumes:
-      - {KX_BIN_MOUNT}
       - {KX_CACHE_MOUNT}
       - db-{sid}:/data/db
       - hdb-{sid}:/data/hdb
@@ -127,7 +129,6 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
     restart: unless-stopped
     depends_on: [tp-{sid}]
     volumes:
-      - {KX_BIN_MOUNT}
       - {KX_CACHE_MOUNT}
       - db-{sid}:/data/db
 
@@ -140,7 +141,6 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
     restart: unless-stopped
     depends_on: [wdb-{sid}]
     volumes:
-      - {KX_BIN_MOUNT}
       - {KX_CACHE_MOUNT}
       - db-{sid}:/data/db
 
@@ -166,7 +166,6 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
     restart: unless-stopped
     depends_on: [wdb-{sid}]
     volumes:
-      - {KX_BIN_MOUNT}
       - {KX_CACHE_MOUNT}
       - hdb-{sid}:/data/hdb
 """)
@@ -188,7 +187,6 @@ def _gateway_service(n: int) -> str:
       <<: *kdb-env
       SHARDS_JSON: /app/shards.json
     volumes:
-      - {KX_BIN_MOUNT}
       - {KX_CACHE_MOUNT}
       - ./data-plane/shards.json:/app/shards.json:ro
     restart: unless-stopped
@@ -485,6 +483,13 @@ def _control_plane_services(n: int) -> str:
       PLATFORM_ADMIN_PASSWORD_HASH: "${{PLATFORM_ADMIN_PASSWORD_HASH:-}}"
       JWT_SECRET: "${{JWT_SECRET:-dev-secret-change-in-deploy}}"
       WATCHDOG_SHARED_SECRET: "${{WATCHDOG_SHARED_SECRET:-dev-watchdog-secret-change-in-deploy}}"
+      CLOUD_CREDENTIALS_ENCRYPTION_KEY: "${{CLOUD_CREDENTIALS_ENCRYPTION_KEY:-}}"
+      # Reused by app/cloud_provisioner.py to seed the kdbx-license Secret
+      # on a newly-terraform-created cluster - the same credentials this
+      # control plane's own kdb+ containers already use (see KX_ENV_ANCHOR
+      # above), not a separate value to configure twice.
+      KX_BEARER_TOKEN: "${{KX_BEARER_TOKEN:-}}"
+      KDB_LICENSE_B64: "${{KDB_LICENSE_B64:-}}"
       DATABASE_URL: "${{DATABASE_URL:-sqlite:///./data/control_plane.db}}"
       COMPOSE_PROJECT_NAME: "kdb-control-plane"
       GATEWAY_HOST: gateway

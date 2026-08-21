@@ -39,6 +39,15 @@ class Settings:
 
     watchdog_shared_secret: str = os.environ.get("WATCHDOG_SHARED_SECRET", "dev-watchdog-secret-change-in-deploy")
 
+    # No insecure default on purpose - see app/cloud_credentials.py's own
+    # comment. Blank means the cloud auto-provisioning endpoints
+    # (routers/cloud_provision.py) fail closed with a clear error rather
+    # than encrypting real AWS/Azure/GCP account credentials under a
+    # well-known dev key - unlike jwt_secret/watchdog_shared_secret above,
+    # a leaked value here is a direct path into a real cloud account, not
+    # a forgeable session token.
+    cloud_credentials_encryption_key: str = os.environ.get("CLOUD_CREDENTIALS_ENCRYPTION_KEY", "")
+
     database_url: str = os.environ.get("DATABASE_URL", "sqlite:///./control_plane.db")
     # Supported dialects and the driver each one needs (already pinned in
     # requirements.txt):

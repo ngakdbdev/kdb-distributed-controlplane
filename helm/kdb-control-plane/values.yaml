@@ -35,6 +35,9 @@ secrets:
   watchdogSharedSecret: "dev-watchdog-secret-change-in-deploy"
   nl2qLlmApiKey: ""            # API key for whichever nl2q.llmProvider is set below; blank is fine for "none" or a keyless local model server
   licenseKey: ""                # 32-char product licence key (control-api/app/licensing.py's mint()) - see licensing.deploymentEnv below for whether it's mandatory
+  cloudCredentialsEncryptionKey: ""  # only if using POST /cloud-provision/* - generate with `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+  kxBearerToken: ""             # same value as the kdbx-license Secret's KX_BEARER_TOKEN (see kdbx: below) - only needed for /cloud-provision/*
+  kdbLicenseB64: ""             # same value as the kdbx-license Secret's KDB_LICENSE_B64 - only needed for /cloud-provision/*
 
 # --------------------------------------------------------------- licensing
 # Helm is the pilot/production path (see docs/README.md's "which path"
@@ -58,10 +61,16 @@ nl2q:
   llmBaseUrl: ""
 
 # ------------------------------------------------------------- kdb-x license
-# KDB-X binary + license are NOT bundled in the image for licensing reasons -
-# mount them from a Secret you create yourself:
+# The KDB-X binary is NEVER staged as a file anymore, in a Secret or
+# otherwise - every kdb pod pulls its own binary from the KX portal at
+# start (kdb-entrypoint.sh, same as the docker-compose path), authenticated
+# with KX_BEARER_TOKEN. That token plus your license go into ONE Secret as
+# plain key=value entries (not files) - create it yourself before install:
 #   kubectl create secret generic kdbx-license -n kdb-control-plane \
-#     --from-file=q=./q --from-file=kc.lic=./kc.lic
+#     --from-literal=KX_BEARER_TOKEN=<your KX portal bearer token> \
+#     --from-literal=KDB_LICENSE_B64=<your license, base64-encoded>
+# (or --from-literal=KX_LICENSE_PATH=... instead of KDB_LICENSE_B64, if your
+# license is mounted some other way - see kdb-entrypoint.sh's own docstring)
 kdbx:
   licenseSecretName: kdbx-license
 

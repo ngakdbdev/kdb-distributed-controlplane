@@ -74,19 +74,18 @@ gateway, split across shards).
 - **git**, to clone the repository.
 - **A terminal.** Every command below is copy-pasteable as-is.
 - **A free KDB-X licence.** kdb+/q itself is proprietary — this repository
-  never contains the actual database engine or a licence file, only the
-  code that runs on top of it. You need to get both yourself, once, for
-  free:
+  never contains the actual database engine or a licence file, and never
+  expects you to download or stage either as a local file. Every kdb+
+  container pulls its own binary from the KX portal at start, so what you
+  actually need is credentials, free, once:
   1. Go to the [KX Developer Center](https://kx.com/developers/) and
      register for the free **KDB-X Community Edition**. This is genuinely
      free for this kind of use, no credit card.
-  2. Download the Linux build (even if your laptop is Mac/Windows — the
-     database runs *inside* the Docker containers, which are Linux) and
-     your licence file.
-  3. You'll get two files: the `q` binary itself, and a licence file. KX
-     sometimes names the licence file something other than `kc.lic` — this
-     platform always expects it named exactly `kc.lic`, so rename it if
-     needed. Keep both — you'll place them in step 3 below.
+  2. From there, get a **bearer token** (used to pull the binary at container
+     start — nothing to download yourself) and your **licence** — you'll get
+     a licence file; base64-encode it (`base64 -i kc.lic`) to use as
+     `KDB_LICENSE_B64` in step 2 below. Keep both — you'll set them as
+     environment variables, not files, in step 2.
 
 You do **not** need q/kdb+ installed directly on your laptop, and you do
 **not** need Python or Node.js installed either — everything runs inside
@@ -110,8 +109,8 @@ one file, `.env`, which you create by copying the template:
 cp .env.example .env
 ```
 
-Open `.env` in any text editor. For a first run on your own laptop, you only
-need to touch two things (everything else has a working default):
+Open `.env` in any text editor. For a first run on your own laptop, you need
+to touch these (everything else has a working default):
 
 1. **`ADMIN_PASSWORD_HASH`** — leave it blank and the system falls back to
    the built-in demo password `changeme`. That's fine for now; **don't**
@@ -123,26 +122,30 @@ need to touch two things (everything else has a working default):
    this to `customer` (which the deploy scripts for a real customer box do
    automatically) makes a valid `LICENSE_KEY` mandatory. You don't need one
    for this guide.
+3. **`KX_BEARER_TOKEN`** — the bearer token from the prerequisites step.
+   Every kdb+ container uses this to pull its own binary from the KX portal
+   at start; there's no local file to place anywhere.
+4. **`KDB_LICENSE_B64`** — your licence file, base64-encoded, from the
+   prerequisites step. (If you'd rather point at a license file mounted some
+   other way, set `KX_LICENSE_PATH` instead — see `.env.example`'s comment.)
 
 Everything else — `JWT_SECRET`, `WATCHDOG_SHARED_SECRET`, and so on — has a
 working (if insecure) default for local use. The file itself explains what
 each setting does; you'll come back and rotate the real secrets later if
 this ever needs to run somewhere other than your own machine.
 
-## Step 3 — Place the KDB-X binary and licence
+## Step 3 — Nothing to place — the binary pulls itself
 
-Put the two files from the prerequisites (the `q` binary and your licence
-file) here:
-
-```
-data-plane/docker/kdbx/
-```
-
-The exact expected layout (per-architecture subfolders, licence filename) is
-explained in that folder — if it's empty, create `data-plane/docker/kdbx/`
-first. This step is the one people most often get wrong: if the containers
-in step 4 keep restarting, come back and re-check this step before anything
-else (see [troubleshooting.md](troubleshooting.md)).
+Older versions of this guide had you download the KDB-X binary and license
+file and manually place them under `data-plane/docker/kdbx/`. That's gone:
+every kdb+ container fetches its own binary from the KX portal the first
+time it starts, using `KX_BEARER_TOKEN` from step 2, and caches it locally
+so a restart doesn't re-download. As long as `KX_BEARER_TOKEN` and
+`KDB_LICENSE_B64` (or `KX_LICENSE_PATH`) are set, there's nothing to do
+here — this step exists so the numbering below stays stable, not because
+there's an action to take. If containers in step 4 keep restarting, the
+most common cause is one of those two env vars being missing or wrong, not
+a missing file (see [troubleshooting.md](troubleshooting.md)).
 
 ## Step 4 — Build and start everything
 
@@ -180,8 +183,8 @@ kdb-control-plane-web-ui-1           Up 30 seconds
 
 If anything shows `Restarting` or is missing entirely, **stop here** and go
 to [troubleshooting.md](troubleshooting.md) rather than continuing — the
-most common cause at this exact point is step 3 (the KDB-X binary/licence)
-not being where the containers expect it.
+most common cause at this exact point is `KX_BEARER_TOKEN` or
+`KDB_LICENSE_B64` (step 2) being missing or wrong.
 
 Two more direct checks:
 

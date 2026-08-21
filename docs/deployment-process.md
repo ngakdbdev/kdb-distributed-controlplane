@@ -27,8 +27,8 @@ command to change, not just "secure this."
 ```bash
 cp .env.example .env
 # edit .env: rotate JWT_SECRET/WATCHDOG_SHARED_SECRET, set ADMIN_PASSWORD_HASH,
-# stage KX binaries (see docs/getting-started.md steps 2-3 if you've never
-# done this before - it explains exactly where and why)
+# set KX_BEARER_TOKEN + KDB_LICENSE_B64 (see docs/getting-started.md step 2 if
+# you've never done this before - the binary pulls itself, nothing to stage)
 
 python3 scripts/gen_topology.py --shards 2 --compose docker-compose.yml \
   --shards-json data-plane/shards.json --eod-hour 0 --idb-retention-days 5
@@ -44,8 +44,8 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/                     #
 ```
 
 If anything doesn't match, see [troubleshooting.md](troubleshooting.md)
-before continuing - the most common cause at this point is the KDB-X
-binary/licence not being at `data-plane/docker/kdbx/` yet.
+before continuing - the most common cause at this point is `KX_BEARER_TOKEN`
+or `KDB_LICENSE_B64`/`KX_LICENSE_PATH` missing or wrong in `.env`.
 
 Log in at `http://localhost` with the demo tenant admin
 (`DEMO_TENANT_ADMIN_EMAIL`, default `admin@demo-bank.local`) or the

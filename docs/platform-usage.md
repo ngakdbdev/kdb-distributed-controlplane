@@ -202,13 +202,17 @@ Each live provider's `docker-compose.yml` service takes `--symbols` (a
 plain comma list, e.g. `ALPACA_SYMBOLS=AAPL,MSFT`) or `--symbols all` for
 the providers whose venue exposes a real "give me every currently-tradable
 instrument" endpoint (`fetch_all_symbols()` in that provider's own module -
-the crypto venues plus Alpaca, whose `/v2/assets` returns its full active
-US-equity/ETF universe, several thousand symbols, pulled live rather than
-from a hardcoded list that would drift stale). A curated large-but-smaller
-subset instead of literally everything: put it in a file under
+the crypto venues, whose feeds have no meaningful per-connection symbol
+cap). **Alpaca is the one exception - do not use `all` for it.** Its
+`fetch_all_symbols()` (`/v2/assets`) genuinely works and returns Alpaca's
+full several-thousand-symbol universe, but the free/IEX *stream* itself
+rejects a subscribe request anywhere near that size with a real (if
+undocumented) `{"T":"error","code":405,"msg":"symbol limit exceeded"}` -
+confirmed live at 68 symbols; 30 was accepted. Keep `ALPACA_SYMBOLS` a
+small curated list. For any provider, a curated large-but-smaller subset
+instead of literally everything: put it in a file under
 `data-plane/feeds/symbols/` and set `PROVIDER_SYMBOLS_FILE` (see that
-folder's own README). `all` means real breadth, not necessarily useful
-density - most of a full equity universe rarely prints a trade.
+folder's own README).
 
 ## Autoscaling
 
@@ -230,6 +234,33 @@ just name/cloud/OS/profile/shard-ranges - the "reduce admin overhead" path.
 Provisioning a spec routes through Fleet to whichever backend the target
 environment uses (local docker-compose, or a remote agent in the tenant's
 own cluster).
+
+**Quick cloud deploy** (same page, second tab) is the credentials-only
+alternative: give it an AWS/Azure/GCP access key and it builds the entire
+cluster end to end - network, managed Kubernetes, storage, then Vantik
+itself - via `terraform apply` against `terraform/{aws,azure,gcp}/`
+followed by `helm install`, both run server-side
+(`app/cloud_provisioner.py`). No existing cluster or enrolled agent
+required first, unlike the wizard above, which assumes both. Requires
+`CLOUD_CREDENTIALS_ENCRYPTION_KEY` set (see `.env.example`'s own comment) -
+the endpoints refuse to start without it rather than falling back to an
+insecure default, since a leaked value would be a direct path into a real
+cloud account. Genuinely creates real, billed infrastructure and typically
+takes 10-20+ minutes (mostly the managed Kubernetes control plane itself) -
+the UI polls status/logs, it doesn't block on it. `POST
+/cloud-provision/{aws,azure,gcp}` requires the exact confirmation phrase
+`cloud_provisioner.CONFIRM_PHRASE`, same deliberate-friction pattern as live
+trading's `ALPACA_LIVE_TRADING_ACK` - there is no safe default to silently
+fall back to the way live trading has "paper."
+
+Credentials are Fernet-encrypted at rest, decrypted only in-process and
+just-in-time for a single terraform/helm invocation, injected via
+subprocess environment variables (never a tfvars file, never a logged
+command line), and never returned by any API response. This is
+deliberately a DIFFERENT trust model from Fleet/InfraProfile below (which
+hold no credentials at all) - see `CloudProvisionRun`'s own model docstring
+for why bootstrapping brand-new infrastructure genuinely can't use ambient
+identity the way managing existing infrastructure can.
 
 ## Fleet
 

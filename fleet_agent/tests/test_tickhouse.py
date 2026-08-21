@@ -155,7 +155,7 @@ def test_render_compose_env_omits_pinning_when_unset():
 
 def test_kx_installer_plan_is_ordered_and_covers_licence_and_verify():
     inst = KxInstaller(KxInstallConfig(
-        binary_url="https://artifacts.example.com/kx/q-linux.tgz",
+        source="url", binary_url="https://artifacts.example.com/kx/q-linux.tgz",
         license_path="/run/secrets/kc.lic", install_dir="/opt/kx", qhome="/opt/kx/q"))
     labels = [label for label, _ in inst.plan()]
     assert labels[0] == "make install dir"
@@ -168,7 +168,7 @@ def test_kx_installer_plan_is_ordered_and_covers_licence_and_verify():
 
 
 def test_kx_installer_preflight_flags_missing_config_and_non_linux():
-    problems = KxInstaller(KxInstallConfig(binary_url="", license_path="",
+    problems = KxInstaller(KxInstallConfig(source="url", binary_url="", license_path="",
                                            os_type="windows")).preflight()
     assert any("linux" in p for p in problems)
     assert any("binary_url" in p for p in problems)

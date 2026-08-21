@@ -6,27 +6,25 @@ hand-duplicated per shard - change .Values.shardCount and the data plane
 scales. Shard ids are stable indices (s0..s{N-1}); the letter range each owns
 lives in the gateway's shards.json ConfigMap.
 
-NOTE on `command:` below: Kubernetes' pod `command:` field overrides the
-container image's ENTRYPOINT (not just its CMD, unlike docker-compose's
-`command:`, which only overrides CMD - see Dockerfile.kdb's
-`ENTRYPOINT ["/usr/local/bin/kdb-entrypoint.sh"]`). That means every
-`command: ["q", ...]` list here bypasses kdb-entrypoint.sh entirely: no
-arch detection, no KX-portal-pull fallback, none of the adaptive secondary-
-thread logic that script implements for the docker-compose path - this
-literal `q` must resolve directly off $PATH (see the `ENV PATH="/kdbx:..."`
-line in Dockerfile.kdb) rather than through the script's
-$KX_BINARIES_DIR/$KX_ARCH/q resolution. This is a real architecture
-inconsistency between the two deploy paths, not intentional; it's flagged
-here rather than silently "fixed" by switching to `args:` (which WOULD
-restore the entrypoint script) because that also changes where the license/
-binary volume needs to be mounted (kdb-entrypoint.sh expects an arch
-subdirectory, e.g. /kdbx/l64/q - the volumeMounts below currently place the
-binary at /usr/local/kdbx/q, a flat path relying on kdb+'s own
-adjacent-to-executable licence lookup instead). Reconciling that fully needs
-verification against a real cluster before trusting it; kdbThreads below is
-added as an explicit `-s N` arg directly (see values.yaml's dataPlane.kdbThreads)
-so secondary threads work under the CURRENT bypass, without depending on that
-larger fix.
+NOTE on `args:` below (not `command:`): Kubernetes' pod `command:` field
+overrides the container image's ENTRYPOINT (not just its CMD, unlike
+docker-compose's `command:`, which only overrides CMD - see Dockerfile.kdb's
+`ENTRYPOINT ["/usr/local/bin/kdb-entrypoint.sh"]`). Every pod here uses
+`args:` specifically so kdb-entrypoint.sh still runs first - same arch
+detection, same mandatory KX-portal pull (KX_BEARER_TOKEN, via `envFrom` off
+`.Values.kdbx.licenseSecretName` below), same adaptive secondary-thread
+logic as the docker-compose path, not a second, divergent binary-acquisition
+model. A prior version of this chart used `command: ["q", ...]` (bypassing
+the entrypoint entirely) plus a Secret volume containing a pre-staged `q`
+binary + kc.lic file that an operator had to build and upload themselves
+before every install - functionally the same "someone manually staged a
+binary on this one setup" problem the docker-compose path's local kdbx/
+folder had, just moved into a Secret instead of a directory. Both are gone
+now: the Secret named by `.Values.kdbx.licenseSecretName` holds
+KX_BEARER_TOKEN/KDB_LICENSE_B64 as plain key=value entries (see values.yaml's
+own comment for the exact `kubectl create secret` command), not files, and
+every pod pulls its own binary at start into an `emptyDir` cache
+(`/kdbx-cache`) - nothing to build or upload ahead of time.
 */}}
 {{- $ns := .Values.global.namespace -}}
 {{- $reg := .Values.global.imageRegistry -}}
@@ -84,18 +82,18 @@ spec:
         - name: tp-{{ $sid }}
           image: "{{ $reg }}kdb-control-plane/data-plane:{{ $tag }}"
           imagePullPolicy: {{ $pull }}
-          command: ["q", "tick.q", "{{ $sid }}", "-p", "5010", "-eodhour", "{{ $eodHour }}"]
+          args: ["tick.q", "{{ $sid }}", "-p", "5010", "-eodhour", "{{ $eodHour }}"]
+          envFrom: [{ secretRef: { name: {{ $lic }} } }]
           ports: [{ containerPort: 5010 }]
           volumeMounts:
             - { name: tp-log, mountPath: /app/log }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/q, subPath: q }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/kc.lic, subPath: kc.lic }
+            - { name: kdbx-cache, mountPath: /kdbx-cache }
           resources: {{ $tpRes | toYaml | nindent 12 }}
       volumes:
         - name: tp-log
           persistentVolumeClaim: { claimName: tp-log-{{ $sid }} }
-        - name: kdbx-license
-          secret: { secretName: {{ $lic }}, defaultMode: 0555 }
+        - name: kdbx-cache
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -125,26 +123,26 @@ spec:
         - name: wdb-{{ $sid }}
           image: "{{ $reg }}kdb-control-plane/data-plane:{{ $tag }}"
           imagePullPolicy: {{ $pull }}
-          command: ["q", "wdb.q", "-shard", "{{ $sid }}", "-tphost", "tp-{{ $sid }}",
+          args: ["wdb.q", "-shard", "{{ $sid }}", "-tphost", "tp-{{ $sid }}",
                     "-tpport", "5010", "-flushmin", "{{ $flush }}", "-retentionmin", "{{ $rdbRetention }}",
                     "-dbdir", "/data/db",
                     "-hdbdir", "/data/hdb", "-idbhost", "idb-{{ $sid }}", "-idbport", "5030",
                     "-hdbhost", "hdb-{{ $sid }}", "-hdbport", "5060", "-p", "5040",
                     "-eodhour", "{{ $eodHour }}"{{ if gt $kdbThreads 0 }}, "-s", "{{ $kdbThreads }}"{{ end }}]
+          envFrom: [{ secretRef: { name: {{ $lic }} } }]
           ports: [{ containerPort: 5040 }]
           volumeMounts:
             - { name: db, mountPath: /data/db }
             - { name: hdb, mountPath: /data/hdb }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/q, subPath: q }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/kc.lic, subPath: kc.lic }
+            - { name: kdbx-cache, mountPath: /kdbx-cache }
           resources: {{ $wdbRes | toYaml | nindent 12 }}
       volumes:
         - name: db
           persistentVolumeClaim: { claimName: db-{{ $sid }} }
         - name: hdb
           persistentVolumeClaim: { claimName: hdb-{{ $sid }} }
-        - name: kdbx-license
-          secret: { secretName: {{ $lic }}, defaultMode: 0555 }
+        - name: kdbx-cache
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -174,16 +172,16 @@ spec:
         - name: rdb-{{ $sid }}
           image: "{{ $reg }}kdb-control-plane/data-plane:{{ $tag }}"
           imagePullPolicy: {{ $pull }}
-          command: ["q", "rdb.q", "-shard", "{{ $sid }}", "-tphost", "tp-{{ $sid }}",
+          args: ["rdb.q", "-shard", "{{ $sid }}", "-tphost", "tp-{{ $sid }}",
                     "-tpport", "5010", "-p", "5020"{{ if gt $kdbThreads 0 }}, "-s", "{{ $kdbThreads }}"{{ end }}]
+          envFrom: [{ secretRef: { name: {{ $lic }} } }]
           ports: [{ containerPort: 5020 }]
           volumeMounts:
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/q, subPath: q }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/kc.lic, subPath: kc.lic }
+            - { name: kdbx-cache, mountPath: /kdbx-cache }
           resources: {{ $rdbRes | toYaml | nindent 12 }}
       volumes:
-        - name: kdbx-license
-          secret: { secretName: {{ $lic }}, defaultMode: 0555 }
+        - name: kdbx-cache
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -226,19 +224,19 @@ spec:
         - name: idb-{{ $sid }}
           image: "{{ $reg }}kdb-control-plane/data-plane:{{ $tag }}"
           imagePullPolicy: {{ $pull }}
-          command: ["q", "idb.q", "-shard", "{{ $sid }}", "-dbdir", "/data/db",
+          args: ["idb.q", "-shard", "{{ $sid }}", "-dbdir", "/data/db",
                     "-pollsec", "{{ $poll }}", "-retentiondays", "{{ $retention }}", "-p", "5030"]
+          envFrom: [{ secretRef: { name: {{ $lic }} } }]
           ports: [{ containerPort: 5030 }]
           volumeMounts:
             - { name: db, mountPath: /data/db }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/q, subPath: q }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/kc.lic, subPath: kc.lic }
+            - { name: kdbx-cache, mountPath: /kdbx-cache }
           resources: {{ $idbRes | toYaml | nindent 12 }}
       volumes:
         - name: db
           persistentVolumeClaim: { claimName: db-{{ $sid }} }
-        - name: kdbx-license
-          secret: { secretName: {{ $lic }}, defaultMode: 0555 }
+        - name: kdbx-cache
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -278,19 +276,19 @@ spec:
         - name: hdb-{{ $sid }}
           image: "{{ $reg }}kdb-control-plane/data-plane:{{ $tag }}"
           imagePullPolicy: {{ $pull }}
-          command: ["q", "hdb.q", "-shard", "{{ $sid }}", "-hdbdir", "/data/hdb",
+          args: ["hdb.q", "-shard", "{{ $sid }}", "-hdbdir", "/data/hdb",
                     "-reloadsec", "60", "-retentiondays", "{{ $hdbRetention }}", "-p", "5060"{{ if gt $kdbThreads 0 }}, "-s", "{{ $kdbThreads }}"{{ end }}]
+          envFrom: [{ secretRef: { name: {{ $lic }} } }]
           ports: [{ containerPort: 5060 }]
           volumeMounts:
             - { name: hdb, mountPath: /data/hdb }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/q, subPath: q }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/kc.lic, subPath: kc.lic }
+            - { name: kdbx-cache, mountPath: /kdbx-cache }
           resources: {{ $hdbRes | toYaml | nindent 12 }}
       volumes:
         - name: hdb
           persistentVolumeClaim: { claimName: hdb-{{ $sid }} }
-        - name: kdbx-license
-          secret: { secretName: {{ $lic }}, defaultMode: 0555 }
+        - name: kdbx-cache
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -326,20 +324,20 @@ spec:
         - name: gateway
           image: "{{ .Values.global.imageRegistry }}kdb-control-plane/data-plane:{{ .Values.global.imageTag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
-          command: ["q", "gateway.q", "-p", "5050"]
+          args: ["gateway.q", "-p", "5050"]
+          envFrom: [{ secretRef: { name: {{ .Values.kdbx.licenseSecretName }} } }]
           env:
             - { name: SHARDS_JSON, value: /app/shards.json }
           ports: [{ containerPort: 5050 }]
           volumeMounts:
             - { name: shards, mountPath: /app/shards.json, subPath: shards.json }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/q, subPath: q }
-            - { name: kdbx-license, mountPath: /usr/local/kdbx/kc.lic, subPath: kc.lic }
+            - { name: kdbx-cache, mountPath: /kdbx-cache }
           resources: {{ $gwRes | toYaml | nindent 12 }}
       volumes:
         - name: shards
           configMap: { name: gateway-shards }
-        - name: kdbx-license
-          secret: { secretName: {{ .Values.kdbx.licenseSecretName }}, defaultMode: 0555 }
+        - name: kdbx-cache
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

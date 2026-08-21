@@ -102,7 +102,7 @@ def test_kx_arch_for_os(os_type, arch):
 
 
 def test_installer_resolves_arch_from_os_when_not_pinned():
-    inst = KxInstaller(KxInstallConfig(source="local", binaries_dir="/kdbx",
+    inst = KxInstaller(KxInstallConfig(source="url", binary_url="https://mirror.example.com/kx.tgz",
                                        license_path="/run/secrets/kc.lic",
                                        os_type="ubuntu-22.04-arm64"))
     assert inst.arch() == "l64arm"
@@ -111,22 +111,15 @@ def test_installer_resolves_arch_from_os_when_not_pinned():
     assert "/opt/kx/q/l64arm/q" in verify
 
 
-def test_local_source_unpacks_arch_zip_from_data_folder():
-    inst = KxInstaller(KxInstallConfig(source="local", binaries_dir="/data/kx",
-                                       license_path="/run/secrets/kc.lic", os_type="linux"))
-    labels = [l for l, _ in inst.plan()]
-    assert "unpack KX binary for l64" in labels
-    unpack = next(argv for l, argv in inst.plan() if l.startswith("unpack KX binary"))
-    assert "/data/kx/l64.zip" in unpack
-
-
-def test_local_preflight_requires_binaries_dir():
-    problems = KxInstaller(KxInstallConfig(source="local", binaries_dir="",
-                                           license_path="/run/secrets/kc.lic")).preflight()
-    assert any("binaries_dir" in p for p in problems)
+def test_unknown_source_is_a_preflight_problem():
+    # "local" (a pre-staged folder on this one box) used to be a third valid
+    # source - removed entirely, so it must now be rejected the same way any
+    # other unrecognized value is, not silently accepted.
+    problems = KxInstaller(KxInstallConfig(source="local", license_path="/run/secrets/kc.lic")).preflight()
+    assert any("unknown source" in p for p in problems)
 
 
 def test_pinned_arch_overrides_os_resolution():
-    inst = KxInstaller(KxInstallConfig(source="local", binaries_dir="/kdbx",
+    inst = KxInstaller(KxInstallConfig(source="url", binary_url="https://mirror.example.com/kx.tgz",
                                        license_path="/x", os_type="ubuntu-22.04", kx_arch="l64arm"))
     assert inst.arch() == "l64arm"

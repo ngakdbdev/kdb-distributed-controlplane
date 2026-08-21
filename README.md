@@ -14,11 +14,14 @@ still say `kdb-control-plane` throughout, unchanged.
 ## Licensing note - the kdb+/KDB-X engine is never bundled here
 
 The `q` binary and license file are proprietary (even the free KDB-X Community Edition requires
-its own license terms and is not redistributable). This repo never contains them - `.gitignore`
-excludes `data-plane/docker/kdbx/q` and `kc.lic` on purpose. Download KDB-X yourself from the KX
-Developer Center and place both files at `data-plane/docker/kdbx/` before building the data-plane
-images. `reference/` contains KX's own public *scripts* (not the engine) as read-only reference
-material - see `reference/README.md` for exactly what that is and isn't.
+its own license terms and is not redistributable). This repo never contains them, and never stages
+them as local files either - every kdb+ process (docker-compose or Kubernetes) pulls its own binary
+from the KX portal at container start, authenticated with `KX_BEARER_TOKEN`, and takes its license
+from `KDB_LICENSE_B64` (inline, base64) or `KX_LICENSE_PATH` (a file mounted some other way - a
+Kubernetes Secret, a secrets-manager sidecar). Get a bearer token from the KX Developer Center
+(free for KDB-X Community Edition) and set it in `.env` before building/deploying. `reference/`
+contains KX's own public *scripts* (not the engine) as read-only reference material - see
+`reference/README.md` for exactly what that is and isn't.
 
 ## What's real vs. simulated
 
@@ -63,10 +66,11 @@ walkthrough as below, but self-contained: it explains what kdb+/a tickerplant/a 
 are before using the words, and shows expected output at each step. Read that instead if any of
 the steps below are unfamiliar.
 
-1. Download KDB-X Community Edition (free) from the KX Developer Center and place the `q` binary and
-   `kc.lic` license at `data-plane/docker/kdbx/`.
-2. `cp .env.example .env` and fill in real secrets (see `docs/README.md`'s secret-rotation checklist -
-   don't ship what's in `.env.example` verbatim; some values there look real, not placeholder).
+1. Get a free KX Developer Portal bearer token (KDB-X Community Edition) - no download needed, the
+   binary is pulled automatically at container start.
+2. `cp .env.example .env` and fill in real secrets, including `KX_BEARER_TOKEN` and `KDB_LICENSE_B64`
+   (see `docs/README.md`'s secret-rotation checklist - don't ship what's in `.env.example` verbatim;
+   some values there look real, not placeholder).
 3. `docker compose build && docker compose up -d`
 4. Open `http://localhost/` and log in. Two accounts are seeded on first boot:
    the platform admin (`PLATFORM_ADMIN_EMAIL`, default `admin@platform.local`) for

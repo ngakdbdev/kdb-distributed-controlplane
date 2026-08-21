@@ -1,77 +1,44 @@
 # kx_license.sh - checks whether THIS deploy has a real way to get the KX
-# q binary + license before spending time on `docker compose build`, without
-# assuming local files are the only valid way to supply either - they
-# aren't. See data-plane/docker/kdb-entrypoint.sh for the actual runtime
-# resolution order this mirrors:
-#   binary:  data-plane/docker/kdbx/<arch>/q or <arch>.zip (local, wins if
-#            present) OR KX_INSTALL_SOURCE=kx-portal + KX_BEARER_TOKEN
-#            (pulled at container start - .env.example's own DEFAULT)
-#   licence: data-plane/docker/kdbx/kc.lic (local) OR KDB_LICENSE_B64
-#            (inline, consumed directly by q) OR a KX_LICENSE_PATH pointing
-#            somewhere else you've mounted it yourself
-# A prior version of this check only ever tested for the two local files,
-# so a deploy correctly configured for portal-pull + KDB_LICENSE_B64 (the
-# .env.example default) failed here every time, before Docker even started -
-# "missing kc.lic" on a box that was never supposed to need one.
+# q binary + license before spending time on `docker compose build`. See
+# data-plane/docker/kdb-entrypoint.sh for the actual runtime resolution:
+#   binary:  ALWAYS pulled from the KX portal at container start using
+#            KX_BEARER_TOKEN - there is no local-file fallback anymore (a
+#            prior version of this repo let you stage a downloaded zip/
+#            binary under data-plane/docker/kdbx/, which only ever worked
+#            on the one machine a human had done that on by hand and left
+#            every other target - a fresh clone, a fresh VM, a real cloud
+#            deploy - with nothing to find; removed for exactly that reason).
+#   licence: KDB_LICENSE_B64 (inline, base64) OR KX_LICENSE_PATH (a file
+#            mounted some other way - a Kubernetes Secret, a secrets-manager
+#            sidecar). No local-file default either, same reasoning.
 # Sourced by deploy/{aws,azure,gcp}/04_deploy_stack.sh AFTER .env is
 # confirmed to exist.
 check_kx_binary_and_license() {
-  local env_source env_token env_b64 env_lic_path env_bin_dir
+  local env_token env_b64 env_lic_path
   # `tr -d '\r'` guards against a .env saved with CRLF line endings (a
   # Windows text editor, or a checkout of this repo that predates
-  # .gitattributes) - without it, a correctly-configured
-  # KX_INSTALL_SOURCE=kx-portal comes back as "kx-portal\r", every `=`
-  # comparison below silently evaluates false, and this reports "Missing
-  # KDB-X binary/license" on a .env that is actually fine. Confirmed live on
-  # a Windows-hosted deploy.
-  env_source="$(grep -E '^KX_INSTALL_SOURCE=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r')"
+  # .gitattributes) - without it, a correctly-configured KX_BEARER_TOKEN
+  # comes back with a trailing \r, `[ -n "$env_token" ]` still passes (any
+  # non-empty string does), but the token curl actually sends inside the
+  # container would carry the same \r and fail auth at the KX portal with a
+  # confusing error far away from this check. Confirmed live on a
+  # Windows-hosted deploy for the equivalent KX_INSTALL_SOURCE issue this
+  # script used to check for.
   env_token="$(grep -E '^KX_BEARER_TOKEN=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r')"
   env_b64="$(grep -E '^KDB_LICENSE_B64=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r')"
   env_lic_path="$(grep -E '^KX_LICENSE_PATH=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r')"
-  env_bin_dir="$(grep -E '^KX_BINARIES_DIR=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r')"
-  # MUST match docker-compose.yml's own `${KX_BINARIES_DIR:-./data-plane/docker/kdbx}`
-  # default exactly - a prior version of this script hardcoded the default
-  # path and never read KX_BINARIES_DIR at all, so a deploy that staged its
-  # binary/license at a custom KX_BINARIES_DIR location (e.g. binaries
-  # copied over from another machine into a different path) failed this
-  # check every time, even though the actual container the compose file
-  # brings up would have found them just fine.
-  local kx_dir="${env_bin_dir:-data-plane/docker/kdbx}"
 
-  local have_local_bin=0
-  { [ -f "$kx_dir/q" ] || ls "$kx_dir"/*.zip >/dev/null 2>&1 \
-    || ls "$kx_dir"/l64*/q "$kx_dir"/l64arm*/q >/dev/null 2>&1; } && have_local_bin=1
-  local have_portal_pull=0
-  [ "$env_source" = "kx-portal" ] && [ -n "$env_token" ] && have_portal_pull=1
-
-  local have_local_lic=0
-  [ -f "$kx_dir/kc.lic" ] && have_local_lic=1
-  local have_inline_lic=0
-  [ -n "$env_b64" ] && have_inline_lic=1
-  # a KX_LICENSE_PATH pointing anywhere other than the default in-container
-  # path implies the license is mounted some other way (an override compose
-  # file, a secrets-manager sidecar, ...) - this script can't verify that
-  # mount actually exists, so it trusts the explicit override rather than
-  # blocking a deploy that intentionally does its own thing here.
-  local have_custom_lic_path=0
-  [ -n "$env_lic_path" ] && [ "$env_lic_path" != "/kdbx/kc.lic" ] && have_custom_lic_path=1
-
-  if [ "$have_local_bin" = 0 ] && [ "$have_portal_pull" = 0 ]; then
-    echo "Missing KDB-X binary: no q/*.zip staged at $kx_dir/, and .env has no"
-    echo "working portal-pull configured (KX_INSTALL_SOURCE=kx-portal needs"
-    echo "KX_BEARER_TOKEN set too - currently KX_INSTALL_SOURCE=${env_source:-<unset>})."
-    echo "Either download KDB-X Community Edition from the KX Developer Center and"
-    echo "place the linux 'q' binary (or <arch>.zip) at $kx_dir/, or set both"
-    echo "KX_INSTALL_SOURCE=kx-portal and KX_BEARER_TOKEN in .env to pull it"
-    echo "automatically at container start."
+  if [ -z "$env_token" ]; then
+    echo "Missing KX_BEARER_TOKEN in .env: the KX/q binary is pulled from the"
+    echo "KX portal (https://portal.dl.kx.com) at container start - get a bearer"
+    echo "token there and set KX_BEARER_TOKEN in .env before deploying."
     return 1
   fi
-  if [ "$have_local_lic" = 0 ] && [ "$have_inline_lic" = 0 ] && [ "$have_custom_lic_path" = 0 ]; then
-    echo "Missing KDB-X license: no kc.lic staged at $kx_dir/, KDB_LICENSE_B64 is"
-    echo "empty in .env, and KX_LICENSE_PATH is unset/still the default."
-    echo "Either place kc.lic at $kx_dir/, or set KDB_LICENSE_B64 (base64 license"
-    echo "payload) or KX_LICENSE_PATH (pointing at a license mounted some other"
-    echo "way) in .env."
+  if [ -z "$env_b64" ] && [ -z "$env_lic_path" ]; then
+    echo "Missing KDB-X license in .env: set KDB_LICENSE_B64 (base64-encoded"
+    echo "license payload, inline - the simplest path) or KX_LICENSE_PATH"
+    echo "(pointing at a license file mounted some other way - a secrets-manager"
+    echo "sidecar, a manually-mounted volume) before deploying."
     return 1
   fi
   return 0

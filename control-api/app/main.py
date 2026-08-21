@@ -11,7 +11,8 @@ from .db import get_session, init_db
 from . import licensing
 from . import prometheus_metrics
 from .routers import (audit, auth, auth_ldap, auth_sso, backtest as backtest_router, bot,
-                      connectors, export, feedhandlers, fleet, infra_profiles, license as license_router,
+                      cloud_provision, connectors, export, feedhandlers, fleet, infra_profiles,
+                      license as license_router,
                       llm_config, metrics, migration, platform_health, query, signals,
                       subscribers, symbols, tenants, tickhouse, tickerplants, topology, trading,
                       tradingview_webhook, users)
@@ -62,6 +63,7 @@ app.include_router(migration.router)
 app.include_router(feedhandlers.router)
 app.include_router(tradingview_webhook.router)
 app.include_router(tradingview_webhook.webhook_router)
+app.include_router(cloud_provision.router)
 
 
 @app.on_event("startup")

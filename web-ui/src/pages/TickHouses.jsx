@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import StatusBadge from "../components/StatusBadge.jsx";
 import SymbolPicker from "../components/SymbolPicker.jsx";
+import CloudAutoProvision from "../components/CloudAutoProvision.jsx";
 
 export default function TickHouses() {
   const [meta, setMeta] = useState(null);
@@ -10,6 +11,12 @@ export default function TickHouses() {
   const [infraProfiles, setInfraProfiles] = useState([]);
   const [feedCatalog, setFeedCatalog] = useState([]);
   const [error, setError] = useState("");
+  // Two ways to get a TickHouse: the option-based wizard below (assumes a
+  // cluster + enrolled agent already exist) or credentials-only auto
+  // provisioning (builds the cluster itself via terraform+helm - see
+  // CloudAutoProvision.jsx). Neither replaces the other; "quick" trades
+  // control for not needing an existing cluster first.
+  const [mode, setMode] = useState("wizard");
 
   async function refresh() {
     try { setClusters(await api.listTickhouses()); } catch (err) { setError(String(err)); }
@@ -41,7 +48,20 @@ export default function TickHouses() {
         then provision end-to-end through your agent.
       </p>
       {error && <div className="error">{error}</div>}
-      {meta && <CreateWizard meta={meta} infraProfiles={infraProfiles} feedCatalog={feedCatalog} onCreated={refresh} onError={setError} />}
+
+      <div className="chip-list" style={{ marginBottom: "0.75rem" }}>
+        <button className={`chip ${mode === "wizard" ? "generate" : ""}`} onClick={() => setMode("wizard")}>
+          Option-based wizard
+        </button>
+        <button className={`chip ${mode === "quick" ? "generate" : ""}`} onClick={() => setMode("quick")}>
+          Quick cloud deploy (credentials only)
+        </button>
+      </div>
+
+      {mode === "wizard" && meta && (
+        <CreateWizard meta={meta} infraProfiles={infraProfiles} feedCatalog={feedCatalog} onCreated={refresh} onError={setError} />
+      )}
+      {mode === "quick" && <CloudAutoProvision onRunStarted={refresh} />}
 
       <h3 style={{ marginTop: "1.5rem" }}>Defined clusters</h3>
       {clusters.length === 0 && <p className="muted">None yet.</p>}

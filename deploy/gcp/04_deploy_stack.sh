@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # 04_deploy_stack.sh - run this ON the VM, from inside the project directory,
-# after 03_install_docker.sh and after placing your KDB-X binary/license at
-# data-plane/docker/kdbx/ (see README.md in this deploy/gcp folder).
+# after 03_install_docker.sh. KX_BEARER_TOKEN and KDB_LICENSE_B64 (or
+# KX_LICENSE_PATH) must be set in .env before this runs - the KDB-X binary
+# is pulled from the KX portal automatically at container start, nothing
+# to stage on this box yourself (see README.md in this deploy/gcp folder).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

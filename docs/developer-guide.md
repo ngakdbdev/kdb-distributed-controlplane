@@ -30,7 +30,7 @@ terraform/          per-cloud IaC (aws/azure/gcp) that provisions the cluster
                     high-performance filesystem storage tier
 deploy/             single-VM cloud scripts (AWS/GCP/Azure) + TLS overlays
 scripts/            gen_topology.py (generates docker-compose.yml/shards.json),
-                    check_topology_sync.py, stage-kdbx.sh
+                    check_topology_sync.py
 docs/               this guide + the pre-deployment checklists
 ```
 
@@ -69,10 +69,11 @@ this guide is about *changing* the code, not running it.
 ## Local development
 
 You don't need q/kdb+ installed locally for control-api or web-ui work —
-only the `data-plane` containers need the real binary (see
-`data-plane/docker/kdb-entrypoint.sh` — it stages from `KX_BINARIES_DIR` or
-pulls from the KX portal with `KX_BEARER_TOKEN`). For q-script changes, you
-do need a live stack to test against; there's no local q REPL story here
+only the `data-plane` containers need the real binary, and they pull it
+themselves (see `data-plane/docker/kdb-entrypoint.sh` — every container
+fetches its own binary from the KX portal at start using `KX_BEARER_TOKEN`;
+there's no local-file staging step at all). For q-script changes, you do
+need a live stack to test against; there's no local q REPL story here
 beyond running the containers.
 
 ```bash

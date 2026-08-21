@@ -297,6 +297,63 @@ class InfraProfile(SQLModel, table=True):
     updated_by: str = ""
 
 
+# --------------------------------------------------------------------------- cloud auto-provisioning
+class CloudProvisionRun(SQLModel, table=True):
+    """One "give us your cloud credentials, we'll build the cluster"
+    request: `app/cloud_provisioner.py` runs `terraform apply` against
+    `terraform/{aws,azure,gcp}/` with these credentials, then `helm
+    install`s this platform onto the cluster it just created, then
+    provisions a TickHouse against it - the credentials-only counterpart to
+    the option-based wizard (routers/tickhouse.py), which assumes a cluster
+    (and an agent already enrolled into it) already exist.
+
+    This is DELIBERATELY a different trust model than InfraProfile (see its
+    own docstring: "holds no credentials at all... fleet agent reaches its
+    cloud/cluster with AMBIENT identity"). InfraProfile's principle is about
+    ONGOING management of infrastructure that already exists; this table is
+    about the one-time (or per-update) act of CREATING that infrastructure
+    in the first place, which fundamentally cannot be done with ambient
+    identity - there's no cluster yet for a pod/agent to have a role in.
+    Once terraform apply succeeds and an agent is enrolled into the new
+    cluster, all ONGOING provisioning against it goes back through the
+    normal agent/ambient-identity path - these credentials are not kept
+    around for that; see credentials_encrypted's own note below.
+
+    credentials_encrypted is the ONLY place raw cloud credentials are ever
+    persisted anywhere in this codebase - Fernet-encrypted (app/
+    cloud_credentials.py) with a key from CLOUD_CREDENTIALS_ENCRYPTION_KEY,
+    never logged, never returned by any API response (see routers/
+    cloud_provision.py's response models, which never include this field).
+    Decrypted only in-process, just-in-time, for the duration of a single
+    terraform/helm invocation, passed via subprocess environment variables
+    (or a 0600 tempfile terraform itself requires, e.g. GCP's service
+    account JSON) - never written into a tfvars file, never appears in a
+    logged command line. confirm_ack must exactly equal
+    cloud_provisioner.CONFIRM_PHRASE before apply() will run at all - same
+    deliberate-friction pattern as alpaca_broker.LIVE_ACK_PHRASE, since this
+    creates real, billed cloud resources and there is no safe default to
+    silently downgrade to the way live trading has "paper" to fall back to.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenant.id", index=True)
+    name: str = Field(index=True)                              # cluster/deployment name, e.g. "acme-prod"
+    provider: str                                              # aws / azure / gcp
+    region: str                                                # AWS/GCP region or Azure location
+    cluster_profile: str = "ha"                                # ha / performance / cost_optimized - see terraform module's own var
+    project_id: str = ""                                       # gcp only
+    subscription_id: str = ""                                  # azure only
+    credentials_encrypted: str = ""                            # Fernet ciphertext - see docstring above; NEVER returned by any API response
+    status: str = "pending"                                    # pending/planning/applying/installing/provisioning_tickhouse/complete/failed
+    status_detail: str = ""                                    # last human-readable status line
+    log_tail: str = ""                                         # last ~200 lines of terraform/helm output, credential-scrubbed
+    terraform_outputs_json: str = "{}"                         # non-secret outputs (cluster endpoint, etc.) once apply succeeds
+    tickhouse_id: Optional[int] = Field(default=None, foreign_key="tickhouse.id")
+    error_detail: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_by: str = ""
+
+
 # --------------------------------------------------------------------------- tickhouses
 class TickHouse(SQLModel, table=True):
     """A declaratively-defined tick cluster: shards (letter ranges), typed

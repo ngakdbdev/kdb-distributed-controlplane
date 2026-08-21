@@ -2,12 +2,19 @@
 kx_installer.py - install the KX (KDB-X / q) binary on a Linux target and
 activate it with YOUR licence, as part of provisioning.
 
-Two download sources:
-  * "kx-portal" - pull from portal.dl.kx.com with a BEARER TOKEN you supply at
-    run time via an env var (default KX_BEARER_TOKEN) or a mounted secret. The
-    installer checks the token against /auth/me, then downloads
-    /assets/raw/kdb+/<version>/<channel>/<arch>.zip.
-  * "url" - pull a tarball from any URL you configure (mirror / artifact store).
+Two download sources - both REMOTE, on purpose. A prior version of this
+module also supported source="local" (a pre-staged folder of <arch>.zip
+files sitting on the fleet agent's own box) - removed entirely, since that
+only ever worked on the one machine someone had manually staged binaries
+onto and left every other target (a fresh clone, a fresh VM, a tenant's own
+cluster this agent just enrolled into) with nothing to find:
+  * "kx-portal" (the default) - pull from portal.dl.kx.com with a BEARER
+    TOKEN you supply at run time via an env var (default KX_BEARER_TOKEN) or
+    a mounted secret. The installer checks the token against /auth/me, then
+    downloads /assets/raw/kdb+/<version>/<channel>/<arch>.zip.
+  * "url" - pull from any URL you configure - a private artifact mirror or
+    internal binary store YOU run, not a folder on this one box. Still a
+    real remote fetch at install time, same as kx-portal.
 
 HONEST + LEGAL + SECURITY BOUNDARY:
 - We never bundle or redistribute KX's binary or a licence - KX's terms forbid
@@ -53,11 +60,9 @@ class KxInstallConfig:
     install_dir: str = "/opt/kx"
     qhome: str = "/opt/kx/q"
     os_type: str = "linux"              # linux-based target (per requirement)
-    source: str = "url"                 # "kx-portal" | "local" | "url"
+    source: str = "kx-portal"           # "kx-portal" | "url" - always a real remote fetch
     # url source
     binary_url: str = ""
-    # local source: a folder of pre-staged binaries, one <arch>.zip per platform
-    binaries_dir: str = ""
     # kx-portal source (token comes from env at run time, never stored here)
     portal_base: str = KX_PORTAL
     kx_version: str = "4.1"
@@ -77,9 +82,8 @@ class KxInstallConfig:
             install_dir=install_dir,
             qhome=e.get("KX_QHOME", f"{install_dir}/q"),
             os_type=e.get("KX_OS_TYPE", "linux"),
-            source=e.get("KX_INSTALL_SOURCE", "url"),
+            source=e.get("KX_INSTALL_SOURCE", "kx-portal"),
             binary_url=e.get("KX_BINARY_URL", ""),
-            binaries_dir=e.get("KX_BINARIES_DIR", ""),
             portal_base=e.get("KX_PORTAL_BASE", KX_PORTAL),
             kx_version=e.get("KX_VERSION", "4.1"),
             kx_channel=e.get("KX_CHANNEL", "~latest~"),
@@ -123,12 +127,6 @@ class KxInstaller:
                                         "-L", "-o", zip_path, self.download_url()]),
                 ("unpack", ["unzip", "-o", zip_path, "-d", c.install_dir]),
             ]
-        elif c.source == "local":
-            # pick the pre-staged binary for this OS/arch from the data folder
-            zip_path = f"{c.binaries_dir}/{arch}.zip"
-            steps += [
-                (f"unpack KX binary for {arch}", ["unzip", "-o", zip_path, "-d", c.install_dir]),
-            ]
         else:  # url tarball
             tgz = f"{c.install_dir}/kx.tgz"
             steps += [
@@ -149,7 +147,7 @@ class KxInstaller:
         its value beyond that)."""
         c = self.cfg
         problems = []
-        if c.os_type != "linux" and c.source != "local":
+        if c.os_type != "linux":
             problems.append(f"target os '{c.os_type}' is not linux (only linux is supported)")
         if not c.license_path:
             problems.append("no license_path configured (mount your KX licence as a secret)")
@@ -157,15 +155,11 @@ class KxInstaller:
             if not os.environ.get(c.bearer_env):
                 problems.append(f"no KX portal bearer token in env {c.bearer_env} "
                                 "(export it or mount it as a secret at run time)")
-        elif c.source == "local":
-            if not c.binaries_dir:
-                problems.append("no binaries_dir configured (KX_BINARIES_DIR - the data folder "
-                                "holding <arch>.zip per platform)")
         elif c.source == "url":
             if not c.binary_url:
                 problems.append("no binary_url configured (set where to pull the KX binary from)")
         else:
-            problems.append(f"unknown source '{c.source}' (use 'kx-portal', 'local', or 'url')")
+            problems.append(f"unknown source '{c.source}' (use 'kx-portal' or 'url')")
         return problems
 
     def install(self) -> dict:

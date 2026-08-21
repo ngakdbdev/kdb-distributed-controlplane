@@ -49,7 +49,7 @@ that split (see the root `README.md`'s "what's built" section):
 | | Single VM (`deploy/aws\|gcp\|azure/`) | Kubernetes (`helm/`), optionally cluster-provisioned by `terraform/` |
 |---|---|---|
 | Intended use | Sales demo, one prospect, throwaway | Pilot, longer-lived single-tenant deployment, or a real production/enterprise-scale environment |
-| Cluster provisioning | N/A — one VM, no orchestrator | `terraform/{aws,azure,gcp}/` (VPC, managed Kubernetes, KMS-backed secrets encryption, standard + high-performance-filesystem storage tiers) if you don't already have a cluster — see each module's own README.md |
+| Cluster provisioning | N/A — one VM, no orchestrator | `terraform/{aws,azure,gcp}/` (VPC, managed Kubernetes, KMS-backed secrets encryption, standard + high-performance-filesystem storage tiers) if you don't already have a cluster — run manually per each module's own README.md, or via the TickHouses page's "Quick cloud deploy" tab (credentials-only, runs the same modules + helm install server-side — see platform-usage.md) |
 | Topology control | `/topology` router talks to the Docker socket directly | Same router talks to the Kubernetes API instead — same UI, different orchestrator backend |
 | Multi-tenant hosted SaaS path | Not this — that's the `/fleet` + `fleet_agent` path, out of scope for both guides above | Out of scope here too — `fleet_agent` runs *inside a tenant's own cluster*, invoked separately |
 | Blast radius if it falls over | One VM, one prospect's demo | Depends on what else shares the cluster |
@@ -91,16 +91,20 @@ environment and reached a git history, regardless of whether it's still active:
 
 ### 2. Decide your KX-X licensing path
 
-The `q` binary and license are proprietary and never bundled in this repo (see root `README.md`).
-Every path below needs one of:
-- **Community Edition** (free, commercial use allowed) — download from the KX Developer Center, stage
-  the binary + `kc.lic` yourself (`data-plane/docker/kdbx/` for the VM path, a Kubernetes `Secret` for
-  the Helm path).
-- **Portal pull at deploy time** — set `KX_INSTALL_SOURCE=kx-portal` and a rotated `KX_BEARER_TOKEN`;
-  the containers fetch the binary from the KX portal on first start. Requires outbound internet from
-  the box/cluster.
-- **Air-gapped** — stage the binary via `KX_INSTALL_SOURCE=local` and `KX_BINARIES_DIR`; no portal
-  call needed at all.
+The `q` binary and license are proprietary and never bundled in this repo (see root `README.md`), and
+never staged as a local file either — every kdb+ container (VM path or Helm path, same
+`kdb-entrypoint.sh`) pulls its own binary from the KX portal at start, authenticated with a rotated
+`KX_BEARER_TOKEN` (free from the KX Developer Center for KDB-X Community Edition). Set that plus
+`KDB_LICENSE_B64` (your license, base64-encoded) or `KX_LICENSE_PATH` (a license file mounted some
+other way) in `.env` (VM path) or the `kdbx-license` Secret (Helm path — see
+[predeploy-kubernetes.md](predeploy-kubernetes.md) §4).
+
+**Requires outbound internet from the box/cluster to the KX portal** — there is currently no
+air-gapped path (a prior version supported staging a pre-downloaded binary locally for exactly this
+case; removed, since that model only ever worked on the one machine someone had staged it on by hand
+and was a real barrier to deploying anywhere else, including a real cloud target). If you need a
+genuinely air-gapped deployment, that needs new work (e.g. a private artifact mirror the entrypoint
+pulls from instead of the KX portal) - not something this repo does today.
 
 Pick one *before* provisioning — it changes whether the target needs outbound internet access to the
 KX portal, which affects the network/firewall guidance in each guide below.

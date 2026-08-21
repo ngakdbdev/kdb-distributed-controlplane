@@ -1,18 +1,21 @@
 # Dockerfile.kdb - runs any q process in the tick chain (tp/wdb/rdb/idb/gateway)
 #
-# KX binaries are NOT baked into the image. Instead, mount a DATA FOLDER holding
-# all your KX binaries and the container picks the right one for its platform at
-# start (see docker/kdb-entrypoint.sh). Unzip the KX portal downloads into the
-# data folder (each has just the binary; q.k is embedded) + add your licence:
-#     <data folder>/l64/q        (Linux x86-64)
-#     <data folder>/l64arm/q     (Linux ARM64 - Graviton etc.)
-#     <data folder>/kc.lic       (your KX licence)
-# Helper: data-plane/docker/stage-kdbx.sh. compose mounts
-# ${KX_BINARIES_DIR:-./data-plane/docker/kdbx} at /kdbx.
+# KX binaries are NOT baked into the image, and NOT staged locally either -
+# the entrypoint (docker/kdb-entrypoint.sh) pulls the right arch's binary from
+# the KX portal at container start, authenticated with KX_BEARER_TOKEN, and
+# caches it in a container-local writable dir purely so a restart doesn't
+# re-download. There is no "unzip a downloaded binary into a folder on this
+# machine" step anymore - that model only worked on whichever one box a human
+# had done it on by hand, and left every other target (a fresh clone, a fresh
+# VM, a real cloud deploy) with nothing to find.
 #
-# KDB-X Community Edition is free (no expiry, commercial use allowed) from
-# https://kx.com/products/kdb-x/ - fetch it yourself; KX's terms don't allow us
-# to bundle or redistribute the binary or a licence. Never commit a licence.
+# You still need a real KX_BEARER_TOKEN (from the KX Developer Portal,
+# https://portal.dl.kx.com) and a real license (KDB_LICENSE_B64 inline, or
+# KX_LICENSE_PATH pointing at a file mounted some other way - a Kubernetes
+# Secret, a secrets-manager sidecar) - see kdb-entrypoint.sh's own docstring.
+# KX's terms don't allow bundling or redistributing the binary or a licence,
+# so this repo still can't ship either for you; it just no longer expects you
+# to have manually placed them anywhere before the container starts.
 
 FROM debian:bookworm-slim
 
@@ -25,11 +28,8 @@ COPY q/ /app/
 COPY docker/kdb-entrypoint.sh /usr/local/bin/kdb-entrypoint.sh
 RUN chmod +x /usr/local/bin/kdb-entrypoint.sh
 
-# data folder with per-platform binaries is mounted here at run time
-ENV KX_BINARIES_DIR=/kdbx
-ENV PATH="/kdbx:${PATH}"
-
-# the entrypoint resolves the arch, sets QHOME/QLIC, and execs the right q;
-# each service passes its own script + flags as CMD via docker-compose.
+# the entrypoint resolves the arch, pulls the binary from the KX portal,
+# sets QHOME/QLIC, and execs the right q; each service passes its own script
+# + flags as CMD via docker-compose.
 ENTRYPOINT ["/usr/local/bin/kdb-entrypoint.sh"]
 CMD ["tick.q"]

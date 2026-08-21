@@ -12,13 +12,29 @@ for the (separately gated, off-by-default) order-placement side. The two
 share credentials (ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY) but are otherwise
 unrelated: this module never places an order, and alpaca_broker.py never
 touches market-data ingestion.
+
+SYMBOL COUNT: the free/IEX stream has a real, enforced-but-undocumented cap
+on simultaneous subscribed symbols. Confirmed live: 13,393 symbols (fetch_
+all_symbols()'s full universe) AND 68 symbols were both rejected outright
+with {"T":"error","code":405,"msg":"symbol limit exceeded"}; 30 symbols
+was accepted and real trade data flowed within seconds. The true ceiling
+sits somewhere in (30, 68], not narrowed further than that. ALPACA_SYMBOLS
+should stay a curated, bounded list (or a symbols file) - "all" WILL
+authenticate cleanly and log "subscribed" with no error visible unless
+on_message's unconditional error-frame check (see run() below) is intact,
+which is exactly what made this take days to diagnose the first time: the
+error frame arrives as the very next message after auth succeeds, and a
+prior version of this code only checked for "T":"error" pre-auth, so the
+one message that explained everything was silently discarded as "not a
+trade event" instead of ever being logged.
 """
 from __future__ import annotations
 
 import json
 import os
+import time
 
-from .base import MarketDataProvider, ProviderError, http_get_json
+from .base import MarketDataProvider, ProviderError, chunked, http_get_json
 from . import normalize
 
 
@@ -36,6 +52,19 @@ class AlpacaProvider(MarketDataProvider):
     # and a live key only by the live one.
     ASSETS_PAPER_BASE = "https://paper-api.alpaca.markets"
     ASSETS_LIVE_BASE = "https://api.alpaca.markets"
+    # Same reasoning as coinbase.py's own SUBSCRIBE_CHUNK: batch the
+    # "subscribe" frame instead of sending every symbol in one message.
+    # Confirmed live: with --symbols all (13,377 symbols), a single
+    # unchunked {"action":"subscribe","trades":[...]} frame authenticated
+    # fine (auth is a separate, small message) but silently never resulted
+    # in any trade data at all - no error frame from Alpaca either, the
+    # connection just sat there authenticated and quiet. The client-side
+    # "subscribed" log fired right after ws.send() returned, which only
+    # proves the frame was SENT, never that Alpaca actually accepted it -
+    # a large single subscribe message being silently dropped is
+    # consistent with every symptom actually observed (zero alpaca-venue
+    # rows across a full trading day despite a "clean" subscribe log).
+    SUBSCRIBE_CHUNK = 200
 
     def __init__(self, *args, api_secret: str = "", data_feed: str = "iex", **kwargs):
         super().__init__(*args, **kwargs)
@@ -123,19 +152,37 @@ class AlpacaProvider(MarketDataProvider):
             # examples that silently drops the subscribe.
 
         def on_message(ws, raw):
+            # Error frames (e.g. {"T":"error","code":405,"msg":"symbol limit
+            # exceeded"}) can arrive at ANY point, not just pre-auth -
+            # confirmed live: Alpaca sends this immediately after the
+            # subscribe request, i.e. the very next message after auth
+            # succeeds. This check MUST run unconditionally, before the
+            # authed["done"] gate below - a prior version only checked for
+            # "T":"error" inside the pre-auth branch, so once authed["done"]
+            # flipped True this exact error was routed straight to
+            # _handle_raw instead (silently discarded as "not a trade
+            # event"), and never appeared in any log. That's the real reason
+            # zero trade rows ever landed regardless of symbol count or
+            # connection stability - Alpaca was rejecting the subscription
+            # outright, every time, and nothing ever said so.
+            try:
+                events = json.loads(raw)
+            except (ValueError, TypeError):
+                return
+            events_list = events if isinstance(events, list) else [events]
+            for e in events_list:
+                if isinstance(e, dict) and e.get("T") == "error":
+                    self.log.warning("alpaca stream error (code %s): %s", e.get("code"), e.get("msg"))
+
             if not authed["done"]:
-                try:
-                    events = json.loads(raw)
-                except (ValueError, TypeError):
-                    return
-                events = events if isinstance(events, list) else [events]
-                for e in events:
+                for e in events_list:
                     if isinstance(e, dict) and e.get("T") == "success" and e.get("msg") == "authenticated":
                         authed["done"] = True
-                        ws.send(json.dumps({"action": "subscribe", "trades": self.symbols}))
-                        self.log.info("authenticated, subscribed to %d symbols", len(self.symbols))
-                    elif isinstance(e, dict) and e.get("T") == "error":
-                        self.log.warning("alpaca stream error: %s", e.get("msg"))
+                        for batch in chunked(self.symbols, self.SUBSCRIBE_CHUNK):
+                            ws.send(json.dumps({"action": "subscribe", "trades": batch}))
+                            time.sleep(0.1)
+                        self.log.info("authenticated, subscribed to %d symbols in batches of %d",
+                                      len(self.symbols), self.SUBSCRIBE_CHUNK)
                 return
             self._handle_raw(raw)
 

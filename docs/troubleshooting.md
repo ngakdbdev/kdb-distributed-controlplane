@@ -40,12 +40,13 @@ distinct failures follow from that one cause:
   literal `\r`).
 - **A genuinely correct `.env` still fails the license check.**
   `deploy/lib/kx_license.sh` reads `.env` with `grep | cut`; if `.env`
-  itself has CRLF, `KX_INSTALL_SOURCE=kx-portal` is read back as
-  `"kx-portal\r"`, and the `[ "$env_source" = "kx-portal" ]` comparison
-  silently evaluates false - reported as "Missing KDB-X binary" or "Missing
-  KDB-X license" with no obvious connection to line endings. (This
-  particular script now strips `\r` defensively either way, but nothing
-  else that might read `.env` does.)
+  itself has CRLF, `KX_BEARER_TOKEN=...` is read back with a trailing `\r`
+  baked into the value - the pre-flight check's own `[ -n "$env_token" ]`
+  still passes (any non-empty string does), but the token the *container*
+  actually sends to the KX portal carries the same `\r` and fails auth
+  there instead, further from this check and less obviously connected to
+  line endings. (This particular script strips `\r` defensively either way,
+  but nothing else that might read `.env` does.)
 
 Fix, in order:
 
@@ -70,7 +71,7 @@ Fix, in order:
 
 If you're still hitting the license error after all of the above,
 double-check for real (not a line-ending artifact): `cat -A .env | grep
-KX_INSTALL_SOURCE` - a trailing `^M` before the `$` means CRLF is still
+KX_BEARER_TOKEN` - a trailing `^M` before the `$` means CRLF is still
 present in that file specifically.
 
 ## "select from trade by sym" (or similar) fails with a one-word error like `'sym`
