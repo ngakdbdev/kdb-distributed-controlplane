@@ -34,6 +34,19 @@ secrets:
   jwtSecret: "dev-secret-change-in-deploy"
   watchdogSharedSecret: "dev-watchdog-secret-change-in-deploy"
   nl2qLlmApiKey: ""            # API key for whichever nl2q.llmProvider is set below; blank is fine for "none" or a keyless local model server
+  licenseKey: ""                # 32-char product licence key (control-api/app/licensing.py's mint()) - see licensing.deploymentEnv below for whether it's mandatory
+  cloudCredentialsEncryptionKey: ""  # only if using POST /cloud-provision/* - generate with `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+  kxBearerToken: ""             # same value as the kdbx-license Secret's KX_BEARER_TOKEN (see kdbx: below) - only needed for /cloud-provision/*
+  kdbLicenseB64: ""             # same value as the kdbx-license Secret's KDB_LICENSE_B64 - only needed for /cloud-provision/*
+
+# --------------------------------------------------------------- licensing
+# Helm is the pilot/production path (see docs/README.md's "which path"
+# table) - a valid licence key is MANDATORY by default here, unlike a bare
+# `docker compose up` on a laptop. control-api refuses to start without one
+# unless you deliberately override deploymentEnv to "local".
+licensing:
+  deploymentEnv: "customer"    # "customer" (default here) = licence mandatory; "local" = unenforced
+  enforce: ""                  # explicit true/false override, wins over deploymentEnv either way; blank = use the deploymentEnv default
 
 # ------------------------------------------------------ natural-language-to-q
 # The query workspace's plain-English box. "none" (default) uses the
@@ -48,10 +61,16 @@ nl2q:
   llmBaseUrl: ""
 
 # ------------------------------------------------------------- kdb-x license
-# KDB-X binary + license are NOT bundled in the image for licensing reasons -
-# mount them from a Secret you create yourself:
+# The KDB-X binary is NEVER staged as a file anymore, in a Secret or
+# otherwise - every kdb pod pulls its own binary from the KX portal at
+# start (kdb-entrypoint.sh, same as the docker-compose path), authenticated
+# with KX_BEARER_TOKEN. That token plus your license go into ONE Secret as
+# plain key=value entries (not files) - create it yourself before install:
 #   kubectl create secret generic kdbx-license -n kdb-control-plane \
-#     --from-file=q=./q --from-file=k4.lic=./k4.lic
+#     --from-literal=KX_BEARER_TOKEN=<your KX portal bearer token> \
+#     --from-literal=KDB_LICENSE_B64=<your license, base64-encoded>
+# (or --from-literal=KX_LICENSE_PATH=... instead of KDB_LICENSE_B64, if your
+# license is mounted some other way - see kdb-entrypoint.sh's own docstring)
 kdbx:
   licenseSecretName: kdbx-license
 
@@ -70,10 +89,81 @@ dataPlane:
   dbVolumeSize: 20Gi
   hdbVolumeSize: 100Gi   # cumulative historical storage - grows every trading day
   tpLogVolumeSize: 5Gi
+  # Per-PVC-type StorageClass override, blank = fall back to
+  # global.storageClassName (unchanged default behavior). The one this is
+  # actually for: pointing hdb at a high-performance filesystem
+  # StorageClass (AWS FSx for Lustre / Azure Managed Lustre / Google Cloud
+  # Parallelstore - see terraform/{aws,azure,gcp}/README.md's own
+  # "high-performance filesystem" section for how that StorageClass gets
+  # created) for a TickHouse whose hdb serves wide historical scans to
+  # many concurrent gateway queries. Deliberately NOT the cluster default
+  # (global.storageClassName) - these filesystems have a real multi-TiB
+  # minimum footprint most TickHouses don't need; opt in per-PVC-type here
+  # instead. db/tpLog rarely benefit the same way (smaller, less
+  # scan-heavy) but the override exists for all three for consistency.
+  #   storageClassNames:
+  #     hdb: fsx-lustre        # or azure-lustre / parallelstore - the StorageClass name each cloud's README creates
+  storageClassNames:
+    db: ""
+    hdb: ""
+    tpLog: ""
   # per-shard pod resource requests/limits (each shard runs 5 q processes)
   resources:
     requests: { cpu: "250m", memory: "256Mi" }
     limits: { memory: "1Gi" }
+  # secondary threads (kdb+ -s) for rdb/wdb/hdb only - tp/idb/gateway never
+  # peach so reserving threads for them costs memory/thread overhead for no
+  # benefit (see data-plane/docker/kdb-entrypoint.sh's own comment on this,
+  # which the docker-compose path follows exactly). rdb uses its threads for
+  # parallel warm-start recovery (.rdb.loadWarm); once a query can actually
+  # reach hdb (control-api's /query/run tier routing), hdb's threads matter
+  # for real: kdb+ automatically parallelizes a partitioned-table select
+  # across multiple date partitions when -s>0, no extra q code needed - this
+  # is what makes a wide historical scan (e.g. a multi-month VWAP) actually
+  # use more than one core once it reaches hdb.
+  #
+  # UNLIKE the docker-compose path, this is a fixed integer, not "auto": Helm
+  # has no runtime "read this pod's own CPU count" step the way
+  # kdb-entrypoint.sh's shell does, so there's no equivalent to size this
+  # from cgroup limits at template-render time. Set it to roughly
+  # dataPlane.resources.requests.cpu rounded down (leave the main thread a
+  # core), capped at 4 (kdb+'s licensed secondary-thread ceiling on the
+  # KX-X build this chart targets - asking for more makes q print "Max
+  # number of secondary threads 4" and exit, which crash-loops the pod under
+  # the Deployment's default restart policy). 0 disables (-s not passed).
+  kdbThreads: 2
+
+# Optional PER-COMPONENT resource overrides (keys: tickerplant, wdb, rdb,
+# idb, hdb, gateway), layered on top of dataPlane.resources above - a
+# component with no entry here just uses the shared default. This is what
+# fleet_agent/tickhouse_render.py's render_helm_sets() actually targets when
+# it turns a TickHouse blueprint's per-component hardware auto-tuning
+# (control-api/app/tickhouse.py's auto_hardware - vcpus/memory sized per
+# profile x component, e.g. rdb gets more memory than gateway) into
+# `--set resources.<type>.requests.cpu=... --set resources.<type>.requests.memory=...`;
+# before this existed those --set values had nowhere to land (kdb-services.yaml
+# only read dataPlane.resources, a single block shared by every component
+# regardless of profile) and were silently dropped. Setting BOTH requests.cpu
+# and limits.cpu to the same value is what makes a pod eligible for
+# Kubernetes' Guaranteed QoS class - a prerequisite for the kubelet's static
+# CPUManager policy to grant it exclusive whole-core pinning (a cluster-level
+# kubelet flag, not something this chart turns on by itself - see
+# docs/hardening.md's NUMA section for the full mechanism and how to verify
+# it's actually active). Example:
+#   resources:
+#     rdb: { requests: { cpu: "4", memory: "32Gi" }, limits: { cpu: "4", memory: "32Gi" } }
+resources: {}
+
+# Optional NUMA-aware scheduling: pins a component's pods to nodes carrying a
+# matching label (e.g. a node pool you've labeled by NUMA/socket locality).
+# Off by default (empty map = no nodeSelector added, current behavior
+# unchanged). Same component keys as `resources` above. This complements,
+# doesn't replace, Guaranteed QoS + static CPUManager - nodeSelector picks
+# which NODE a pod can land on; CPUManager decides which CORES on that node
+# it gets exclusive use of.
+#   nodeSelectors:
+#     hdb: { numa-node: "0" }
+nodeSelectors: {}
 
 # ------------------------------------------------------ end-of-day lifecycle
 # hourUtc: which UTC hour the trading day rolls over at (0 = midnight UTC;
@@ -95,6 +185,28 @@ rdb:
   retentionMin: 2
 hdb:
   retentionDays: 0
+
+# ------------------------------------------------------------------ gateway
+# Unlike the data plane (which scales on shardCount, not replicas - see
+# dataPlane's own comment), the gateway IS a horizontally-scalable, stateless
+# router: it holds no state of its own (its shards.json routing table is a
+# mounted ConfigMap, same content on every replica) and every other pod
+# reaches it by the `gateway` Service name, which Kubernetes load-balances
+# across however many replicas are Ready - so replicaCount here has no other
+# moving parts to coordinate, unlike a shardCount change. Bump replicaCount
+# directly for a manual scale, or enable autoscaling for a real HPA (CPU-
+# based - see the Autoscale page's own recommendation for a per-request-rate-
+# informed suggestion, which applies via the same reconcile path as the data
+# plane's shard-count Apply, since request rate isn't a metric the stock k8s
+# metrics-server exposes without a custom-metrics adapter this chart doesn't
+# assume you have).
+gateway:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
 
 feeds:
   bpipeRateHz: 20
@@ -130,3 +242,45 @@ ingress:
   className: ""                # "alb" on EKS, "azure-application-gateway" on AKS, "gce" on GKE, "nginx" on-prem
   host: ""                      # e.g. demo.yourcompany.com
   tls: false
+
+# ------------------------------------------------------------- monitoring
+# GET /metrics (control-api/app/prometheus_metrics.py) is always there,
+# unconditionally, once you're on this chart version - real gauges read
+# live from the same data the JSON dashboard endpoints use (tickerplant
+# throughput/latency, row counts, order counts, watchdog self-heal
+# events), see that module's own docstring for exactly what's real.
+#
+# These three flags only control whether Kubernetes objects that WIRE it
+# into a kube-prometheus-stack installation get created - all three
+# reference Custom Resources (ServiceMonitor/PrometheusRule) or a
+# convention (the Grafana sidecar's dashboard-discovery label) that only
+# exist once you've separately installed kube-prometheus-stack.
+# `helm install`/`helm upgrade` FAILS if you enable these without it (the
+# CRDs won't exist) - see docs/predeploy-kubernetes.md's monitoring
+# section for the one-time `helm install kube-prometheus-stack ...`
+# command this assumes you've already run.
+monitoring:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    # kube-prometheus-stack's own Prometheus CR only picks up
+    # ServiceMonitors matching ITS OWN serviceMonitorSelector (by default,
+    # a `release: <that release's name>` label) - blank here means "no
+    # extra labels," which only works if you've relaxed that selector.
+    # Set this to match your own installation, e.g.:
+    #   additionalLabels: { release: kube-prometheus-stack }
+    additionalLabels: {}
+  prometheusRule:
+    enabled: false
+    additionalLabels: {}
+    # Real thresholds grounded in this app's own existing conventions -
+    # not arbitrary. subscriberLagBytes matches Overview.jsx's own
+    # ELEVATED_BYTES early-warning constant (2MB, ~4% of tick.q's real
+    # 50MB SLOW_SUB_MAX_BYTES drop threshold) so the UI banner and the
+    # Prometheus alert fire at the same point, not two different ideas of
+    # "elevated."
+    thresholds:
+      publishLatencyUs: 1000
+      subscriberLagBytes: 2097152
+  grafanaDashboard:
+    enabled: false

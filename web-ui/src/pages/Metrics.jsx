@@ -113,7 +113,7 @@ export default function Metrics() {
   const scopeCount = new Set([...transitScopes.map((scope) => scope.scope), ...componentScopes.map((scope) => scope.scope)]).size;
 
   return (
-    <div className="page">
+    <div className="page metrics-page">
       <h2>Live metrics</h2>
       <p className="muted">
         {connected ? "● live" : "○ reconnecting..."} - streamed from the sharded gateway every second.
@@ -208,9 +208,12 @@ export default function Metrics() {
         </ResponsiveContainer>
       </div>
 
-      <div className="card">
+      <div className="card adaptive-panel adaptive-panel-latency">
         <div className="section-head">
-          <h3>Latency distribution (feed → TP → RDB → gateway)</h3>
+          <div className="adaptive-panel-headline">
+            <span className="adaptive-kicker">Adaptive signal</span>
+            <h3>Latency distribution (feed → TP → RDB → gateway)</h3>
+          </div>
           <span className="muted" style={{ fontSize: "0.78rem" }}>{latencyDist.n} recent hop samples</span>
         </div>
         <p className="muted">
@@ -237,8 +240,11 @@ export default function Metrics() {
         )}
       </div>
 
-      <div className="card">
-        <h3>Adaptive transit lanes</h3>
+      <div className="card adaptive-panel adaptive-panel-transit">
+        <div className="adaptive-panel-headline">
+          <span className="adaptive-kicker">Adaptive signal</span>
+          <h3>Adaptive transit lanes</h3>
+        </div>
         <p className="muted">These cards are derived from whatever tickhouse, shard, or entry identifiers the gateway emits. Newly surfaced rows are grouped automatically.</p>
         {transitScopes.length === 0 ? (
           <p className="muted">No lag samples yet - start the feed connectors to generate traffic.</p>
@@ -272,31 +278,39 @@ export default function Metrics() {
         )}
       </div>
 
-      <div className="card">
-        <h3>Transit lag by hop (feed → TP → RDB → gateway)</h3>
+      <div className="card adaptive-panel adaptive-panel-table">
+        <div className="adaptive-panel-headline">
+          <span className="adaptive-kicker">Execution trace</span>
+          <h3>Transit lag by hop (feed → TP → RDB → gateway)</h3>
+        </div>
         {transitLag.length === 0 ? (
           <p className="muted">No lag samples yet - start the feed connectors to generate traffic.</p>
         ) : (
-          <table className="data-table">
-            <thead><tr><th>Shard</th><th>Table</th><th>Stage</th><th>Lag (ms)</th><th>TP queue (bytes)</th><th>RDB rows</th></tr></thead>
-            <tbody>
-              {transitLag.map((row, i) => (
-                <tr key={i}>
-                  <td>{row.shard}</td>
-                  <td>{row.table}</td>
-                  <td>{row.stage || "-"}</td>
-                  <td>{typeof row.lagMs === "number" ? row.lagMs.toFixed(2) : (typeof row.avgMs === "number" ? row.avgMs.toFixed(2) : "-")}</td>
-                  <td>{row.queueBytes ?? "-"}</td>
-                  <td>{row.rdbRows ?? "-"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="data-table adaptive-table adaptive-transit-table">
+              <thead><tr><th>Shard</th><th>Table</th><th>Stage</th><th>Lag (ms)</th><th>TP queue (bytes)</th><th>RDB rows</th></tr></thead>
+              <tbody>
+                {transitLag.map((row, i) => (
+                  <tr key={i}>
+                    <td>{row.shard}</td>
+                    <td>{row.table}</td>
+                    <td title={row.stage || "-"}>{row.stage || "-"}</td>
+                    <td>{typeof row.lagMs === "number" ? row.lagMs.toFixed(2) : (typeof row.avgMs === "number" ? row.avgMs.toFixed(2) : "-")}</td>
+                    <td>{row.queueBytes ?? "-"}</td>
+                    <td>{row.rdbRows ?? "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
-      <div className="card">
-        <h3>Adaptive component metrics</h3>
+      <div className="card adaptive-panel adaptive-panel-components">
+        <div className="adaptive-panel-headline">
+          <span className="adaptive-kicker">Component telemetry</span>
+          <h3>Adaptive component metrics</h3>
+        </div>
         {componentScopes.length === 0 ? (
           <p className="muted">Component metrics not available yet.</p>
         ) : (
@@ -315,7 +329,10 @@ export default function Metrics() {
                   <div className="component-metric"><span>RDB rows</span><b>{fmtMetric(row.rdbRowsTrade + row.rdbRowsRisk, 0)}</b></div>
                   <div className="component-metric"><span>RDB reconnects</span><b>{fmtMetric(row.rdbReconnects, 0)}</b></div>
                   <div className="component-metric"><span>WDB reconnects</span><b>{fmtMetric(row.wdbReconnects, 0)}</b></div>
-                  <div className="component-metric"><span>Watermark</span><b className="mono">{row.wdbLastWatermark || "—"}</b></div>
+                  <div className="component-metric component-metric-watermark">
+                    <span>Watermark</span>
+                    <b className="mono" title={row.wdbLastWatermark || "—"}>{row.wdbLastWatermark || "—"}</b>
+                  </div>
                 </div>
               </div>
             ))}
@@ -323,8 +340,11 @@ export default function Metrics() {
         )}
       </div>
 
-      <div className="card">
-        <h3>Subscriber pressure</h3>
+      <div className="card adaptive-panel adaptive-panel-pressure">
+        <div className="adaptive-panel-headline">
+          <span className="adaptive-kicker">Capacity risk</span>
+          <h3>Subscriber pressure</h3>
+        </div>
         <p className="muted">This surface makes backpressure visible so you can scale or shed subscribers before the RDB/gateway path saturates.</p>
         {pressure.length === 0 ? (
           <p className="muted">No elevated TP queue or downstream lag right now.</p>
@@ -346,23 +366,28 @@ export default function Metrics() {
         )}
       </div>
 
-      <div className="card">
-        <h3>Per-shard tier health</h3>
+      <div className="card adaptive-panel adaptive-panel-table">
+        <div className="adaptive-panel-headline">
+          <span className="adaptive-kicker">Tier status</span>
+          <h3>Per-shard tier health</h3>
+        </div>
         {health.length === 0 ? (
           <p className="muted">Gateway not reachable yet.</p>
         ) : (
-          <table className="data-table">
-            <thead><tr><th>Shard</th><th>RDB rows (trade/risk)</th><th>IDB rows (trade/risk)</th></tr></thead>
-            <tbody>
-              {health.map((row, i) => (
-                <tr key={i}>
-                  <td>{row.shard}</td>
-                  <td>{row.rdb?.rowsTrade ?? "-"} / {row.rdb?.rowsRisk ?? "-"}</td>
-                  <td>{row.idb?.rowsTrade ?? "-"} / {row.idb?.rowsRisk ?? "-"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="data-table adaptive-table adaptive-health-table">
+              <thead><tr><th>Shard</th><th>RDB rows (trade/risk)</th><th>IDB rows (trade/risk)</th></tr></thead>
+              <tbody>
+                {health.map((row, i) => (
+                  <tr key={i}>
+                    <td>{row.shard}</td>
+                    <td>{row.rdb?.rowsTrade ?? "-"} / {row.rdb?.rowsRisk ?? "-"}</td>
+                    <td>{row.idb?.rowsTrade ?? "-"} / {row.idb?.rowsRisk ?? "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

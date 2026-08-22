@@ -1,44 +1,125 @@
 :root {
-  /* ---- canvas + surfaces: Trading212-style deep dark theme ---- */
-  --bg: #0a0d14;           /* app canvas */
-  --bg-2: #0d1119;
-  --panel: #12161f;        /* cards, surfaces */
-  --panel-2: #161b26;      /* slightly elevated panel (gradients) */
-  --surface-2: #1a2029;    /* chips, hovers, secondary inputs */
-  --surface-3: #242b38;    /* stronger hover */
-  --input-bg: #0f131b;     /* inputs, editors, grids */
-  --border: #232938;       /* hairline */
-  --border-strong: #323b4f;
-  --text: #eef1f7;         /* near-white */
-  --text-dim: #c4cade;
-  --muted: #838ba1;        /* secondary text */
-  --accent: #4c8bff;       /* TickForge blue, tuned for dark bg contrast */
-  --accent-hover: #71a2ff;
-  --accent-weak: rgba(76,139,255,0.14);
-  --accent-border: rgba(76,139,255,0.4);
+  /* ---- canvas + surfaces: institutional market-data platform, not a
+     DevOps console - almost-black with a deliberate blue cast (not a
+     neutral gray/black), calm neutral borders (no bright accent outlines
+     on ordinary panels), and a positive/negative pair tuned for reading
+     P&L at a glance without the whole row shouting. */
+  --bg: #080b10;           /* app canvas */
+  --bg-2: #0a0e14;
+  --panel: #0e131a;        /* primary surface: cards, panels */
+  --panel-2: #121923;      /* secondary surface: slightly elevated panel */
+  --surface-2: #161f2c;    /* chips, hovers, secondary inputs */
+  --surface-3: #1c2735;    /* stronger hover */
+  --input-bg: #0b0f16;     /* inputs, editors, grids */
+  --border: #202a36;       /* hairline - calm, not blue-bright */
+  --border-strong: #2c3a4d;
+  --text: #f1f5f9;         /* near-white */
+  --text-dim: #c3ccd9;
+  --muted: #8b98a8;        /* secondary text */
+  --accent: #4c8dff;
+  --accent-hover: #77a8ff;
+  --accent-weak: rgba(76,141,255,0.14);
+  --accent-border: rgba(76,141,255,0.4);
   --violet: #8b7bff;
-  --danger: #f6465d;
-  --danger-weak: rgba(246,70,93,0.14);
-  --danger-border: rgba(246,70,93,0.4);
+  --danger: #ea3943;
+  --danger-weak: rgba(234,57,67,0.14);
+  --danger-border: rgba(234,57,67,0.4);
   --success: #16c784;
   --success-weak: rgba(22,199,132,0.14);
   --success-border: rgba(22,199,132,0.4);
   --up: #16c784;
-  --down: #f6465d;
-  --warn: #f2a93c;
-  --warn-weak: rgba(242,169,60,0.14);
-  --warn-border: rgba(242,169,60,0.4);
+  --down: #ea3943;
+  --warn: #f5a623;
+  --warn-weak: rgba(245,166,35,0.14);
+  --warn-border: rgba(245,166,35,0.4);
   --shadow: 0 1px 2px rgba(0,0,0,.4), 0 1px 3px rgba(0,0,0,.35);
   --shadow-md: 0 20px 48px rgba(0,0,0,.5);
   --radius: 14px;
-  /* sidebar - a touch darker than the canvas, distinguished by depth not hue */
-  --side-bg: #080a10;
-  --side-bg-2: #0b0e15;
-  --side-border: #1a1f2c;
-  --side-text: #a7aec2;
-  --side-text-dim: #5b6377;
-  --side-active: #4c8bff;
+  /* sidebar - a touch darker than the canvas, distinguished by depth not
+     hue (not fixed-dark - see the light-theme block below, which flips
+     every one of these too). --side-hover-bg/--side-active-bg/
+     --side-strong-text exist because the ORIGINAL dark-only sidebar used
+     literal white/rgba(255,255,255,..) for hover+active+brand text, which
+     goes invisible on a light sidebar - these are the token-ized
+     replacements, themed per-palette like everything else. */
+  --side-bg: #05070b;
+  --side-bg-2: #070a10;
+  --side-border: #171f2b;
+  --side-text: #9aa7b8;
+  --side-text-dim: #57647a;
+  --side-active: #4c8dff;
+  --side-strong-text: #ffffff;             /* brand name, hover/active row text */
+  --side-hover-bg: rgba(255,255,255,0.05);
+  --side-active-bg: rgba(76,141,255,0.16); /* same blue as --side-active, translucent */
+  --side-mark-bg: rgba(255,255,255,0.06);  /* icon-mark chip background */
   --sidenav-w: 232px;
+  color-scheme: dark;
+}
+
+/* ---- light theme: every canvas/panel/text/accent AND sidebar token
+   flips together - both the main content area and the left sidebar are
+   fully theme-aware, toggled via the 3-way ThemeToggle (Light/Dark/
+   System - components/ThemeToggle.jsx) / src/lib/theme.js, applied as
+   data-theme on <html>. See index.html's inline bootstrap script for why
+   that happens before this stylesheet ever paints. */
+:root[data-theme="light"] {
+  /* "Slate Ice" - a cool, blue-steel-tinted light theme, not stark white.
+     Deliberately not the generic SaaS "off-white canvas + pure-white
+     card" look: the canvas carries a visible cool blue-gray cast (reads
+     like brushed steel / a terminal's light mode, not a blank page), and
+     even panels/inputs stay a hair off pure white so nothing on screen is
+     actually #fff - easier on the eyes across a long session, and the
+     blue undertone ties directly into --accent instead of fighting it.
+     Depth still reads via lightness steps (bg -> panel -> surface-2/3),
+     same structure as the dark theme, just this family's own hues. */
+  --bg: #e8edf6;
+  --bg-2: #dfe6f1;
+  --panel: #f6f9fd;
+  --panel-2: #eef2f9;
+  --surface-2: #e3e9f3;
+  --surface-3: #d5deec;
+  --input-bg: #ffffff;    /* only inputs/editors/grids get true white - max legibility for typed/tabular data */
+  --border: #cfd8e8;
+  --border-strong: #aebcd4;
+  --text: #101726;
+  --text-dim: #313d54;
+  --muted: #5c6a83;
+  --accent: #2f6fe0;
+  --accent-hover: #1d5bc9;
+  --accent-weak: rgba(47,111,224,0.10);
+  --accent-border: rgba(47,111,224,0.35);
+  --violet: #6f5cd6;
+  --danger: #d92d43;
+  --danger-weak: rgba(217,45,67,0.10);
+  --danger-border: rgba(217,45,67,0.35);
+  --success: #0b9660;
+  --success-weak: rgba(11,150,96,0.10);
+  --success-border: rgba(11,150,96,0.35);
+  --up: #0b9660;
+  --down: #d92d43;
+  --warn: #b5750a;
+  --warn-weak: rgba(181,117,10,0.10);
+  --warn-border: rgba(181,117,10,0.35);
+  --shadow: 0 1px 2px rgba(16,30,56,.07), 0 1px 3px rgba(16,30,56,.09);
+  --shadow-md: 0 20px 48px rgba(16,30,56,.16);
+  /* sidebar - inverted depth cue from the dark theme (there the sidebar is
+     darker than the canvas; here it's the brightest surface on the page,
+     standing forward of the --bg canvas's cooler slate-blue - same
+     "chrome reads as a distinct surface via depth" idea, not a hue
+     trick). Kept close to white (unlike the canvas) so the nav rail stays
+     the clearest, calmest surface to scan while the data-heavy canvas
+     carries the theme's color identity. */
+  --side-bg: #fbfcfe;
+  --side-bg-2: #f1f4fa;
+  --side-border: #dbe2ee;
+  --side-text: #4c5872;
+  --side-text-dim: #8b96ac;
+  --side-active: #2f6fe0;
+  --side-strong-text: #101726;
+  --side-hover-bg: rgba(23,37,66,0.05);
+  --side-active-bg: rgba(47,111,224,0.12);
+  --side-mark-bg: rgba(23,37,66,0.055);
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -47,8 +128,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  color-scheme: dark;
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -58,8 +138,20 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 999px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
 
-.app-shell { min-height: 100vh; display: flex; align-items: stretch; }
-.app-content-col { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 100vh; }
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: stretch;
+}
+
+.app-content-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  position: relative;
+}
 
 /* ---- left sidebar ---- */
 .sidenav {
@@ -69,12 +161,13 @@ body {
   display: flex; flex-direction: column;
   position: sticky; top: 0; height: 100vh; overflow: hidden;
   border-right: 1px solid var(--side-border);
+  box-shadow: 16px 0 40px rgba(0, 0, 0, 0.15);
 }
 .sidenav-brand {
   display: flex; align-items: center; gap: 0.6rem;
   padding: 1.1rem 1.1rem 0.9rem; flex: none;
 }
-.sidenav-brand-name { font-weight: 700; font-size: 1rem; letter-spacing: -0.01em; color: #fff; }
+.sidenav-brand-name { font-weight: 700; font-size: 1rem; letter-spacing: -0.01em; color: var(--side-strong-text); }
 .sidenav-scroll { flex: 1; overflow-y: auto; padding: 0.25rem 0.7rem 0.75rem; scrollbar-width: thin; }
 .sidenav-group { margin-top: 0.85rem; }
 .sidenav-group:first-child { margin-top: 0.15rem; }
@@ -87,53 +180,143 @@ body {
   background: transparent; border: none; color: var(--side-text);
   padding: 0.44rem 0.6rem; border-radius: 8px; cursor: pointer;
   font-size: 0.86rem; text-align: left; margin-bottom: 0.1rem;
-  transition: background .12s ease, color .12s ease;
+  transition: background .12s ease, color .12s ease, transform .12s ease;
   position: relative;
 }
-.sidenav-item:hover { background: rgba(255,255,255,0.05); color: #fff; }
-.sidenav-item.active { background: rgba(76,139,255,0.16); color: #fff; font-weight: 600; }
+.sidenav-item:hover { background: var(--side-hover-bg); color: var(--side-strong-text); transform: translateX(1px); }
+.sidenav-item.active { background: var(--side-active-bg); color: var(--side-strong-text); font-weight: 600; }
 .sidenav-item.active::before {
   content: ""; position: absolute; left: -0.7rem; top: 0.2rem; bottom: 0.2rem; width: 3px;
   background: var(--side-active); border-radius: 0 3px 3px 0;
 }
 .sidenav-item-mark {
   flex: none; width: 1.6rem; height: 1.6rem; display: grid; place-items: center;
-  border-radius: 6px; background: rgba(255,255,255,0.06); color: var(--side-text-dim);
+  border-radius: 6px; background: var(--side-mark-bg); color: var(--side-text-dim);
   font-size: 0.62rem; font-weight: 700; letter-spacing: 0.02em;
 }
+/* --side-active is always a solid, saturated accent blue in both themes -
+   white text on it stays correct regardless of which theme is active, so
+   this one's deliberately not tokenized like the others above. */
 .sidenav-item.active .sidenav-item-mark { background: var(--side-active); color: #fff; }
 .sidenav-item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .sidenav-logout {
   flex: none; display: flex; align-items: center; gap: 0.6rem;
   margin: 0.5rem 0.7rem 0.9rem; background: transparent; border: 1px solid var(--side-border);
   color: var(--side-text-dim); padding: 0.44rem 0.6rem; border-radius: 8px; cursor: pointer; font-size: 0.85rem;
 }
-.sidenav-logout:hover { color: #fff; border-color: var(--side-text-dim); }
+.sidenav-logout:hover { color: var(--side-strong-text); border-color: var(--side-text-dim); }
+
+/* 3-way Light/Dark/Auto segmented control (ThemeToggle.jsx) */
+.theme-modes {
+  display: flex; gap: 0.3rem;
+  margin: 0.5rem 0.7rem 0.9rem;
+}
+.theme-mode-btn {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 0.15rem;
+  background: transparent; border: 1px solid var(--side-border); color: var(--side-text-dim);
+  padding: 0.4rem 0.2rem; border-radius: 8px; cursor: pointer; font-size: 0.68rem;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.theme-mode-btn span:first-child { font-size: 0.95rem; line-height: 1; }
+.theme-mode-btn:hover { color: var(--side-strong-text); border-color: var(--side-text-dim); }
+.theme-mode-btn.active {
+  background: var(--side-active-bg); color: var(--side-active); border-color: var(--side-active);
+  font-weight: 600;
+}
 
 @media (max-width: 900px) {
   :root { --sidenav-w: 68px; }
-  .sidenav-brand-name, .sidenav-group-label, .sidenav-item-label, .sidenav-logout .sidenav-item-label { display: none; }
+  /* .sidenav-item-label is a bare class (not scoped to one parent), so
+     this also hides the "Light"/"Dark"/"Auto" labels inside .theme-mode-btn
+     - it already centers on icon alone via its own flex-direction:column. */
+  .sidenav-brand-name, .sidenav-group-label, .sidenav-item-label { display: none; }
   .sidenav-item, .sidenav-logout { justify-content: center; }
+  .theme-modes { margin: 0.5rem 0.4rem 0.9rem; gap: 0.2rem; }
   .sidenav-brand { justify-content: center; padding: 1.1rem 0 0.9rem; }
 }
 
-.app-main { flex: 1; padding: 1.75rem 2.25rem; max-width: 1180px; width: 100%; margin: 0 auto; }
+/* ---- top bar: global command/search + clock ---- */
+.app-topbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 1rem;
+  padding: 0.6rem clamp(1rem, 2vw, 2.25rem);
+  background: color-mix(in oklab, var(--panel) 88%, transparent);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(10px);
+}
+.app-topbar-clock {
+  flex: none; font-variant-numeric: tabular-nums; font-size: 0.82rem; color: var(--muted);
+}
+
+.cmd-bar { position: relative; flex: 1; max-width: 34rem; }
+.cmd-bar-icon {
+  position: absolute; left: 0.7rem; top: 50%; transform: translateY(-50%);
+  color: var(--muted); font-size: 0.9rem; pointer-events: none;
+}
+.cmd-bar-input {
+  width: 100%; background: var(--input-bg); border: 1px solid var(--border); color: var(--text);
+  border-radius: 999px; padding: 0.45rem 0.9rem 0.45rem 1.9rem; font-size: 0.86rem;
+}
+.cmd-bar-input:focus { outline: none; border-color: var(--accent-border); }
+.cmd-bar-results {
+  position: absolute; top: calc(100% + 0.4rem); left: 0; right: 0; z-index: 20;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow-md); padding: 0.4rem; max-height: 22rem; overflow-y: auto;
+}
+.cmd-bar-empty { padding: 0.6rem 0.7rem; font-size: 0.82rem; color: var(--muted); }
+.cmd-bar-group { margin-bottom: 0.3rem; }
+.cmd-bar-group:last-child { margin-bottom: 0; }
+.cmd-bar-group-label {
+  font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); padding: 0.3rem 0.6rem 0.15rem;
+}
+.cmd-bar-result {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; width: 100%;
+  background: none; border: none; text-align: left; cursor: pointer;
+  padding: 0.45rem 0.6rem; border-radius: 8px; font-size: 0.84rem; color: var(--text);
+}
+.cmd-bar-result:hover { background: var(--surface-2); }
+.cmd-bar-result-main { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; overflow: hidden; }
+.cmd-bar-result-main strong { flex: none; }
+.cmd-bar-result-main .muted { font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .app-topbar { padding: 0.6rem 0.7rem; }
+  .app-topbar-clock { display: none; }
+}
+
+.app-main {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  padding: 1.75rem 2.25rem;
+  max-width: 1180px;
+  width: 100%;
+  margin: 0 auto;
+}
 
 .page h2 { margin-bottom: 0.25rem; }
 .muted { color: var(--muted); font-size: 0.9rem; }
 .error { color: var(--danger); margin: 0.5rem 0; }
 
 .card {
-  background: var(--panel);
+  background: color-mix(in oklab, var(--panel) 86%, transparent);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 14px;
   padding: 1rem 1.25rem;
   margin-top: 1rem;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
 }
 
 .shard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
 .shard-card {
-  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1rem;
+  background: color-mix(in oklab, var(--panel) 86%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  backdrop-filter: blur(8px);
 }
 .shard-card h3 { margin-top: 0; }
 
@@ -171,7 +354,8 @@ body {
 
 button.primary {
   background: var(--accent); border: none; color: #fff;
-  padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer;
+  padding: 0.5rem 1rem; border-radius: 10px; cursor: pointer;
+  box-shadow: 0 8px 20px color-mix(in oklab, var(--accent) 30%, transparent);
 }
 button.danger {
   background: transparent; border: 1px solid var(--danger); color: var(--danger);
@@ -268,9 +452,11 @@ button.danger {
   background: var(--accent); color: #fff; border-color: var(--accent); margin-right: 0;
 }
 .app-footer {
-  border-top: 1px solid var(--border); background: var(--panel);
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklab, var(--panel) 84%, transparent);
   color: var(--muted); font-size: 0.8rem; text-align: center;
   padding: 0.75rem 1.5rem;
+  backdrop-filter: blur(12px);
 }
 
 /* ---- query workspace ---- */
@@ -316,6 +502,812 @@ kbd {
 .query-grid { margin: 0; }
 .query-grid th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
 .query-grid td { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 0.82rem; white-space: nowrap; }
+
+/* ---------------------- Vantik landing + auth ---------------------- */
+
+.vantik-shell {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* decorative grid/orb layers turned off (flat background instead) - the
+   divs (Login.jsx, aria-hidden) are still rendered but paint nothing. */
+.vantik-grid-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.vantik-radial-a,
+.vantik-radial-b {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  background: transparent;
+}
+
+.vantik-radial-a { width: 340px; height: 340px; left: -60px; top: 18%; }
+.vantik-radial-b { width: 300px; height: 300px; right: -70px; top: 46%; }
+
+.vantik-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem clamp(1rem, 2vw, 2rem);
+  background: color-mix(in oklab, var(--panel) 62%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  backdrop-filter: blur(18px) saturate(130%);
+}
+
+.vantik-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  text-decoration: none;
+}
+
+.vantik-wordmark-mark {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.6rem;
+  display: grid;
+  place-items: center;
+  font-family: "Sora", "Manrope", "Avenir Next", sans-serif;
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #fff;
+  background:
+    linear-gradient(160deg, color-mix(in oklab, var(--accent) 78%, white), color-mix(in oklab, var(--accent) 58%, black));
+  box-shadow: 0 10px 22px color-mix(in oklab, var(--accent) 40%, transparent);
+}
+
+.vantik-wordmark-name {
+  color: var(--text);
+  font-family: "Sora", "Manrope", "Avenir Next", sans-serif;
+  font-size: 1.03rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.vantik-nav {
+  display: flex;
+  align-items: center;
+  gap: clamp(0.6rem, 1.1vw, 1.2rem);
+}
+
+.vantik-mini-theme {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--panel) 78%, transparent);
+}
+
+.vantik-mini-theme-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 0.36rem 0.66rem;
+  font-size: 0.73rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.vantik-mini-theme-btn.active {
+  color: #fff;
+  background: linear-gradient(160deg, color-mix(in oklab, var(--accent) 84%, white), color-mix(in oklab, var(--accent) 64%, black));
+}
+
+.vantik-nav a,
+.vantik-link {
+  color: var(--text-dim);
+  text-decoration: none;
+  font-family: "Manrope", "Avenir Next", sans-serif;
+  font-size: 0.93rem;
+  transition: color 0.18s ease;
+}
+
+.vantik-nav a:hover,
+.vantik-link:hover {
+  color: var(--text);
+}
+
+.vantik-main {
+  position: relative;
+  z-index: 1;
+  width: min(1220px, 100% - 2rem);
+  margin: 0 auto;
+  padding: clamp(1.4rem, 2.5vw, 2.6rem) 0 4.5rem;
+  display: grid;
+  gap: clamp(2.4rem, 5vw, 4rem);
+}
+
+.vantik-auth-layout {
+  display: grid;
+  grid-template-columns: 1.18fr 0.82fr;
+  min-height: 100vh;
+  align-items: stretch;
+}
+
+.vantik-brand-panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 2rem;
+}
+
+.vantik-topbar-inline {
+  width: min(100%, 1000px);
+  margin: 0 auto;
+  padding-left: clamp(1rem, 2vw, 2rem);
+  padding-right: clamp(1rem, 2vw, 2rem);
+}
+
+.vantik-brand-copy {
+  width: min(100%, 980px);
+  margin: 2rem auto 0;
+  padding: 0 clamp(1rem, 2vw, 2rem);
+}
+
+/* Architecture Reel - one cohesive live-data-flow visual (a dashed track
+   with glowing dots continuously traveling through it) sitting directly
+   above the 4 pipeline-stage cards it represents, instead of the earlier
+   version's three unrelated gimmicks (a meaningless sine-wave squiggle, a
+   grid of 4 absolutely-positioned cards, and a row of 18 identical pills)
+   competing for the same cramped box. Every piece still gets its own row
+   in a normal flex column - nothing here is absolutely positioned over
+   anything else, so it can't collide at any viewport width. */
+.vantik-brand-visual {
+  width: min(100%, 980px);
+  margin: 1.5rem auto 0;
+  padding: 1.1rem clamp(1rem, 2vw, 1.4rem) 1.3rem;
+  border-radius: 1.2rem;
+  border: 1px solid color-mix(in oklab, var(--border-strong) 66%, transparent);
+  background: linear-gradient(140deg, color-mix(in oklab, var(--panel-2) 86%, transparent), color-mix(in oklab, var(--surface-2) 92%, transparent));
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.vantik-reel-head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+
+.vantik-reel-head strong {
+  font-family: "Sora", "Manrope", "Avenir Next", sans-serif;
+  font-size: 0.76rem;
+  color: var(--text);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.vantik-video-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--success) 76%, transparent);
+  animation: vantik-live-pulse 1.8s ease-in-out infinite;
+  flex: none;
+}
+
+/* the "simulation": a dashed track with 3 glowing dots continuously
+   flowing left-to-right, staggered, feeding visually into the node row
+   right below it - a straight line animated with plain CSS (translateX)
+   rather than an SVG motion-path, deliberately, so the existing global
+   `@media (prefers-reduced-motion: reduce) { * { animation: none } }`
+   rule (this file's own catch-all) turns it off for free. */
+.vantik-flow-track {
+  position: relative;
+  height: 22px;
+  margin: 0 0.15rem;
+}
+
+.vantik-flow-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background-image: repeating-linear-gradient(
+    to right,
+    color-mix(in oklab, var(--border-strong) 85%, transparent) 0 6px,
+    transparent 6px 13px
+  );
+}
+
+.vantik-flow-dot {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  margin-top: -3.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--accent) 75%, transparent), 0 0 2px var(--accent);
+  animation: vantik-flow-travel 2.7s linear infinite;
+  animation-delay: var(--dot-delay, 0s);
+}
+
+.vantik-node-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.6rem;
+}
+
+.vantik-node {
+  padding: 0.6rem 0.7rem;
+  border-radius: 0.8rem;
+  border: 1px solid color-mix(in oklab, var(--border-strong) 64%, transparent);
+  background: color-mix(in oklab, var(--panel) 74%, transparent);
+  backdrop-filter: blur(10px);
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  animation: vantik-node-rise 0.9s cubic-bezier(.25,.9,.2,1) both;
+  animation-delay: calc(var(--node-index, 0) * 90ms);
+}
+
+.vantik-node-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.vantik-node-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 6px color-mix(in oklab, var(--success) 70%, transparent);
+  animation: vantik-live-pulse 1.8s ease-in-out infinite;
+  animation-delay: calc(var(--node-index, 0) * 300ms);
+  flex: none;
+}
+
+.vantik-node strong {
+  font-family: "Sora", "Manrope", "Avenir Next", sans-serif;
+  font-size: 0.79rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.vantik-node span {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  line-height: 1.4;
+  overflow-wrap: break-word;
+}
+
+.vantik-video-captions {
+  display: grid;
+  gap: 0.24rem;
+}
+
+.vantik-video-captions p {
+  margin: 0;
+  font-size: 0.75rem;
+  color: color-mix(in oklab, var(--text-dim) 88%, var(--text) 12%);
+}
+
+.vantik-video-captions p.active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.vantik-video-footer {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.vantik-video-footer .tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.14rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--border-strong) 82%, transparent);
+  background: color-mix(in oklab, var(--panel) 80%, transparent);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+
+.vantik-brand-cards {
+  width: min(100%, 980px);
+  margin: 1.5rem auto 0;
+  padding: 0 clamp(1rem, 2vw, 2rem);
+}
+
+.vantik-auth-panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(1.2rem, 2vw, 2rem);
+}
+
+.vantik-login-card {
+  width: min(100%, 520px);
+  padding: clamp(1.1rem, 2vw, 1.5rem);
+  border-radius: 1.2rem;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+  background: color-mix(in oklab, var(--panel-2) 88%, transparent);
+  box-shadow: var(--shadow-md);
+}
+
+.vantik-hero {
+  display: grid;
+  gap: 1.3rem;
+  grid-template-columns: 1fr;
+}
+
+.vantik-hero-copy {
+  max-width: 760px;
+}
+
+.vantik-eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.76rem;
+  color: var(--accent);
+  font-family: "Manrope", "Avenir Next", sans-serif;
+}
+
+.vantik-hero-title {
+  margin: 0.65rem 0 0;
+  font-family: "Sora", "Manrope", "Avenir Next", sans-serif;
+  font-size: clamp(2.1rem, 6vw, 4.5rem);
+  line-height: 0.96;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+.vantik-hero-body {
+  margin: 1rem 0 0;
+  max-width: 62ch;
+  color: var(--text-dim);
+  font-size: clamp(1rem, 1.5vw, 1.12rem);
+  line-height: 1.65;
+  font-family: "Manrope", "Avenir Next", sans-serif;
+}
+
+.vantik-hero-actions {
+  margin-top: 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.vantik-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--accent) 50%, transparent);
+  color: #fff;
+  background: linear-gradient(160deg, color-mix(in oklab, var(--accent) 86%, white), color-mix(in oklab, var(--accent) 62%, black));
+  padding: 0.7rem 1.1rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
+  box-shadow: 0 8px 20px color-mix(in oklab, var(--accent) 40%, transparent);
+}
+
+.vantik-cta:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.03);
+}
+
+.vantik-cta.ghost {
+  color: var(--text);
+  background: color-mix(in oklab, var(--surface-2) 70%, transparent);
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+.vantik-visual {
+  position: relative;
+  min-height: clamp(300px, 42vw, 420px);
+  border-radius: 1.2rem;
+  border: 1px solid color-mix(in oklab, var(--border-strong) 66%, transparent);
+  background:
+    linear-gradient(140deg,
+      color-mix(in oklab, var(--panel-2) 86%, transparent),
+      color-mix(in oklab, var(--surface-2) 92%, transparent)
+    );
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+  isolation: isolate;
+}
+
+.vantik-visual::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 26%, color-mix(in oklab, #fff 12%, transparent) 40%, transparent 58%);
+  transform: translateX(-110%);
+  animation: vantik-shine 7s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.vantik-section {
+  display: grid;
+  gap: 1rem;
+}
+
+.vantik-section-alt {
+  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  border-radius: 1.2rem;
+  background: color-mix(in oklab, var(--panel) 78%, transparent);
+  padding: clamp(1rem, 2.2vw, 1.6rem);
+  backdrop-filter: blur(10px);
+}
+
+.vantik-section-head p {
+  margin: 0;
+  color: var(--accent);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-family: "Manrope", "Avenir Next", sans-serif;
+}
+
+.vantik-section-head h2 {
+  margin: 0.55rem 0 0;
+  max-width: 24ch;
+  font-family: "Sora", "Manrope", "Avenir Next", sans-serif;
+  font-size: clamp(1.5rem, 3.5vw, 2.4rem);
+  line-height: 1.07;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.vantik-card-row {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+}
+
+.vantik-card {
+  grid-column: span 4;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  background: color-mix(in oklab, var(--panel) 86%, transparent);
+  animation: vantik-node-rise 0.9s cubic-bezier(.25,.9,.2,1) both;
+  animation-delay: var(--delay);
+}
+
+.vantik-card span {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.66rem;
+  color: var(--accent);
+  border: 1px solid color-mix(in oklab, var(--accent) 45%, transparent);
+  background: color-mix(in oklab, var(--accent-weak) 86%, transparent);
+}
+
+.vantik-card h3 {
+  margin: 0.7rem 0 0;
+  font-size: 1.1rem;
+  font-family: "Sora", "Manrope", "Avenir Next", sans-serif;
+}
+
+.vantik-card p,
+.vantik-columns p {
+  margin: 0.55rem 0 0;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.vantik-columns {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.vantik-columns article {
+  padding: 0.95rem;
+  border-radius: 0.9rem;
+  border: 1px solid color-mix(in oklab, var(--border) 76%, transparent);
+  background: color-mix(in oklab, var(--surface-2) 58%, transparent);
+}
+
+.vantik-columns h3 {
+  margin: 0;
+  font-size: 1.02rem;
+  font-family: "Sora", "Manrope", "Avenir Next", sans-serif;
+}
+
+.vantik-market-band {
+  border-radius: 0.95rem;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+  padding: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  background:
+    linear-gradient(90deg, color-mix(in oklab, var(--panel) 82%, transparent), color-mix(in oklab, var(--surface-2) 70%, transparent));
+}
+
+.vantik-market-band span {
+  display: inline-flex;
+  padding: 0.4rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--border-strong) 70%, transparent);
+  background: color-mix(in oklab, var(--panel) 75%, transparent);
+  color: var(--text-dim);
+  font-size: 0.82rem;
+}
+
+.vantik-login {
+  width: 100%;
+  display: grid;
+  gap: 0.8rem;
+  padding: 0;
+}
+
+.vantik-login-head {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 0.2rem;
+}
+
+.vantik-login-head h3 {
+  margin: 0;
+  font-family: "Sora", "Manrope", "Avenir Next", sans-serif;
+  font-size: clamp(1.7rem, 3vw, 2.2rem);
+  letter-spacing: -0.02em;
+}
+
+.vantik-login-head p {
+  margin: 0.38rem 0 0;
+}
+
+.vantik-login label {
+  display: grid;
+  gap: 0.4rem;
+  font-size: 0.88rem;
+  color: var(--text-dim);
+}
+
+.vantik-login input {
+  width: 100%;
+  background: color-mix(in oklab, var(--input-bg) 90%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  padding: 0.73rem 0.8rem;
+  color: var(--text);
+  font: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.vantik-login input:focus {
+  border-color: color-mix(in oklab, var(--accent) 54%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent-weak) 80%, transparent);
+}
+
+.vantik-login input:focus-visible,
+.sso-button:focus-visible,
+.vantik-login-submit:focus-visible,
+.vantik-cta:focus-visible,
+.vantik-link:focus-visible,
+.vantik-nav a:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--accent) 88%, white);
+  outline-offset: 2px;
+}
+
+.vantik-login-submit,
+.sso-button {
+  border-radius: 0.72rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+
+.vantik-login-submit {
+  border: none;
+  color: #fff;
+  padding: 0.82rem 1rem;
+  background: linear-gradient(165deg, color-mix(in oklab, var(--accent) 88%, white), color-mix(in oklab, var(--accent) 64%, black));
+  box-shadow: 0 8px 20px color-mix(in oklab, var(--accent) 35%, transparent);
+}
+
+.sso-divider {
+  display: flex; align-items: center; text-align: center; color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em;
+}
+
+.sso-divider::before,
+.sso-divider::after {
+  content: ""; flex: 1; border-bottom: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+}
+
+.sso-divider span { padding: 0 0.75rem; }
+
+.sso-button {
+  border: 1px solid color-mix(in oklab, var(--border) 85%, transparent);
+  color: var(--text);
+  background: color-mix(in oklab, var(--panel) 82%, transparent);
+  padding: 0.8rem 1rem;
+}
+
+.vantik-login-submit:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.vantik-login-submit:hover:not(:disabled),
+.sso-button:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.03);
+}
+
+.vantik-copyright {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.vantik-login .error {
+  margin: 0;
+  border-radius: 0.72rem;
+  border: 1px solid var(--danger-border);
+  padding: 0.55rem 0.66rem;
+  background: var(--danger-weak);
+}
+
+@media (max-width: 1000px) {
+  .vantik-auth-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .vantik-brand-panel {
+    padding-bottom: 1rem;
+  }
+
+  .vantik-brand-copy,
+  .vantik-brand-visual,
+  .vantik-brand-cards,
+  .vantik-topbar-inline {
+    width: min(100%, 1000px);
+  }
+
+  .vantik-nav {
+    display: none;
+  }
+
+  .vantik-mini-theme {
+    margin-left: auto;
+  }
+
+  .vantik-topbar {
+    justify-content: space-between;
+  }
+
+  .vantik-card {
+    grid-column: span 6;
+  }
+
+  .vantik-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .vantik-main {
+    width: min(1220px, 100% - 1.2rem);
+    gap: 2rem;
+  }
+
+  .vantik-card {
+    grid-column: span 12;
+  }
+
+  .vantik-topbar {
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .vantik-cta.ghost {
+    margin-left: auto;
+  }
+
+  .vantik-mini-theme-btn {
+    padding: 0.34rem 0.56rem;
+  }
+
+  .vantik-radial-a,
+  .vantik-radial-b {
+    filter: blur(75px);
+    opacity: 0.65;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vantik-radial-a,
+  .vantik-radial-b,
+  .vantik-visual::before,
+  .vantik-flow-dot,
+  .vantik-node,
+  .vantik-node-dot,
+  .vantik-video-dot,
+  .vantik-card {
+    animation: none;
+  }
+
+  .vantik-cta,
+  .vantik-login-submit,
+  .sso-button {
+    transition: none;
+  }
+}
+
+@keyframes vantik-float-a {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(20px, -18px, 0); }
+}
+
+@keyframes vantik-float-b {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(-16px, 22px, 0); }
+}
+
+@keyframes vantik-shine {
+  0% { transform: translateX(-110%); }
+  38%, 100% { transform: translateX(150%); }
+}
+
+@keyframes vantik-node-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes vantik-flow-travel {
+  0% { left: 0%; opacity: 0; }
+  8% { opacity: 1; }
+  92% { opacity: 1; }
+  100% { left: 100%; opacity: 0; }
+}
 .query-grid .null { color: var(--muted); }
 @media (max-width: 760px) { .query-workspace { grid-template-columns: 1fr; } }
 
@@ -380,7 +1372,7 @@ kbd {
   background: var(--panel); border: 1px solid var(--border); border-radius: 8px; max-height: 240px; overflow: auto;
   box-shadow: var(--shadow-md);
 }
-.symbol-option { display: grid; grid-template-columns: 5rem 1fr auto; gap: 0.5rem; align-items: center; width: 100%; text-align: left; background: none; border: none; color: var(--text); padding: 0.4rem 0.6rem; cursor: pointer; }
+.symbol-option { display: grid; grid-template-columns: 5rem 1fr auto auto; gap: 0.5rem; align-items: center; width: 100%; text-align: left; background: none; border: none; color: var(--text); padding: 0.4rem 0.6rem; cursor: pointer; }
 .symbol-option:hover { background: var(--surface-2); }
 .symbol-option-sym { font-family: monospace; font-weight: 600; }
 .symbol-option-name { color: var(--muted); font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -442,6 +1434,9 @@ kbd {
 /* ---- trading terminal ---- */
 .paper-badge { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.06em; background: var(--warn-weak); color: var(--warn); border: 1px solid var(--warn-border); border-radius: 4px; padding: 0.1rem 0.35rem; vertical-align: middle; margin-left: 0.4rem; }
 .paper-badge.sm { font-size: 0.55rem; margin: 0; }
+/* real-money order routing - deliberately louder than the paper badge above,
+   never mistakable for it at a glance (see routers/trading.py's ALPACA_TRADING_MODE) */
+.paper-badge.live { background: var(--danger-weak); color: var(--danger); border-color: var(--danger-border); font-weight: 700; }
 .status-badge { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; border-radius: 4px; padding: 0.1rem 0.4rem; }
 .status-badge.status-new { background: var(--warn-weak); color: var(--warn); }
 .status-badge.status-filled { background: var(--success-weak); color: var(--success); }
@@ -490,6 +1485,13 @@ kbd {
 /* ---- trading visuals: candlestick / tape / depth ---- */
 .candlestick-chart { width: 100%; height: 220px; display: block; background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%); border: 1px solid var(--border); border-radius: 10px; }
 .chart-empty { display: flex; align-items: center; justify-content: center; height: 140px; border: 1px dashed var(--border); border-radius: 10px; color: var(--muted); }
+
+/* indicator toggle chips above the chart (EMA/BB/MACD) - same .chip base as
+   everywhere else, an "active" modifier for the ones currently drawn */
+.indicator-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.5rem; }
+.chip.indicator-active { background: var(--accent-weak); color: var(--accent); border-color: var(--accent-border); font-weight: 600; font-family: inherit; }
+.macd-chart { width: 100%; height: 90px; display: block; margin-top: 0.4rem; background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%); border: 1px solid var(--border); border-radius: 10px; }
+.macd-label { font-size: 0.72rem; color: var(--muted); margin: 0.3rem 0 0.15rem; }
 
 .live-tape { max-height: 320px; overflow-y: auto; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.82rem; }
 .tape-row { display: grid; grid-template-columns: 5.5rem 1fr 4rem; gap: 0.5rem; padding: 0.2rem 0.3rem; border-bottom: 1px solid var(--border); }
@@ -565,7 +1567,17 @@ h2, h3 { letter-spacing: -0.01em; }
 .live-pill { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em; padding: 0.3rem 0.6rem; border-radius: 999px; white-space: nowrap; }
 .live-pill.on { background: var(--success-weak); color: var(--success); }
 .live-pill.off { background: var(--surface-2); color: var(--muted); }
+.live-pill.sm { font-size: 0.6rem; padding: 0.15rem 0.4rem; }
 .live-cadence { display: inline-block; margin-left: 0.4rem; font-size: 0.78rem; font-weight: 600; color: var(--accent); }
+
+/* platform health rollup dots (Overview's health card - see
+   routers/platform_health.py for the four statuses this maps) */
+.health-dot { display: inline-block; width: 0.55em; height: 0.55em; border-radius: 50%; margin-right: 0.3em; }
+.health-dot.healthy { background: var(--success); }
+.health-dot.unknown { background: var(--muted); }
+.health-dot.live { background: var(--accent); }
+.health-dot.degraded { background: var(--warn); }
+.health-dot.critical { background: var(--danger); }
 
 .ops-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
   background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--muted);
@@ -612,6 +1624,14 @@ h2, h3 { letter-spacing: -0.01em; }
 .hero-stat-delta.down { color: var(--danger); background: var(--danger-weak); }
 .hero-stat-delta.flat { color: var(--muted); background: var(--surface-2); }
 .hero-stat-spark { flex: none; }
+.metrics-page .hero-stat-value,
+.autoscale-page .hero-stat-value {
+  font-size: clamp(2rem, 4.6vw, 3.1rem);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.28rem;
+}
 @media (max-width: 560px) { .hero-stat { flex-direction: column; align-items: flex-start; } }
 
 /* ---- inline sparkline primitive ---- */
@@ -639,6 +1659,35 @@ h2, h3 { letter-spacing: -0.01em; }
 .list-row-value b { display: block; font-variant-numeric: tabular-nums; font-size: 0.95rem; }
 .list-row-value span { font-size: 0.78rem; }
 
+/* ---- Predictive Signals: factor breakdown chips + news feed ---- */
+.factor-chip-row { display: flex; flex-wrap: wrap; gap: 0.35rem; flex: 1; min-width: 14rem; padding-top: 0.15rem; }
+.factor-chip {
+  font-size: 0.72rem; border-radius: 999px; padding: 0.15rem 0.55rem; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text-dim); white-space: nowrap;
+}
+.factor-chip.up { background: var(--success-weak); color: var(--success); border-color: var(--success-border); }
+.factor-chip.down { background: var(--danger-weak); color: var(--danger); border-color: var(--danger-border); }
+.factor-chip.unavailable { opacity: 0.5; font-style: italic; }
+
+.news-feed { display: flex; flex-direction: column; gap: 0.1rem; max-height: 32rem; overflow-y: auto; }
+.news-item {
+  display: block; padding: 0.6rem 0.4rem; border-bottom: 1px solid var(--border);
+  color: inherit; text-decoration: none;
+}
+.news-item:last-child { border-bottom: none; }
+.news-item:hover { background: var(--surface-2); }
+.news-item-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.2rem; }
+.news-sentiment-pill {
+  font-size: 0.72rem; font-weight: 600; border-radius: 999px; padding: 0.05rem 0.45rem;
+  background: var(--surface-2); color: var(--muted); border: 1px solid var(--border);
+}
+.news-sentiment-pill.up { background: var(--success-weak); color: var(--success); border-color: var(--success-border); }
+.news-sentiment-pill.down { background: var(--danger-weak); color: var(--danger); border-color: var(--danger-border); }
+.news-region { font-size: 0.72rem; color: var(--accent); background: var(--accent-weak); border-radius: 999px; padding: 0.05rem 0.45rem; }
+.news-time { font-size: 0.72rem; margin-left: auto; }
+.news-headline { font-size: 0.9rem; font-weight: 500; }
+.news-source { font-size: 0.76rem; margin-top: 0.1rem; }
+
 /* ---- activity feed (audit log, Trading212 "history" style) ---- */
 .activity-feed { display: flex; flex-direction: column; }
 .activity-row {
@@ -659,19 +1708,37 @@ h2, h3 { letter-spacing: -0.01em; }
 .activity-time { flex: none; color: var(--muted); font-size: 0.78rem; white-space: nowrap; }
 .activity-actor-watchdog { color: var(--accent); font-weight: 700; }
 
-.health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.5rem; }
-.health-tile { display: flex; align-items: center; gap: 0.5rem; text-align: left; background: var(--panel);
-  border: 1px solid var(--border); border-radius: 10px; padding: 0.6rem 0.7rem; cursor: pointer; box-shadow: var(--shadow); transition: border-color .12s ease, transform .12s ease; }
-.health-tile:hover { border-color: var(--accent); transform: translateY(-1px); }
-.health-tile .ht-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
-.health-tile .ht-name { font-family: ui-monospace, Menlo, monospace; font-size: 0.8rem; flex: 1; overflow: hidden; text-overflow: ellipsis; }
-.health-tile .ht-status { font-size: 0.68rem; text-transform: uppercase; color: var(--muted); }
-.health-tile.s-running .ht-dot { background: var(--success); box-shadow: 0 0 0 3px var(--success-weak); }
-.health-tile.s-running { border-color: var(--success-border); }
-.health-tile.s-restarting .ht-dot, .health-tile.s-exited .ht-dot, .health-tile.s-stopped .ht-dot { background: var(--danger); }
-.health-tile.s-restarting .ht-dot { animation: recovery-pulse 1.2s ease-in-out infinite; }
-.health-tile.s-restarting { border-color: var(--danger-border); }
-.health-tile.s-restarting .ht-status, .health-tile.s-exited .ht-status { color: var(--danger); }
+/* Data Fabric strip (Overview.jsx) - one calm status line replacing the
+   individual-container pill grid this used to be: process-level detail
+   now lives only on Topology, not duplicated here fighting for
+   attention. */
+.fabric-strip {
+  display: flex; align-items: center; gap: 1rem; width: 100%; text-align: left;
+  font: inherit; color: inherit;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0.8rem 1.1rem; margin-top: 0.9rem; cursor: pointer; flex-wrap: wrap;
+  transition: border-color .15s ease;
+}
+.fabric-strip:hover { border-color: var(--border-strong); }
+.fabric-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.fabric-dot.healthy { background: var(--success); box-shadow: 0 0 8px color-mix(in oklab, var(--success) 60%, transparent); }
+.fabric-dot.degraded { background: var(--warn); box-shadow: 0 0 8px color-mix(in oklab, var(--warn) 60%, transparent); }
+.fabric-dot.unknown { background: var(--muted); }
+.fabric-label { font-weight: 700; font-size: 0.85rem; letter-spacing: 0.02em; color: var(--text); flex: none; }
+.fabric-state { font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.05em; flex: none; }
+.fabric-state.healthy { color: var(--success); }
+.fabric-state.degraded { color: var(--warn); }
+.fabric-state.unknown { color: var(--muted); }
+.fabric-metrics { display: flex; gap: 1.15rem; flex-wrap: wrap; font-size: 0.82rem; color: var(--muted); flex: 1; }
+.fabric-metrics strong { color: var(--text); font-variant-numeric: tabular-nums; margin-right: 0.28rem; }
+.fabric-go { font-size: 0.8rem; color: var(--accent); flex: none; white-space: nowrap; }
+
+.fabric-footnote {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+  padding: 0.5rem 0.2rem; font-size: 0.82rem; color: var(--muted);
+}
+.fabric-footnote .ok { color: var(--success); }
+.fabric-footnote .warn { color: var(--warn); }
 
 /* ---- query workspace: target dropdown, autocomplete, nl->q ---- */
 .target-select { width: 100%; padding: 0.5rem; border: 1px solid var(--border); border-radius: 8px;
@@ -698,27 +1765,80 @@ h2, h3 { letter-spacing: -0.01em; }
 .editor-wrap .cm-tooltip-autocomplete { border-radius: 8px; overflow: hidden; }
 
 /* ---- tickerplant monitor ---- */
-.tp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
-.tp-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.1rem; box-shadow: var(--shadow); }
+.tickerplants-page .tp-hero {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.25rem;
+}
+.tickerplants-page .tp-hero h2 { margin: 0; }
+.tickerplants-page .tp-kicker {
+  display: inline-block; margin-bottom: 0.35rem; font-size: 0.66rem; letter-spacing: 0.12em; text-transform: uppercase;
+  font-weight: 700; color: var(--accent);
+}
+.tickerplants-page .tp-legend {
+  display: inline-flex; align-items: center; gap: 0.5rem; color: var(--muted); font-size: 0.78rem;
+  padding: 0.4rem 0.6rem; border: 1px solid var(--border); background: var(--surface-2); border-radius: 999px;
+}
+.tickerplants-page .tp-legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.tickerplants-page .tp-legend-dot.live { background: var(--success); box-shadow: 0 0 12px color-mix(in oklab, var(--success) 75%, transparent); }
+
+.tp-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem; margin: 1rem 0 1.2rem; }
+.tp-summary-card {
+  border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+  box-shadow: var(--shadow); padding: 0.85rem 0.9rem; display: grid; gap: 0.2rem;
+}
+.tp-summary-card strong { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.03em; }
+.tp-summary-card strong.warn { color: var(--warn); }
+.tp-summary-card strong.ok { color: var(--success); }
+.tp-summary-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.tp-summary-card small { color: var(--muted); font-size: 0.76rem; }
+
+.tp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 1rem; }
+.tp-card {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--panel-2) 92%, transparent), color-mix(in oklab, var(--panel) 82%, transparent));
+  border: 1px solid var(--border); border-radius: 16px; padding: 1rem 1rem 0.9rem; box-shadow: var(--shadow);
+  position: relative; overflow: hidden;
+}
+.tp-card::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background: linear-gradient(90deg, var(--accent), transparent 80%);
+}
+.tp-card.healthy::before { background: linear-gradient(90deg, var(--success), transparent 80%); }
+.tp-card.degraded::before { background: linear-gradient(90deg, var(--warn), transparent 80%); }
 .tp-card.down { border-color: var(--danger-border); }
-.tp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
-.tp-head h3 { margin: 0; font-family: ui-monospace, Menlo, monospace; }
-.tp-pill { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; padding: 0.2rem 0.55rem; border-radius: 999px; }
+.tp-head { display: flex; align-items: center; justify-content: space-between; gap: 0.85rem; margin-bottom: 0.95rem; }
+.tp-head h3 { margin: 0; font-size: 1rem; letter-spacing: -0.015em; }
+.tp-entity { display: flex; align-items: center; gap: 0.7rem; min-width: 0; }
+.tp-entity-mark {
+  display: inline-grid; place-items: center; width: 2.1rem; height: 2.1rem; border-radius: 10px; background: linear-gradient(180deg, var(--accent-weak), var(--surface-2));
+  color: var(--accent); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; border: 1px solid color-mix(in oklab, var(--accent-border) 80%, var(--border));
+}
+.tp-entity small { display: block; color: var(--muted); font-size: 0.72rem; }
+.tp-pill { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; padding: 0.22rem 0.56rem; border-radius: 999px; white-space: nowrap; }
 .tp-pill.ok { background: var(--success-weak); color: var(--success); }
 .tp-pill.warn { background: var(--warn-weak); color: var(--warn); }
 .tp-pill.bad { background: var(--danger-weak); color: var(--danger); }
-.tp-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 1rem; margin-bottom: 0.9rem; }
-.tp-metric { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px dotted var(--border); padding: 0.25rem 0; }
-.tp-k { color: var(--muted); font-size: 0.8rem; }
+.tp-inline-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; margin-bottom: 0.9rem; }
+.tp-stat {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 0.6rem 0.7rem; display: grid; gap: 0.14rem;
+}
+.tp-stat span { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.tp-stat strong { font-size: 1rem; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.tp-secondary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem 0.8rem; margin-bottom: 0.9rem; }
+.tp-metric { display: flex; justify-content: space-between; align-items: baseline; gap: 0.7rem; border-bottom: 1px dotted var(--border); padding: 0.25rem 0; }
+.tp-k { color: var(--muted); font-size: 0.78rem; }
 .tp-v { font-family: ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; font-weight: 600; }
 .tp-health { border-top: 1px solid var(--border); padding-top: 0.75rem; }
-.tp-health-title { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 0.4rem; }
-.tp-check { display: flex; justify-content: space-between; font-size: 0.85rem; padding: 0.12rem 0; }
+.tp-health-title { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 0.5rem; }
+.tp-check { display: flex; justify-content: space-between; font-size: 0.84rem; padding: 0.12rem 0; }
 .chk.ok { color: var(--success); font-weight: 700; }
 .chk.bad { color: var(--danger); font-weight: 700; }
-.tp-overall { margin-top: 0.5rem; font-weight: 700; font-size: 0.9rem; }
+.tp-overall { margin-top: 0.6rem; font-weight: 700; font-size: 0.9rem; }
 .tp-overall.ok { color: var(--success); }
 .tp-overall.warn { color: var(--warn); }
+
+@media (max-width: 760px) {
+  .tickerplants-page .tp-hero { flex-direction: column; align-items: flex-start; }
+  .tp-grid { grid-template-columns: 1fr; }
+  .tp-inline-metrics, .tp-secondary-grid { grid-template-columns: 1fr; }
+}
 
 /* ---- pressure / scaling ---- */
 .pressure-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
@@ -772,8 +1892,17 @@ h2, h3 { letter-spacing: -0.01em; }
 .basket-panel-head h4 { margin: 0; font-size: 0.95rem; }
 .basket-panel-head span { color: var(--muted); font-size: 0.8rem; }
 .basket-table tbody tr { cursor: pointer; }
+/* auto-fit computes column count from the row's OWN width and never lets a
+   row exceed its container, so when N columns don't fit at the minmax
+   floor, grid auto-placement wraps the overflow cell(s) onto an implicit
+   new line inside the same row instead of shrinking further or scrolling -
+   that's the "value drops below its row" bug. Fixed column count (driven by
+   the real symbol count via --corr-cols) + width: max-content lets the row
+   grow wider than its container instead, so .corr-matrix's overflow-x can
+   actually engage as a horizontal scrollbar when the panel is too narrow,
+   rather than the columns silently reflowing. */
 .corr-matrix { display: grid; gap: 0.35rem; overflow-x: auto; }
-.corr-row { display: grid; grid-template-columns: 4rem repeat(auto-fit, minmax(3.6rem, 1fr)); gap: 0.35rem; }
+.corr-row { display: grid; grid-template-columns: 4rem repeat(var(--corr-cols, 1), minmax(3.6rem, max-content)); gap: 0.35rem; width: max-content; min-width: 100%; }
 .corr-cell { display: grid; place-items: center; min-height: 2.4rem; border-radius: 10px; font-size: 0.78rem; font-variant-numeric: tabular-nums; border: 1px solid var(--border); background: var(--surface-2); }
 .corr-label, .corr-corner { background: transparent; border: none; color: var(--muted); font-weight: 600; }
 .corr-strong { background: var(--success-weak); border-color: var(--success-border); color: var(--success); }
@@ -804,16 +1933,31 @@ h2, h3 { letter-spacing: -0.01em; }
 .transit-stat span { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: .05em; }
 .transit-stat b { font-size: 0.92rem; font-variant-numeric: tabular-nums; }
 .transit-stage-list { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.transit-stage-pill { display: inline-flex; align-items: center; justify-content: space-between; gap: 0.45rem; border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.55rem; background: var(--surface-2); font-size: 0.78rem; }
+.transit-stage-pill { display: inline-flex; align-items: center; justify-content: space-between; gap: 0.45rem; border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.55rem; background: var(--surface-2); font-size: 0.78rem; min-width: 0; max-width: 100%; }
+.transit-stage-pill span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .transit-stage-pill b { font-variant-numeric: tabular-nums; }
 .component-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.85rem; }
 .component-card { border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(180deg, var(--panel-2) 0%, var(--panel) 100%); padding: 0.9rem 1rem; box-shadow: var(--shadow); }
 .component-card-head { display: flex; justify-content: space-between; gap: 1rem; align-items: baseline; margin-bottom: 0.75rem; }
 .component-card-head span { color: var(--muted); font-size: 0.8rem; }
 .component-metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.45rem 0.75rem; }
-.component-metric { display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem; border-bottom: 1px dotted var(--border); padding-bottom: 0.2rem; }
-.component-metric span { color: var(--muted); font-size: 0.78rem; }
-.component-metric b { font-variant-numeric: tabular-nums; }
+.component-metric { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 0.75rem; border-bottom: 1px dotted var(--border); padding-bottom: 0.2rem; min-width: 0; }
+.component-metric span { color: var(--muted); font-size: 0.78rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.component-metric b { font-variant-numeric: tabular-nums; min-width: 0; }
+.component-metric-watermark { grid-column: 1 / -1; grid-template-columns: 1fr; gap: 0.3rem; align-items: start; }
+.component-metric-watermark span { white-space: normal; overflow: visible; text-overflow: clip; }
+.component-metric-watermark b { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.table-scroll {
+  overflow-x: auto;
+  margin-top: 0.6rem;
+  border-radius: 12px;
+}
+
+.table-scroll .data-table {
+  min-width: 680px;
+  margin-top: 0;
+}
 
 /* ---- global recovery/self-healing notices (App.jsx: RecoveryWatch) ----
    Fixed to one corner, narrow, no backdrop - deliberately never wide or
@@ -851,4 +1995,868 @@ h2, h3 { letter-spacing: -0.01em; }
   .basket-layout { grid-template-columns: 1fr; }
   .transit-stats { grid-template-columns: 1fr; }
   .component-metrics-grid { grid-template-columns: 1fr; }
+  .table-scroll .data-table { min-width: 620px; }
+}
+
+/* ---- Vantik premium micro-interactions: Markets / Orders ---- */
+.markets-page .market-watch-card,
+.orders-page .orders-basket-card,
+.orders-page .premium-ticket,
+.orders-page .orders-blotter-card {
+  transition: transform 0.16s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.markets-page .market-watch-card:hover,
+.orders-page .orders-basket-card:hover,
+.orders-page .premium-ticket:hover,
+.orders-page .orders-blotter-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.live-pill.on {
+  box-shadow: 0 0 0 1px var(--success-border), 0 0 0 6px color-mix(in oklab, var(--success) 10%, transparent);
+  animation: vantik-live-pulse 2.2s ease-in-out infinite;
+}
+
+.markets-page .list-row {
+  border-radius: 10px;
+  margin: 0.2rem 0;
+  padding: 0.62rem 0.5rem;
+  transition: transform 0.12s ease, background 0.16s ease, border-color 0.16s ease;
+  border: 1px solid transparent;
+}
+
+.markets-page .list-row:hover {
+  transform: translateX(1px);
+  background: color-mix(in oklab, var(--surface-2) 68%, transparent);
+  border-color: color-mix(in oklab, var(--accent-border) 56%, transparent);
+}
+
+.markets-page .list-row.active {
+  background: linear-gradient(140deg, color-mix(in oklab, var(--accent-weak) 94%, transparent), color-mix(in oklab, var(--surface-2) 60%, transparent));
+  border-color: var(--accent-border);
+}
+
+.markets-page .list-row.active .list-row-icon {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 24%, transparent);
+}
+
+/* Watchlist as a dense market table, not a card-per-symbol list - see
+   .data-table's own base rules for the shared glass-panel table look
+   every data grid in the app uses. */
+.tabular { font-variant-numeric: tabular-nums; }
+.market-table th:first-child, .market-table td:first-child { padding-left: 0.9rem; }
+.market-table tbody tr { cursor: pointer; }
+.market-table tbody tr.is-selected { background: var(--accent-weak); }
+.market-table tbody tr.is-selected:hover { background: color-mix(in oklab, var(--accent-weak) 160%, transparent); }
+.market-table-symbol { font-weight: 700; letter-spacing: 0.01em; }
+.market-status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
+.market-status-dot.live { background: var(--success); box-shadow: 0 0 6px color-mix(in oklab, var(--success) 65%, transparent); }
+.market-status-dot.idle { background: var(--muted); }
+
+/* Instrument Workspace tab bar (Markets.jsx) - Overview/Chart/Order Book/
+   News/Trades/Options/Fundamentals for the focused symbol, replacing the
+   earlier "every view stacked and scrolled past" layout. */
+.instrument-workspace { padding: 0.3rem 1rem 1rem; }
+.instrument-tabs {
+  display: flex; gap: 0.2rem; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); margin: 0 -1rem 1rem; padding: 0 1rem;
+}
+.instrument-tab {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--muted); font-size: 0.84rem; font-weight: 500;
+  padding: 0.6rem 0.7rem; cursor: pointer; display: flex; align-items: center; gap: 0.35rem;
+  transition: color .12s ease, border-color .12s ease;
+}
+.instrument-tab:hover { color: var(--text); }
+.instrument-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.soon-pill {
+  font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 0.05rem 0.4rem;
+}
+.instrument-tab-panel { min-height: 4rem; }
+.coming-soon { padding: 1rem 0.2rem; max-width: 40rem; }
+
+.markets-page .market-trade-cta .trade-cta {
+  min-width: 8.6rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.markets-page .market-trade-cta .trade-cta.buy {
+  box-shadow: 0 8px 20px color-mix(in oklab, var(--success) 30%, transparent);
+}
+
+.markets-page .market-trade-cta .trade-cta.sell {
+  box-shadow: 0 8px 20px color-mix(in oklab, var(--danger) 30%, transparent);
+}
+
+.markets-page .desk-status.ok {
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--panel) 84%, transparent) 0%, color-mix(in oklab, var(--accent-weak) 64%, transparent) 100%);
+}
+
+.orders-page .orders-basket-chips .chip.generate {
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 34%, transparent);
+}
+
+.orders-page .premium-ticket {
+  background: linear-gradient(160deg, color-mix(in oklab, var(--panel-2) 84%, transparent), color-mix(in oklab, var(--panel) 92%, transparent));
+}
+
+.orders-page .premium-ticket .submit-order {
+  letter-spacing: 0.02em;
+}
+
+.orders-page .premium-ticket .submit-order.buy {
+  box-shadow: 0 8px 20px color-mix(in oklab, var(--success) 26%, transparent);
+}
+
+.orders-page .premium-ticket .submit-order.sell {
+  box-shadow: 0 8px 20px color-mix(in oklab, var(--danger) 26%, transparent);
+}
+
+.orders-page .greeks-grid .greek {
+  background: linear-gradient(140deg, color-mix(in oklab, var(--input-bg) 92%, transparent), color-mix(in oklab, var(--panel) 86%, transparent));
+}
+
+.orders-page .status-badge.status-new {
+  animation: vantik-working-pulse 1.6s ease-in-out infinite;
+}
+
+.orders-page .data-table tbody tr {
+  transition: transform 0.1s ease, background 0.15s ease;
+}
+
+.orders-page .data-table tbody tr:hover {
+  transform: translateX(1px);
+}
+
+@keyframes vantik-live-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px var(--success-border), 0 0 0 6px color-mix(in oklab, var(--success) 10%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 1px var(--success-border), 0 0 0 10px color-mix(in oklab, var(--success) 5%, transparent);
+  }
+}
+
+@keyframes vantik-working-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+@media (max-width: 760px) {
+  .markets-page .market-hero-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .markets-page .market-trade-cta {
+    width: 100%;
+    flex-direction: row !important;
+  }
+
+  .markets-page .market-trade-cta .trade-cta {
+    flex: 1;
+  }
+}
+
+/* ---- Vantik route choreography (logged-in pages) ---- */
+.page {
+  animation: vantik-page-in 0.34s cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.page > * {
+  opacity: 0;
+  transform: translate3d(0, 8px, 0);
+  animation: vantik-section-in 0.42s cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.page > *:nth-child(1) { animation-delay: 20ms; }
+.page > *:nth-child(2) { animation-delay: 70ms; }
+.page > *:nth-child(3) { animation-delay: 120ms; }
+.page > *:nth-child(4) { animation-delay: 170ms; }
+.page > *:nth-child(5) { animation-delay: 220ms; }
+.page > *:nth-child(n + 6) { animation-delay: 260ms; }
+
+.markets-page .list-row,
+.orders-page .data-table tbody tr {
+  will-change: transform;
+}
+
+@keyframes vantik-page-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes vantik-section-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page,
+  .page > * {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- Vantik all-sections consistency pass ---- */
+.section-head,
+.ov-section-head,
+.basket-panel-head,
+.connector-header,
+.sync-card-head,
+.tp-head,
+.transit-card-head,
+.component-card-head {
+  position: relative;
+}
+
+.section-head::after,
+.ov-section-head::after,
+.basket-panel-head::after,
+.connector-header::after,
+.sync-card-head::after,
+.tp-head::after,
+.transit-card-head::after,
+.component-card-head::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -0.35rem;
+  width: 2.1rem;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in oklab, var(--accent) 20%, transparent));
+  opacity: 0.6;
+}
+
+.provider-card,
+.connector-card,
+.alert-card,
+.tp-card,
+.pressure-card,
+.component-card,
+.transit-card,
+.sync-card,
+.agent-card,
+.basket-panel,
+.analysis-panel,
+.query-side,
+.query-grid-scroll,
+.export-panel,
+.export-job-panel {
+  background: linear-gradient(155deg, color-mix(in oklab, var(--panel) 92%, transparent), color-mix(in oklab, var(--panel-2) 84%, transparent));
+  border-color: color-mix(in oklab, var(--border) 86%, var(--accent-border));
+  transition: transform 0.16s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.provider-card:hover,
+.connector-card:hover,
+.alert-card:hover,
+.tp-card:hover,
+.pressure-card:hover,
+.component-card:hover,
+.transit-card:hover,
+.sync-card:hover,
+.agent-card:hover,
+.basket-panel:hover,
+.analysis-panel:hover,
+.query-side:hover,
+.query-grid-scroll:hover,
+.export-panel:hover,
+.export-job-panel:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--accent-border);
+}
+
+.query-workspace,
+.basket-layout,
+.component-grid,
+.pressure-grid,
+.provider-grid,
+.connector-grid,
+.sync-grid,
+.tp-grid,
+.transit-grid,
+.alerts-grid {
+  gap: clamp(0.8rem, 1.3vw, 1.1rem);
+}
+
+.data-table {
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: 12px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--panel) 86%, transparent);
+}
+
+.data-table th {
+  background: color-mix(in oklab, var(--surface-2) 68%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.data-table tbody tr {
+  transition: background 0.14s ease, transform 0.1s ease;
+}
+
+.data-table tbody tr:hover {
+  background: color-mix(in oklab, var(--accent-weak) 58%, transparent);
+  transform: translateX(1px);
+}
+
+.chip,
+.target-chip,
+.signal-pill,
+.per-target-pill,
+.horizon-chip,
+.status-pill,
+.tier-badge,
+.env-badge,
+.paper-badge,
+.status-badge {
+  box-shadow: inset 0 1px 0 color-mix(in oklab, #ffffff 14%, transparent);
+}
+
+.form-row input,
+.form-row select,
+.inline-form input,
+.inline-form select,
+.ticket-row input,
+.ticket-row select,
+.query-editor,
+.target-select,
+.nl2q-input,
+.query-side select,
+.vantik-login input {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--input-bg) 96%, transparent), color-mix(in oklab, var(--panel) 76%, transparent));
+}
+
+.form-row input:focus,
+.form-row select:focus,
+.inline-form input:focus,
+.inline-form select:focus,
+.ticket-row input:focus,
+.ticket-row select:focus,
+.target-select:focus,
+.nl2q-input:focus,
+.query-side select:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 18%, transparent);
+}
+
+.ops-banner,
+.desk-status,
+.forecast-disclaimer,
+.query-warning,
+.depth-disclaimer {
+  backdrop-filter: blur(8px);
+}
+
+.live-tape,
+.news-feed,
+.recovery-stack {
+  scrollbar-width: thin;
+}
+
+.live-tape::-webkit-scrollbar,
+.news-feed::-webkit-scrollbar,
+.recovery-stack::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.query-grid td,
+.component-metric b,
+.transit-stat b,
+.pressure-row b,
+.tp-v,
+.latency-hist-value,
+.kpi-value,
+.hero-stat-value,
+.metric-value,
+.drill-row b {
+  font-feature-settings: "tnum";
+}
+
+@media (max-width: 900px) {
+  .section-head::after,
+  .ov-section-head::after,
+  .basket-panel-head::after,
+  .connector-header::after,
+  .sync-card-head::after,
+  .tp-head::after,
+  .transit-card-head::after,
+  .component-card-head::after {
+    width: 1.6rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-card,
+  .connector-card,
+  .alert-card,
+  .tp-card,
+  .pressure-card,
+  .component-card,
+  .transit-card,
+  .sync-card,
+  .agent-card,
+  .basket-panel,
+  .analysis-panel,
+  .query-side,
+  .query-grid-scroll,
+  .export-panel,
+  .export-job-panel,
+  .data-table tbody tr {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* ---- Page-specific rhythm tuning ---- */
+.metrics-page > *,
+.query-page > *,
+.query-analysis-page > * {
+  animation-duration: 0.34s;
+}
+
+.alerts-page > *,
+.audit-page > *,
+.subscribers-page > * {
+  animation-duration: 0.3s;
+}
+
+.fleet-page > *,
+.tickhouses-page > *,
+.topology-page > *,
+.autoscale-page > * {
+  animation-duration: 0.44s;
+}
+
+.metrics-page .card.highlight,
+.query-page .card.highlight,
+.query-analysis-page .card.highlight {
+  border-color: color-mix(in oklab, var(--accent-border) 86%, var(--border));
+  background:
+    linear-gradient(150deg,
+      color-mix(in oklab, var(--panel-2) 86%, transparent) 0%,
+      color-mix(in oklab, var(--accent-weak) 62%, transparent) 100%
+    );
+}
+
+.connectors-page .provider-card,
+.export-page .provider-card,
+.signals-page .card,
+.portfolio-page .card,
+.bot-page .card,
+.execution-page .card {
+  border-color: color-mix(in oklab, var(--border) 78%, var(--accent-border));
+}
+
+.alerts-page .alert-card.critical,
+.audit-page .activity-row .activity-icon.fail,
+.orders-page .ops-banner.err,
+.bot-page .ops-banner.err {
+  box-shadow: 0 10px 26px color-mix(in oklab, var(--danger) 20%, transparent);
+}
+
+.metrics-page .pressure-card,
+.metrics-page .component-card,
+.metrics-page .transit-card,
+.tickerplants-page .tp-card,
+.autoscale-page .sync-card {
+  background:
+    linear-gradient(165deg,
+      color-mix(in oklab, var(--panel-2) 90%, transparent),
+      color-mix(in oklab, var(--surface-2) 64%, transparent)
+    );
+}
+
+.metrics-page .kpi-row {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.metrics-page .adaptive-panel {
+  --panel-accent: var(--accent);
+  position: relative;
+  overflow: hidden;
+  border-color: color-mix(in oklab, var(--accent-border) 64%, var(--border));
+  background:
+    radial-gradient(120% 80% at 100% -20%, color-mix(in oklab, var(--accent) 10%, transparent), transparent 60%),
+    linear-gradient(165deg,
+      color-mix(in oklab, var(--panel-2) 92%, transparent),
+      color-mix(in oklab, var(--panel) 82%, transparent)
+    );
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--panel-accent) 18%, transparent), var(--shadow);
+}
+
+.metrics-page .adaptive-panel-latency { --panel-accent: #2dd4bf; }
+.metrics-page .adaptive-panel-transit { --panel-accent: #60a5fa; }
+.metrics-page .adaptive-panel-components { --panel-accent: #a78bfa; }
+.metrics-page .adaptive-panel-pressure { --panel-accent: #f59e0b; }
+.metrics-page .adaptive-panel-table { --panel-accent: #38bdf8; }
+
+.metrics-page .adaptive-panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(to bottom, color-mix(in oklab, var(--accent-border) 16%, transparent) 1px, transparent 1px);
+  background-size: 100% 18px;
+  opacity: 0.25;
+}
+
+.metrics-page .adaptive-panel::before {
+  content: "";
+  position: absolute;
+  left: 0.95rem;
+  right: 0.95rem;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--panel-accent) 64%, transparent), transparent);
+  pointer-events: none;
+}
+
+.metrics-page .adaptive-panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.metrics-page .adaptive-panel-headline {
+  display: grid;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
+}
+
+.metrics-page .adaptive-kicker {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: color-mix(in oklab, var(--panel-accent) 74%, var(--text) 26%);
+  font-weight: 700;
+}
+
+.metrics-page .adaptive-panel h3 {
+  letter-spacing: -0.015em;
+  font-size: clamp(1.02rem, 1.1vw, 1.2rem);
+  margin: 0;
+}
+
+.metrics-page .adaptive-panel .muted {
+  color: color-mix(in oklab, var(--muted) 90%, var(--text) 10%);
+}
+
+.metrics-page .adaptive-panel-transit .transit-grid,
+.metrics-page .adaptive-panel-components .component-grid,
+.metrics-page .adaptive-panel-pressure .pressure-grid {
+  margin-top: 1rem;
+}
+
+.metrics-page .adaptive-panel-transit .transit-grid,
+.metrics-page .adaptive-panel-components .component-grid {
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+}
+
+.metrics-page .transit-card,
+.metrics-page .component-card,
+.metrics-page .pressure-card {
+  border-radius: 16px;
+  border-color: color-mix(in oklab, var(--border) 84%, var(--panel-accent));
+}
+
+.metrics-page .transit-card-head,
+.metrics-page .component-card-head,
+.metrics-page .pressure-head {
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+}
+
+.metrics-page .transit-card-head strong,
+.metrics-page .component-card-head strong {
+  font-size: 0.98rem;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metrics-page .component-card-head span,
+.metrics-page .transit-card-head > span {
+  border: 1px solid color-mix(in oklab, var(--panel-accent) 44%, var(--border));
+  border-radius: 999px;
+  padding: 0.16rem 0.5rem;
+  background: color-mix(in oklab, var(--panel-accent) 18%, transparent);
+}
+
+.metrics-page .transit-stat,
+.metrics-page .component-metric {
+  background: color-mix(in oklab, var(--surface-2) 68%, transparent);
+}
+
+.metrics-page .component-metric {
+  border-radius: 8px;
+  padding: 0.34rem 0.5rem;
+  border-bottom: none;
+}
+
+.metrics-page .component-metric-watermark {
+  background: color-mix(in oklab, var(--surface-2) 54%, transparent);
+}
+
+.metrics-page .transit-stage-pill {
+  background: color-mix(in oklab, var(--surface-2) 78%, transparent);
+}
+
+.metrics-page .table-scroll {
+  border: 1px solid color-mix(in oklab, var(--border) 76%, transparent);
+  background: color-mix(in oklab, var(--panel) 76%, transparent);
+}
+
+.metrics-page .table-scroll .data-table {
+  border: none;
+  border-radius: 0;
+  font-size: 0.84rem;
+}
+
+.metrics-page .adaptive-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-feature-settings: "tnum";
+}
+
+.metrics-page .adaptive-table thead th {
+  font-size: 0.69rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: color-mix(in oklab, var(--muted) 86%, var(--text) 14%);
+  padding-top: 0.68rem;
+  padding-bottom: 0.68rem;
+}
+
+.metrics-page .adaptive-table tbody td {
+  padding-top: 0.58rem;
+  padding-bottom: 0.58rem;
+  line-height: 1.24;
+}
+
+.metrics-page .adaptive-table tbody tr:nth-child(odd) {
+  background: color-mix(in oklab, var(--surface-2) 44%, transparent);
+}
+
+.metrics-page .adaptive-table tbody tr:nth-child(even) {
+  background: color-mix(in oklab, var(--panel) 84%, transparent);
+}
+
+.metrics-page .adaptive-table tbody tr:hover {
+  background: color-mix(in oklab, var(--panel-accent) 20%, transparent);
+  transform: none;
+}
+
+.metrics-page .adaptive-transit-table td:nth-child(1),
+.metrics-page .adaptive-transit-table td:nth-child(2) {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.metrics-page .adaptive-transit-table td:nth-child(4),
+.metrics-page .adaptive-transit-table td:nth-child(5),
+.metrics-page .adaptive-transit-table td:nth-child(6) {
+  text-align: right;
+  font-weight: 600;
+}
+
+.metrics-page .adaptive-health-table td:nth-child(1) {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.metrics-page .adaptive-health-table td:nth-child(2),
+.metrics-page .adaptive-health-table td:nth-child(3) {
+  text-align: right;
+  font-weight: 600;
+}
+
+.metrics-page .table-scroll .data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.metrics-page .table-scroll .data-table td:nth-child(1),
+.metrics-page .table-scroll .data-table td:nth-child(2) {
+  white-space: nowrap;
+}
+
+.metrics-page .table-scroll .data-table td:nth-child(3) {
+  max-width: 20rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metrics-page .latency-hist-row {
+  grid-template-columns: 3.6rem 1fr 5.4rem;
+}
+
+.metrics-page .latency-hist-value {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.metrics-page .transit-stage-pill b,
+.metrics-page .transit-stat b,
+.metrics-page .component-metric b,
+.metrics-page .pressure-row b {
+  letter-spacing: -0.01em;
+}
+
+.metrics-page .adaptive-panel-transit .transit-card,
+.metrics-page .adaptive-panel-components .component-card,
+.metrics-page .adaptive-panel-pressure .pressure-card {
+  animation: adaptive-rise 0.36s ease both;
+}
+
+.metrics-page .adaptive-panel-transit .transit-card:nth-child(2),
+.metrics-page .adaptive-panel-components .component-card:nth-child(2),
+.metrics-page .adaptive-panel-pressure .pressure-card:nth-child(2) {
+  animation-delay: 0.04s;
+}
+
+.metrics-page .adaptive-panel-transit .transit-card:nth-child(3),
+.metrics-page .adaptive-panel-components .component-card:nth-child(3),
+.metrics-page .adaptive-panel-pressure .pressure-card:nth-child(3) {
+  animation-delay: 0.08s;
+}
+
+.metrics-page .adaptive-panel-transit .transit-card:nth-child(4),
+.metrics-page .adaptive-panel-components .component-card:nth-child(4),
+.metrics-page .adaptive-panel-pressure .pressure-card:nth-child(4) {
+  animation-delay: 0.12s;
+}
+
+@keyframes adaptive-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .metrics-page .adaptive-panel-transit .transit-card,
+  .metrics-page .adaptive-panel-components .component-card,
+  .metrics-page .adaptive-panel-pressure .pressure-card {
+    animation: none !important;
+  }
+}
+
+.metrics-page .card h3,
+.autoscale-page .card h3 {
+  letter-spacing: -0.01em;
+}
+
+.autoscale-page .form-row.wrap > label {
+  flex: 1 1 11rem;
+  min-width: 9.5rem;
+}
+
+.autoscale-page .sync-step-labels {
+  gap: 0.45rem;
+}
+
+.autoscale-page .sync-step-labels span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portfolio-page .desk-card,
+.query-page .query-workspace,
+.query-analysis-page .query-workspace {
+  border-radius: 14px;
+}
+
+.model-settings-page .card,
+.infra-settings-page .card,
+.users-page .card,
+.feedhandlers-page .card {
+  border-left: 2px solid color-mix(in oklab, var(--accent) 35%, transparent);
+}
+
+@media (max-width: 760px) {
+  .metrics-page .kpi-row {
+    grid-template-columns: 1fr;
+  }
+
+  .metrics-page .adaptive-panel-transit .transit-grid,
+  .metrics-page .adaptive-panel-components .component-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .metrics-page .adaptive-panel::after {
+    background-size: 100% 22px;
+    opacity: 0.2;
+  }
+
+  .metrics-page .adaptive-kicker {
+    letter-spacing: 0.09em;
+  }
+
+  .metrics-page .transit-card,
+  .metrics-page .component-card,
+  .metrics-page .pressure-card {
+    border-radius: 14px;
+  }
+
+  .metrics-page .adaptive-table thead th {
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+  }
+
+  .metrics-page .adaptive-table tbody td {
+    padding-top: 0.52rem;
+    padding-bottom: 0.52rem;
+    font-size: 0.79rem;
+  }
+
+  .autoscale-page .form-row.wrap > label {
+    min-width: 100%;
+  }
+
+  .metrics-page > *,
+  .query-page > *,
+  .query-analysis-page > *,
+  .alerts-page > *,
+  .audit-page > *,
+  .subscribers-page > *,
+  .fleet-page > *,
+  .tickhouses-page > *,
+  .topology-page > *,
+  .autoscale-page > * {
+    animation-duration: 0.28s;
+  }
 }

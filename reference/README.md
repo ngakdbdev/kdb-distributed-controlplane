@@ -13,9 +13,10 @@ run `git submodule update --init`. Nothing from it is duplicated into our git hi
 
 **What it is NOT**:
 - **Not the kdb+/KDB-X engine.** The actual `q` binary and license are proprietary, require a KX
-  account, and are deliberately excluded from this repo (see `.gitignore` and
-  `data-plane/docker/kdbx/PUT_KDBX_BINARY_HERE.txt`). Nothing here changes that - you still need
-  to download KDB-X Community Edition yourself.
+  account, and are deliberately excluded from this repo (see `.gitignore`) - every kdb+ container
+  pulls its own binary from the KX portal at start (`data-plane/docker/kdb-entrypoint.sh`), rather
+  than anything being staged locally. Nothing here changes that - you still need your own free
+  KDB-X Community Edition account and bearer token.
 - **Not a build dependency.** Nothing in `docker-compose.yml`, the Dockerfiles, or the Helm chart
   references this folder. It's here to read, not to run against.
 - **Not license-cleared for redistribution as-is.** KX's own README for that repo doesn't attach a

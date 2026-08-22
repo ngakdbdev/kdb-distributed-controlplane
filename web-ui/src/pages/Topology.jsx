@@ -73,7 +73,7 @@ export default function Topology({ onNavigate }) {
   const runningCount = allSvc.filter(([, s]) => s === "running").length;
 
   return (
-    <div className="page">
+    <div className="page topology-page">
       <h2>Topology</h2>
       <p className="muted">
         The individual <strong>processes</strong> of your running tick chain, one card per shard, each

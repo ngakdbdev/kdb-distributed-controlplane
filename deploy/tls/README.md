@@ -1,6 +1,6 @@
-# HTTPS for TickForge
+# HTTPS for Vantik
 
-Serve TickForge over HTTPS at your own domain (e.g. `tickforge.qbytecomputing.com`),
+Serve Vantik over HTTPS at your own domain (e.g. `vantik.yourcompany.com`),
 with plain HTTP redirected to HTTPS. Caddy sits in front of the stack as the only
 public entrypoint: it terminates TLS, auto-obtains and renews a Let's Encrypt
 certificate, and proxies inward to the app. The app's plain-HTTP port is no longer
@@ -11,21 +11,22 @@ config is host-agnostic.
 
 ## On your VM (now)
 
-1. **DNS** — at whoever hosts DNS for `qbytecomputing.com`, add an **A record**:
-   `tickforge` → your VM's public IP. (Confirm with `dig +short tickforge.qbytecomputing.com`.)
+1. **DNS** — at whoever hosts DNS for your domain, add an **A record**:
+   `vantik` (or whatever subdomain you want) → your VM's public IP. (Confirm with
+   `dig +short vantik.yourcompany.com`.)
 2. **Firewall** — open inbound **TCP 80 and 443** to the VM.
 3. **Config** — in `.env`:
    ```
-   TICKFORGE_DOMAIN=tickforge.qbytecomputing.com
-   ACME_EMAIL=admin@qbytecomputing.com          # for renewal notices
-   PUBLIC_BASE_URL=https://tickforge.qbytecomputing.com
+   TLS_DOMAIN=vantik.yourcompany.com
+   ACME_EMAIL=admin@yourcompany.com          # for renewal notices
+   PUBLIC_BASE_URL=https://vantik.yourcompany.com
    ```
 4. **Run**:
    ```
    docker compose -f docker-compose.yml -f deploy/tls/docker-compose.tls.yml up -d --build
    ```
    Caddy provisions the certificate on first start (needs DNS resolving + port 80
-   reachable). Then open `https://tickforge.qbytecomputing.com`; `http://…`
+   reachable). Then open `https://vantik.yourcompany.com`; `http://…`
    redirects to it.
 
 Port 80 must stay open even though the app is HTTPS-only — Let's Encrypt uses it
@@ -41,17 +42,18 @@ Encrypt and no public reachability are needed.
    (`C:\Windows\System32\drivers\etc\hosts` as Administrator, or
    `/etc/hosts`):
    ```
-   127.0.0.1 tickforge.qbytecomputing.com
+   127.0.0.1 vantik.yourcompany.com
    ```
+   (or whatever you set `TLS_DOMAIN` to in `.env`).
 2. Bring down the Let's Encrypt overlay if it's running (it will be stuck
    retrying a cert it can't get), then start the local one:
    ```
    docker compose -f docker-compose.yml -f deploy/tls/docker-compose.tls.yml down
    docker compose -f docker-compose.yml -f deploy/tls/docker-compose.local-tls.yml up -d --build
    ```
-3. Open `https://tickforge.qbytecomputing.com` and accept the browser's
-   "not trusted" warning — expected for a self-signed cert. (To remove the
-   warning, export and trust Caddy's root CA from the `caddy-local-data` volume.)
+3. Open `https://$TLS_DOMAIN` and accept the browser's "not trusted" warning
+   — expected for a self-signed cert. (To remove the warning, export and
+   trust Caddy's root CA from the `caddy-local-data` volume.)
 
 This is only for local testing. On a real host use `docker-compose.tls.yml`
 (Let's Encrypt) with public DNS pointing at the machine.
@@ -78,7 +80,7 @@ If you must use a certificate from your own CA instead of Let's Encrypt, mount t
 cert + key into the Caddy container and replace the site block in `Caddyfile`:
 
 ```
-{$TICKFORGE_DOMAIN} {
+{$TLS_DOMAIN} {
 	tls /etc/caddy/cert.pem /etc/caddy/key.pem
 	reverse_proxy web-ui:80
 }
@@ -91,3 +93,18 @@ Never commit the private key — mount it as a secret/file on the host.
 Only Caddy's 80/443 are exposed. `control-api`, `gateway`, the kdb processes, and
 the databases stay on the internal Docker network with no host ports. Keep it that
 way in any environment — nothing but the edge should be publicly reachable.
+
+## Migrating an existing deployment from `TICKFORGE_DOMAIN` to `TLS_DOMAIN`
+
+The env var Caddy reads was renamed from `TICKFORGE_DOMAIN` to `TLS_DOMAIN` when
+the product was rebranded from TickForge to Vantik. If you have an existing
+deployment still running under its old `tickforge.*` domain:
+
+1. It keeps working as-is — `docker-compose.local-tls.yml` still defaults
+   `TLS_DOMAIN` to the old `tickforge.qbytecomputing.com` value if you don't
+   set it, so nothing breaks silently.
+2. To actually move to a new domain: register the new DNS A record, set
+   `TLS_DOMAIN` (and `PUBLIC_BASE_URL`) in `.env` to the new domain, then
+   redeploy Caddy (`docker compose -f docker-compose.yml -f
+   deploy/tls/docker-compose.tls.yml up -d --force-recreate caddy`). Caddy
+   will provision a fresh certificate for the new domain automatically.

@@ -21,6 +21,7 @@ from typing import Callable, Optional
 
 from sqlmodel import Session, select
 
+from . import alpaca_broker
 from . import oms
 from . import query_service as qs
 from . import topology
@@ -42,6 +43,13 @@ TAPE_LIMIT_PER_SHARD = 1200
 _SHARD_COUNT = int(os.environ.get("SHARD_COUNT", "2"))
 
 ConnectFn = Callable[[str], object]
+
+# Cached broker-tradability check - shared with oms.AlpacaRouter.fill's own
+# pre-flight check (and thus with manual order placement too) via
+# app.alpaca_broker.cached_is_tradable; see that function's own docstring
+# for why this matters and why it's cached. Kept as a module-level alias
+# here so this file's own call site below doesn't change.
+_is_broker_tradable = alpaca_broker.cached_is_tradable
 
 
 def _connect_shard(shard_id: str):
@@ -225,6 +233,11 @@ def evaluate_tenant(session: Session, config: BotConfig, connect: ConnectFn = _c
             if forecast["trend"] != "up":
                 _log(session, tenant_id, symbol, "hold",
                     f"flat, trend is {forecast['trend']} - waiting for momentum up")
+                continue
+
+            if not _is_broker_tradable(symbol):
+                _log(session, tenant_id, symbol, "skip",
+                    f"{symbol} isn't tradable on the configured broker - not attempting an order")
                 continue
 
             stop_price = last * (1 - stop_loss_pct / 100.0)

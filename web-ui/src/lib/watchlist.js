@@ -1,10 +1,11 @@
-// Shared symbol basket between Markets and Portfolio, persisted to
+// Shared symbol basket between Markets, Orders, and Portfolio, persisted to
 // localStorage so it survives navigation between pages (each page mounts
-// fresh - see App.jsx) and page reloads. Markets adds to it (SymbolPicker,
-// "Your positions" chips, a deep-link symbol); Portfolio reads it to show a
-// watchlist row for anything you're tracking but don't hold yet, so a symbol
-// added on Markets shows up on Portfolio without any extra step.
-const KEY = "tickforge_watchlist_v1";
+// fresh - see App.jsx) and page reloads. Markets and Orders both add to it
+// (SymbolPicker, "Your positions" chips, a deep-link symbol); Portfolio
+// reads it to show a watchlist row for anything you're tracking but don't
+// hold yet, so a symbol added on Markets or Orders shows up on Portfolio
+// without any extra step.
+const KEY = "vantik_watchlist_v1";
 const MAX = 12;
 
 export function loadWatchlist() {

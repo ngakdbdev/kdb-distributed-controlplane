@@ -53,7 +53,7 @@ export default function ModelSettings() {
   const isLocal = form.provider === "openai_compatible" && /ollama|localhost|127\.0\.0\.1|host\.docker\.internal/i.test(form.base_url || "");
 
   return (
-    <div className="page">
+    <div className="page model-settings-page">
       <h2>Model settings</h2>
       <p className="muted">
         Controls which model backs the query workspace's "Generate q", "Generate code", and "Analyze"

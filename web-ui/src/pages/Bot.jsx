@@ -36,6 +36,27 @@ export default function Bot() {
   const [error, setError] = useState("");
   const [closingSymbol, setClosingSymbol] = useState(null);
   const [saving, setSaving] = useState(false);
+  // the bot places orders through the exact same _router() as a human's
+  // order ticket (app/signal_engine.py -> place_market_order_internal) - so
+  // its own real routing mode is whatever /trading/permission reports, not
+  // always "paper". See Orders.jsx for the identical badge/banner pattern.
+  const [perm, setPerm] = useState({ mode: "paper", live_routing: false });
+  // Alpaca's real NYSE-calendar session clock (/v2/clock) - only meaningful
+  // when perm.mode routes through Alpaca; crypto trades 24/7 and IBKR isn't
+  // covered by this endpoint at all (see api.marketClock's own comment).
+  // {configured:false} (the default) means "no Alpaca broker set up",
+  // deliberately distinct from "closed" - one is a config fact, the other
+  // is a session fact, and conflating them would misreport paper-mode
+  // deployments (no Alpaca creds) as if the market were shut.
+  const [clock, setClock] = useState({ configured: false });
+  // TradingView alert-webhook config (routers/tradingview_webhook.py) - a
+  // second, independent automated order-placing surface alongside the bot
+  // above. Same server-side singleton-per-tenant shape as `config`, loaded
+  // separately since it has nothing to do with the momentum strategy.
+  const [tv, setTv] = useState(null);
+  const [tvSaving, setTvSaving] = useState(false);
+  const [tvError, setTvError] = useState("");
+  const [tvCopied, setTvCopied] = useState("");
   const pollRef = useRef(null);
 
   async function refresh() {
@@ -53,11 +74,24 @@ export default function Bot() {
     }
   }
 
+  useEffect(() => { api.tradingPermission().then(setPerm).catch(() => {}); }, []);
+
+  useEffect(() => {
+    if (!perm.mode.startsWith("alpaca")) return undefined;
+    let cancelled = false;
+    const poll = () => api.marketClock().then((c) => { if (!cancelled) setClock(c); }).catch(() => {});
+    poll();
+    const id = setInterval(poll, 30_000); // matches the server's own 20s clock-cache TTL closely enough
+    return () => { cancelled = true; clearInterval(id); };
+  }, [perm.mode]);
+
   useEffect(() => {
     refresh();
     pollRef.current = setInterval(refresh, REFRESH_MS);
     return () => clearInterval(pollRef.current);
   }, []);
+
+  useEffect(() => { api.getTradingViewWebhookConfig().then(setTv).catch(() => {}); }, []);
 
   async function saveConfig(patch) {
     setSaving(true);
@@ -85,6 +119,49 @@ export default function Bot() {
     }
   }
 
+  // For a position Close can never succeed on (the broker rejects every
+  // order for it - confirmed live with a demo-only symbol Alpaca doesn't
+  // list) - drops it from local tracking without a broker order. Confirm
+  // first since, unlike Close, this does NOT verify anything at the broker.
+  async function forceClearPosition(symbol) {
+    if (!window.confirm(
+      `Force-clear ${symbol} from the bot's tracking WITHOUT placing a broker order?\n\n` +
+      "Only do this if Close keeps failing (e.g. the broker doesn't recognize the symbol). " +
+      "If a real position still exists at the broker, you'll need to close it there directly."
+    )) return;
+    setClosingSymbol(symbol);
+    try {
+      await api.forceClearBotPosition(symbol);
+      await refresh();
+    } catch (err) {
+      setError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setClosingSymbol(null);
+    }
+  }
+
+  // Full reset: force-clears every open position and empties the basket -
+  // for when the bot is stuck (a held position blocking every basket edit,
+  // per put_config's guard) and clearing symbols one at a time is more
+  // friction than starting over.
+  async function hardResetBot() {
+    if (!window.confirm(
+      "Hard reset the bot?\n\nThis force-clears every open position from tracking (without placing " +
+      "broker orders - verify real broker state yourself if unsure), empties the basket, and stops the bot."
+    )) return;
+    setSaving(true);
+    try {
+      const updated = await api.hardResetBot();
+      setConfig(updated);
+      setDraft(updated);
+      await refresh();
+    } catch (err) {
+      setError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   // Adding a symbol is always safe. Removing one the bot currently holds a
   // position in is not - the server rejects that (see routers/bot.py) so
   // the position stays monitored; surface that rejection rather than
@@ -94,8 +171,56 @@ export default function Bot() {
     saveConfig({ symbols: capped });
   }
 
+  async function saveTvConfig(patch) {
+    setTvSaving(true);
+    try {
+      const updated = await api.putTradingViewWebhookConfig(patch);
+      setTv(updated);
+      setTvError("");
+    } catch (err) {
+      setTvError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setTvSaving(false);
+    }
+  }
+
+  function handleTvAllowlistChange(nextSymbols) {
+    saveTvConfig({ allowed_symbols: nextSymbols.map((s) => s.toUpperCase()) });
+  }
+
+  async function rotateTvToken() {
+    if (!window.confirm(
+      "Rotate the webhook token?\n\nThe current webhook URL will stop working immediately - " +
+      "update the URL in every TradingView alert that uses it, or they'll silently fail with a 404."
+    )) return;
+    setTvSaving(true);
+    try {
+      const updated = await api.rotateTradingViewWebhookToken();
+      setTv(updated);
+      setTvError("");
+    } catch (err) {
+      setTvError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setTvSaving(false);
+    }
+  }
+
+  function copyTv(text, label) {
+    navigator.clipboard?.writeText(text).then(() => {
+      setTvCopied(label);
+      setTimeout(() => setTvCopied(""), 1500);
+    }).catch(() => {});
+  }
+
+  const modeLabel = {
+    paper: "PAPER", "alpaca-paper": "ALPACA PAPER", "alpaca-live": "⚠ ALPACA LIVE — REAL MONEY",
+    "ibkr-paper": "IBKR PAPER", "ibkr-live": "⚠ IBKR LIVE — REAL MONEY",
+    misconfigured: "⚠ MISCONFIGURED",
+  }[perm.mode] || "PAPER";
+  const loudBadge = perm.live_routing || perm.mode === "misconfigured";
+
   if (loading) {
-    return <div className="page"><h2>Trading bot <span className="paper-badge">PAPER</span></h2><p className="muted">Loading…</p></div>;
+    return <div className="page bot-page"><h2>Trading bot <span className={`paper-badge${loudBadge ? " live" : ""}`}>{modeLabel}</span></h2><p className="muted">Loading…</p></div>;
   }
 
   const openCount = positions.length;
@@ -103,18 +228,59 @@ export default function Bot() {
   const usedRisk = positions.reduce((sum, p) => sum + p.qty * (p.entry_price - p.stop_price), 0);
   const availableRisk = Math.max(0, totalRiskCap - usedRisk);
   const fieldsLocked = config.enabled || openCount > 0;
+  // Switching manual/auto mode is safe even with an open position - the
+  // server has no restriction on it either (routers/bot.py's put_config
+  // sets config.mode unconditionally), and existing positions keep being
+  // watched for their exit regardless of mode (see the auto-mode copy
+  // below). Only lock the mode TOGGLE while the bot is actively RUNNING
+  // (mid-flight mode changes to a live loop are the genuinely confusing
+  // case) - fieldsLocked above stays broader (also locks on a merely-held
+  // leftover position) for the sizing fields, where changing risk_pct/
+  // paper_capital while a position is open really would leave that
+  // position's stop-loss sized against stale numbers.
+  const modeLocked = config.enabled;
   const canStart = config.mode === "auto" ? true : (config.symbols || []).length > 0;
   const lastActivity = log[0]?.ts ? new Date(log[0].ts).toLocaleTimeString() : null;
+  const modeCopy = {
+    paper: "no real broker, no bank account - every fill is simulated.",
+    "alpaca-paper": "orders route to a real Alpaca account's paper-trading simulation - real order mechanics against live prices, zero real money at risk.",
+    "alpaca-live": "orders route to a real Alpaca account with REAL MONEY - every fill below is a real trade.",
+    "ibkr-paper": "orders route to a real Interactive Brokers account's paper-trading simulation via a Client Portal Gateway - zero real money at risk.",
+    "ibkr-live": "orders route to a real Interactive Brokers account with REAL MONEY - every fill below is a real trade.",
+    misconfigured: `order routing is misconfigured (${perm.error || "both Alpaca and IBKR appear to be configured at once"}) - the bot cannot place orders until this is fixed.`,
+  }[perm.mode] || "no real broker, no bank account - every fill is simulated.";
+  const webhookUrl = tv ? `${window.location.origin}/api/webhooks/tradingview/${tv.token}` : "";
+  const tvMessageTemplate = '{"symbol": "{{ticker}}", "side": "{{strategy.order.action}}", "qty": "{{strategy.order.contracts}}"}';
 
   return (
-    <div className="page">
-      <h2>Trading bot <span className="paper-badge">PAPER</span></h2>
+    <div className="page bot-page">
+      <h2>Trading bot <span className={`paper-badge${loudBadge ? " live" : ""}`}>{modeLabel}</span>
+        {clock.configured && (
+          <span className="paper-badge sm" style={{ marginLeft: "0.3rem" }} title={
+            clock.is_open
+              ? `Alpaca equities session open - next close ${clock.next_close ? new Date(clock.next_close).toLocaleTimeString() : "unknown"}`
+              : `Alpaca equities session closed - next open ${clock.next_open ? new Date(clock.next_open).toLocaleString() : "unknown"}`
+          }>
+            <span className={`market-status-dot ${clock.is_open ? "live" : "idle"}`} style={{ marginRight: "0.3rem" }} />
+            {clock.is_open ? "EQUITIES OPEN" : "EQUITIES CLOSED"}
+          </span>
+        )}
+      </h2>
       <p className="muted">
-        A momentum-following paper bot with a hard <strong>{config.max_risk_pct}% capital risk cap</strong>,
+        A momentum-following bot with a hard <strong>{config.max_risk_pct}% capital risk cap</strong>,
         shared across every open position (not a fresh 1% each). It runs server-side on a poll interval -
-        no real broker, no bank account - and keeps running (and watching its stop-losses) whether or not
-        this page is open.
+        {" "}{modeCopy} It keeps running (and watching its stop-losses) whether or not this page is open.
       </p>
+      {perm.live_routing && (
+        <div className="ops-banner err">
+          <div>Live order routing is active for this deployment ({perm.mode === "ibkr-live" ? "IBKR_TRADING_MODE" : "ALPACA_TRADING_MODE"}=live).
+          This bot places REAL trades with REAL money, autonomously, on every enabled poll cycle - review its
+          config below before leaving it running.</div>
+        </div>
+      )}
+      {perm.mode === "misconfigured" && (
+        <div className="ops-banner err"><div>{perm.error}</div></div>
+      )}
       {error && <div className="error">{error}</div>}
 
       <div className="card">
@@ -122,9 +288,9 @@ export default function Bot() {
           <span className={`live-pill ${config.enabled ? "on" : "off"}`}>{config.enabled ? "● RUNNING" : "○ stopped"}</span>
         </div>
         <div className="chip-list" style={{ marginBottom: "0.75rem" }}>
-          <button className={`chip ${config.mode === "manual" ? "generate" : ""}`} disabled={fieldsLocked}
+          <button className={`chip ${config.mode === "manual" ? "generate" : ""}`} disabled={modeLocked}
                   onClick={() => saveConfig({ mode: "manual" })}>Manual basket</button>
-          <button className={`chip ${config.mode === "auto" ? "generate" : ""}`} disabled={fieldsLocked}
+          <button className={`chip ${config.mode === "auto" ? "generate" : ""}`} disabled={modeLocked}
                   onClick={() => saveConfig({ mode: "auto" })}>Auto-screen universe</button>
         </div>
 
@@ -180,6 +346,10 @@ export default function Bot() {
           <button className="primary" style={{ background: config.enabled ? "var(--danger)" : "var(--success)" }}
                   onClick={() => saveConfig({ enabled: !config.enabled })} disabled={!canStart || saving}>
             {config.enabled ? "Stop bot" : "Start bot"}
+          </button>{" "}
+          <button className="chip" disabled={saving} onClick={hardResetBot}
+                  title="Force-clears every open position and empties the basket - for when the bot is stuck">
+            Hard reset
           </button>
           <span className="muted" style={{ marginLeft: "0.75rem" }}>
             {!config.enabled && openCount > 0
@@ -219,6 +389,10 @@ export default function Bot() {
                   <td>
                     <button className="chip" disabled={closingSymbol === p.symbol} onClick={() => closePositionManually(p.symbol)}>
                       {closingSymbol === p.symbol ? "Closing…" : "Close"}
+                    </button>{" "}
+                    <button className="chip" disabled={closingSymbol === p.symbol} onClick={() => forceClearPosition(p.symbol)}
+                            title="Drops this position from tracking WITHOUT a broker order - use only if Close keeps failing">
+                      Force clear
                     </button>
                   </td>
                 </tr>
@@ -227,6 +401,70 @@ export default function Bot() {
           </table>
         </div>
       )}
+
+      <div className="card" style={{ padding: "0.4rem 1rem" }}>
+        <div className="section-head"><h3>TradingView webhook</h3>
+          {tv && <span className={`live-pill ${tv.enabled ? "on" : "off"}`}>{tv.enabled ? "● ENABLED" : "○ disabled"}</span>}
+        </div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          A second, independent automated order surface: TradingView alerts (Pine Script strategies or
+          manual alerts) can place real orders here through the exact same risk-gated order path as
+          everything else on this page — {perm.mode === "paper" ? "simulated fills, same as the bot above." : modeCopy}{" "}
+          Only symbols explicitly added to the allowlist below can ever be traded through it.
+        </p>
+        {!tv ? <p className="muted">Loading…</p> : (
+          <>
+            {tvError && <div className="error">{tvError}</div>}
+            <div style={{ minWidth: "16rem", marginBottom: "0.75rem" }}>
+              <label className="muted" style={{ display: "block", marginBottom: "0.25rem" }}>Allowed symbols</label>
+              <SymbolPicker value={tv.allowed_symbols || []} onChange={handleTvAllowlistChange} placeholder="add a symbol…" />
+            </div>
+            <div className="form-row wrap">
+              <label className="muted">Max qty per order
+                <input type="number" min="0" step="0.01" value={tv.max_qty}
+                       onChange={(e) => setTv((t) => ({ ...t, max_qty: e.target.value }))}
+                       onBlur={() => saveTvConfig({ max_qty: Number(tv.max_qty) || 0 })}
+                       style={{ width: "6rem", display: "block" }} />
+              </label>
+            </div>
+            <div style={{ marginTop: "0.75rem" }}>
+              <button className="primary" style={{ background: tv.enabled ? "var(--danger)" : "var(--success)" }}
+                      onClick={() => saveTvConfig({ enabled: !tv.enabled })}
+                      disabled={tvSaving || (!tv.enabled && (tv.allowed_symbols || []).length === 0)}>
+                {tv.enabled ? "Disable webhook" : "Enable webhook"}
+              </button>{" "}
+              <button className="chip" disabled={tvSaving} onClick={rotateTvToken}>Rotate token</button>
+              {tv.last_triggered_at && (
+                <span className="muted" style={{ marginLeft: "0.75rem" }}>
+                  last triggered {new Date(tv.last_triggered_at).toLocaleString()}
+                </span>
+              )}
+            </div>
+
+            <div style={{ marginTop: "1rem" }}>
+              <label className="muted" style={{ display: "block", marginBottom: "0.25rem" }}>
+                Webhook URL — paste into TradingView's alert "Webhook URL" field
+              </label>
+              <div className="form-row wrap" style={{ alignItems: "center" }}>
+                <code className="mono" style={{ wordBreak: "break-all" }}>{webhookUrl}</code>
+                <button className="chip" onClick={() => copyTv(webhookUrl, "url")}>{tvCopied === "url" ? "Copied" : "Copy"}</button>
+              </div>
+              <label className="muted" style={{ display: "block", margin: "0.75rem 0 0.25rem" }}>
+                Alert message — paste into TradingView's alert "Message" field
+              </label>
+              <div className="form-row wrap" style={{ alignItems: "center" }}>
+                <pre className="mono" style={{ margin: 0, whiteSpace: "pre-wrap" }}>{tvMessageTemplate}</pre>
+                <button className="chip" onClick={() => copyTv(tvMessageTemplate, "msg")}>{tvCopied === "msg" ? "Copied" : "Copy"}</button>
+              </div>
+              <p className="muted" style={{ fontSize: "0.8rem" }}>
+                The token in this URL is the only authentication TradingView's webhook can carry — treat it
+                like a password. If it ever leaks, rotate it above; every alert still configured with the old
+                URL will start failing immediately.
+              </p>
+            </div>
+          </>
+        )}
+      </div>
 
       <div className="card" style={{ padding: "0.4rem 1rem" }}>
         <h3>Bot activity</h3>

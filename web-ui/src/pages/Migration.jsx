@@ -43,7 +43,7 @@ export default function Migration() {
   }
 
   return (
-    <div className="page">
+    <div className="page migration-page">
       <h2>Migration assessment</h2>
       <p className="muted">
         Point this at your existing kdb+ scripts to get an effort estimate, then size and cost an equivalent

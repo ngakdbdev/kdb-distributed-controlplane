@@ -5,7 +5,7 @@ import { classifyShardSync, SYNC_STAGES } from "../lib/syncProgress.js";
 import { fmt } from "../lib/tradingCore.js";
 
 const POLL_MS = 3000;
-const POLICY_KEY = "tickforge_autoscale_policy_v1";
+const POLICY_KEY = "vantik_autoscale_policy_v1";
 const SAMPLE_WINDOW = 5;      // consecutive samples that must agree before recommending a change
 const COOLDOWN_MS = 5 * 60 * 1000;
 
@@ -14,8 +14,20 @@ function loadPolicy() {
     const saved = JSON.parse(localStorage.getItem(POLICY_KEY) || "null");
     if (saved) return saved;
   } catch { /* corrupt/old value - fall through to defaults */ }
-  return { targetMsgsPerShard: 400, scaleUpPct: 80, scaleDownPct: 20, minShards: 1, maxShards: 8, autoApply: false };
+  return {
+    targetMsgsPerShard: 400, scaleUpPct: 80, scaleDownPct: 20, minShards: 1, maxShards: 8, autoApply: false,
+    // gateway is a separate, horizontally-scalable tier from shard count (see
+    // helm values.yaml's gateway.* comment) - its own target/bounds, applied
+    // via the same provision command with shardCount left unchanged.
+    gatewayTargetReqsPerSec: 20, gatewayMinReplicas: 1, gatewayMaxReplicas: 6,
+  };
 }
+
+// there's no live "how many gateway replicas are running right now" signal
+// this page can read (no endpoint reports it), so it's operator-entered -
+// defaults to 1 (this chart's own default, see values.yaml gateway.replicaCount)
+// and persists across visits so re-entering it every time isn't necessary.
+const GW_REPLICAS_KEY = "vantik_autoscale_current_gateway_replicas";
 
 // Reads REAL live metrics (/metrics/snapshot, already used by Overview/
 // Metrics) and REAL current topology (/topology/status, already used by
@@ -34,22 +46,44 @@ export default function Autoscale() {
   const [agents, setAgents] = useState([]);
   const [selectedAgent, setSelectedAgent] = useState("");
   const [applying, setApplying] = useState(false);
-  const [lastApplied, setLastApplied] = useState(() => Number(localStorage.getItem("tickforge_autoscale_last_applied") || 0));
+  const [lastApplied, setLastApplied] = useState(() => Number(localStorage.getItem("vantik_autoscale_last_applied") || 0));
   const [error, setError] = useState("");
   const [syncStatuses, setSyncStatuses] = useState([]);
+  const [gwReqHistory, setGwReqHistory] = useState([]);
+  const [gwReqRate, setGwReqRate] = useState(0);
+  const [currentGatewayReplicas, setCurrentGatewayReplicas] = useState(
+    () => Number(localStorage.getItem(GW_REPLICAS_KEY) || 1));
+  const [gwApplying, setGwApplying] = useState(false);
   const prevRef = useRef(null);
   const lagHistoryRef = useRef(new Map());
 
   useEffect(() => { localStorage.setItem(POLICY_KEY, JSON.stringify(policy)); }, [policy]);
+  useEffect(() => { localStorage.setItem(GW_REPLICAS_KEY, String(currentGatewayReplicas)); }, [currentGatewayReplicas]);
   useEffect(() => { api.listAgents().then(setAgents).catch(() => setAgents([])); }, []);
 
   useEffect(() => {
     let closed = false;
     async function pull() {
       try {
-        const [snap, status] = await Promise.all([api.metricsSnapshot(), api.topologyStatus()]);
+        const [snap, status, qhist] = await Promise.all([
+          api.metricsSnapshot(), api.topologyStatus(), api.queryHistory(100).catch(() => ({ entries: [] })),
+        ]);
         if (closed) return;
         setTopo(status);
+        // gateway request rate: real query-path load, counted from actual
+        // executions in the last 10s window (query_profile.py's history -
+        // every gateway-routed query records here) rather than a synthetic
+        // signal. Window-based, not diffed against a running total, so it's
+        // unaffected by control-api restarts resetting query_profile's
+        // in-memory counter (documented in query_profile.py itself).
+        const nowIso = Date.now();
+        const recentReqs = (qhist.entries || []).filter((e) => {
+          const t = Date.parse(e.timestamp);
+          return Number.isFinite(t) && nowIso - t <= 10000;
+        });
+        const reqRate = recentReqs.length / 10;
+        setGwReqRate(reqRate);
+        setGwReqHistory((prev) => [...prev, reqRate].slice(-40));
         const total = (snap.componentMetrics || []).reduce((sum, row) => sum + (Number(row.tpRecv) || 0), 0);
         const now = Date.now();
         let rate = 0;
@@ -82,6 +116,7 @@ export default function Autoscale() {
   const inCooldown = cooldownRemaining > 0;
 
   const rec = computeRecommendation(samples, shardCount, policy);
+  const gwRec = computeGatewayRecommendation(gwReqRate, currentGatewayReplicas, policy);
 
   useEffect(() => {
     if (!policy.autoApply || rec.action === "hold" || inCooldown || applying || !selectedAgent) return;
@@ -97,7 +132,7 @@ export default function Autoscale() {
       await api.provision(Number(selectedAgent), targetShardCount, note);
       const now = Date.now();
       setLastApplied(now);
-      localStorage.setItem("tickforge_autoscale_last_applied", String(now));
+      localStorage.setItem("vantik_autoscale_last_applied", String(now));
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
     } finally {
@@ -105,8 +140,27 @@ export default function Autoscale() {
     }
   }
 
+  async function applyGateway(targetReplicas, note) {
+    if (!selectedAgent) { setError("Pick an environment/agent to apply to first."); return; }
+    setGwApplying(true);
+    setError("");
+    try {
+      // shardCount is passed UNCHANGED (current value) - only gatewayReplicas
+      // is a real change here; the backend treats this as "reconcile the
+      // gateway tier, leave the data plane's shard count exactly as is" (see
+      // fleet_agent/provisioner.py - a provided gatewayReplicas is never
+      // treated as a shard-count no-op, even when shardCount matches).
+      await api.provision(Number(selectedAgent), shardCount || 1, note, targetReplicas);
+      setCurrentGatewayReplicas(targetReplicas);
+    } catch (err) {
+      setError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setGwApplying(false);
+    }
+  }
+
   return (
-    <div className="page">
+    <div className="page autoscale-page">
       <h2>Autoscaling</h2>
       <p className="muted">
         Recommends a shard count from live ingest volume against the policy below, and applies it via
@@ -154,6 +208,49 @@ export default function Autoscale() {
         {agents.length === 0 && (
           <p className="muted">No environments registered yet — register one on the <strong>Fleet</strong> page to enable Apply. The recommendation above is still live and real, it just has nowhere to send the command to yet.</p>
         )}
+      </div>
+
+      <div className="card">
+        <div className="section-head"><h3>Gateway</h3></div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          The gateway is a stateless router, not a shard — it scales independently of shard count (see the
+          Helm chart&rsquo;s <span className="mono">gateway.replicaCount</span>/<span className="mono">gateway.autoscaling</span>).
+          Recommendation below is driven by real query-path request volume (the last 10s of actual executions,
+          same data the Query workspace&rsquo;s history tab shows) against a target requests/sec per replica —
+          there&rsquo;s no live &ldquo;how many gateway replicas exist right now&rdquo; signal this page can read,
+          so enter your last-known count once and it&rsquo;s remembered.
+        </p>
+        <div className="hero-stat" style={{ marginBottom: "0.8rem" }}>
+          <div className="hero-stat-main">
+            <div className="hero-stat-label">Gateway-routed queries</div>
+            <div className="hero-stat-value">{fmt(gwReqRate, 1)}<span className="kpi-unit">req/s</span></div>
+            <span className="hero-stat-delta">{fmt(gwReqRate / Math.max(1, currentGatewayReplicas), 1)} req/s per replica</span>
+          </div>
+          <div className="hero-stat-spark"><Sparkline data={gwReqHistory} width={160} height={48} strokeWidth={2.5} /></div>
+        </div>
+        <div className="form-row wrap">
+          <label className="muted">Current gateway replicas (last known)
+            <input type="number" min="1" value={currentGatewayReplicas} style={{ width: "5rem", display: "block" }}
+                   onChange={(e) => setCurrentGatewayReplicas(Math.max(1, Number(e.target.value) || 1))} />
+          </label>
+          <label className="muted">Target req/s per replica
+            <input type="number" min="1" value={policy.gatewayTargetReqsPerSec} style={{ width: "6rem", display: "block" }}
+                   onChange={(e) => setPolicy((p) => ({ ...p, gatewayTargetReqsPerSec: Number(e.target.value) || 1 }))} />
+          </label>
+          <label className="muted">Min replicas
+            <input type="number" min="1" value={policy.gatewayMinReplicas} style={{ width: "5rem", display: "block" }}
+                   onChange={(e) => setPolicy((p) => ({ ...p, gatewayMinReplicas: Number(e.target.value) || 1 }))} />
+          </label>
+          <label className="muted">Max replicas
+            <input type="number" min="1" max="26" value={policy.gatewayMaxReplicas} style={{ width: "5rem", display: "block" }}
+                   onChange={(e) => setPolicy((p) => ({ ...p, gatewayMaxReplicas: Number(e.target.value) || 1 }))} />
+          </label>
+        </div>
+        <p className="muted" style={{ marginTop: "0.6rem" }}>{gwRec.reason}</p>
+        <button className="primary" disabled={gwRec.action === "hold" || gwApplying || !selectedAgent}
+                onClick={() => applyGateway(gwRec.targetReplicas, `gateway apply: ${gwRec.reason}`)}>
+          {gwApplying ? "Applying…" : `Apply → ${gwRec.targetReplicas} gateway replicas`}
+        </button>
       </div>
 
       <div className="card">
@@ -247,6 +344,20 @@ function computeRecommendation(samples, shardCount, policy) {
   }
   return { action: "hold", targetShardCount: shardCount,
     reason: `${fmt(avgUtil, 0)}% of target, within the ${policy.scaleDownPct}–${policy.scaleUpPct}% hold band — no change recommended.` };
+}
+
+function computeGatewayRecommendation(reqRate, currentReplicas, policy) {
+  const target = Math.min(
+    policy.gatewayMaxReplicas,
+    Math.max(policy.gatewayMinReplicas, Math.ceil(reqRate / policy.gatewayTargetReqsPerSec) || policy.gatewayMinReplicas)
+  );
+  if (target === currentReplicas) {
+    return { action: "hold", targetReplicas: currentReplicas,
+      reason: `${fmt(reqRate, 1)} req/s across ${currentReplicas} replica${currentReplicas === 1 ? "" : "s"} — within target, no change recommended.` };
+  }
+  const action = target > currentReplicas ? "scale_up" : "scale_down";
+  return { action, targetReplicas: target,
+    reason: `${fmt(reqRate, 1)} req/s ÷ ${policy.gatewayTargetReqsPerSec} target/replica → recommend ${currentReplicas} → ${target} gateway replicas.` };
 }
 
 function recLabel(rec) {

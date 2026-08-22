@@ -41,7 +41,18 @@ async function request(path, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
   }
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+    // FastAPI's standard error shape is {"detail": "..."} - extract it so
+    // callers (and their `.replace(/^Error:\s*/, "")` display logic) show
+    // a clean sentence instead of the raw JSON body verbatim. Falls back
+    // to the raw text for anything that isn't that shape (a proxy/gateway
+    // error page, an empty body, etc).
+    let message = body;
+    try {
+      const parsed = JSON.parse(body);
+      if (typeof parsed?.detail === "string") message = parsed.detail;
+      else if (parsed?.detail != null) message = JSON.stringify(parsed.detail);
+    } catch { /* not JSON - use the raw body as-is */ }
+    throw new Error(`${res.status}: ${message}`);
   }
   const text = await res.text();
   return text ? JSON.parse(text) : null;
@@ -62,6 +73,7 @@ export const api = {
   ssoLoginUrl: (slug) => `${BASE}/auth/sso/${encodeURIComponent(slug)}/login`,
 
   topologyStatus: () => request("/topology/status"),
+  platformHealth: () => request("/platform/health"),
   tickerplants: () => request("/tickerplants"),
   startService: (service) => request(`/topology/service/${service}/start`, { method: "POST" }),
   stopService: (service) => request(`/topology/service/${service}/stop`, { method: "POST" }),
@@ -80,6 +92,7 @@ export const api = {
   migrationTco: (body) => request("/migration/tco", { method: "POST", body: JSON.stringify(body) }),
 
   tickhouseMeta: () => request("/tickhouses/meta"),
+  suggestTickhouse: (body) => request("/tickhouses/suggest", { method: "POST", body: JSON.stringify(body) }),
   previewTickhouse: (body) => request("/tickhouses/preview", { method: "POST", body: JSON.stringify(body) }),
   createTickhouse: (body) => request("/tickhouses", { method: "POST", body: JSON.stringify(body) }),
   listTickhouses: () => request("/tickhouses"),
@@ -88,6 +101,40 @@ export const api = {
   provisionTickhouse: (id, agentId) =>
     request(`/tickhouses/${id}/provision`, { method: "POST", body: JSON.stringify({ agent_id: agentId }) }),
   tickhouseStatus: (id) => request(`/tickhouses/${id}/status`),
+
+  cloudProvisionAws: (body) => request("/cloud-provision/aws", { method: "POST", body: JSON.stringify(body) }),
+  cloudProvisionAzure: (body) => request("/cloud-provision/azure", { method: "POST", body: JSON.stringify(body) }),
+  cloudProvisionGcp: (body) => request("/cloud-provision/gcp", { method: "POST", body: JSON.stringify(body) }),
+  listCloudProvisionRuns: () => request("/cloud-provision"),
+  getCloudProvisionRun: (id) => request(`/cloud-provision/${id}`),
+
+  // Global infra profiles (control-api/app/routers/infra_profiles.py) -
+  // reusable non-secret cloud/k8s coordinate bundles, platform-admin
+  // managed, readable by any authenticated user (needed to auto-load one
+  // while creating a TickHouse).
+  infraProfilesMeta: () => request("/infra-profiles/meta"),
+  listInfraProfiles: () => request("/infra-profiles"),
+  createInfraProfile: (body) => request("/infra-profiles", { method: "POST", body: JSON.stringify(body) }),
+  updateInfraProfile: (id, body) => request(`/infra-profiles/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteInfraProfile: (id) => request(`/infra-profiles/${id}`, { method: "DELETE" }),
+
+  // Feed-handler admin portal (control-api/app/routers/feedhandlers.py) -
+  // the C++ protocol/venue-adapter engine (data-plane/feedhandler-cpp/):
+  // browse the provider catalog, activate a source with its config +
+  // credentials (encrypted at rest), fetch the decrypted engine-config an
+  // operator hands to a real deployment.
+  feedhandlerCatalog: () => request("/feedhandlers/catalog"),
+  listFeedHandlers: () => request("/feedhandlers"),
+  createFeedHandler: (body) => request("/feedhandlers", { method: "POST", body: JSON.stringify(body) }),
+  updateFeedHandler: (id, body) => request(`/feedhandlers/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteFeedHandler: (id) => request(`/feedhandlers/${id}`, { method: "DELETE" }),
+  feedHandlerEngineConfig: (id) => request(`/feedhandlers/${id}/engine-config`),
+
+  // Per-tenant user management (control-api/app/routers/users.py) - an
+  // Admin (tenant_admin) creating/editing logins within their own tenant.
+  listUsers: () => request("/users"),
+  createUser: (body) => request("/users", { method: "POST", body: JSON.stringify(body) }),
+  updateUser: (id, body) => request(`/users/${id}`, { method: "PUT", body: JSON.stringify(body) }),
 
   // Live query workspace
   queryTargets: () => request("/query/targets"),
@@ -132,6 +179,10 @@ export const api = {
 
   // Trading terminal
   tradingPermission: () => request("/trading/permission"),
+  marketClock: () => request("/trading/market-clock"),
+  getTradingViewWebhookConfig: () => request("/tradingview/config"),
+  putTradingViewWebhookConfig: (body) => request("/tradingview/config", { method: "PUT", body: JSON.stringify(body) }),
+  rotateTradingViewWebhookToken: () => request("/tradingview/rotate", { method: "POST" }),
   placeOrder: (body) => request("/trading/orders", { method: "POST", body: JSON.stringify(body) }),
   listOrders: () => request("/trading/orders"),
   cancelOrder: (id) => request(`/trading/orders/${id}/cancel`, { method: "POST" }),
@@ -143,6 +194,13 @@ export const api = {
   forecast: (body) => request("/trading/forecast", { method: "POST", body: JSON.stringify(body) }),
   grantTrading: (email, can) => request("/trading/grant", { method: "POST", body: JSON.stringify({ email, can_trade: can }) }),
 
+  // Predictive Signals page (control-api/app/routers/signals.py)
+  predictiveSignals: (symbols) =>
+    request(`/signals/predictive${symbols ? `?symbols=${encodeURIComponent(symbols)}` : ""}`),
+  newsFeed: (symbols, limit = 30) =>
+    request(`/signals/news?limit=${limit}${symbols ? `&symbols=${encodeURIComponent(symbols)}` : ""}`),
+  portfolioSentiment: () => request("/signals/portfolio-sentiment"),
+
   // Server-side signal bot (control-api/app/routers/bot.py) - runs on the
   // server (app/bot_scheduler.py), not in this browser tab; these just
   // read/control its state.
@@ -151,6 +209,12 @@ export const api = {
   getBotPositions: () => request("/bot/positions"),
   getBotLog: (limit = 60) => request(`/bot/log?limit=${limit}`),
   closeBotPosition: (symbol) => request(`/bot/positions/${encodeURIComponent(symbol)}/close`, { method: "POST" }),
+  // Escape hatches for a position stuck open because the broker will never
+  // accept a real closing order for it (e.g. a demo-only symbol it doesn't
+  // list) - drops it from local tracking without a broker order. See
+  // routers/bot.py's force_clear_position/hard_reset for the full rationale.
+  forceClearBotPosition: (symbol) => request(`/bot/positions/${encodeURIComponent(symbol)}/force-clear`, { method: "POST" }),
+  hardResetBot: () => request("/bot/reset", { method: "POST" }),
   toggleConnector: (id) => request(`/connectors/${id}/toggle`, { method: "POST" }),
   setConnectorSymbols: (id, symbols) =>
     request(`/connectors/${id}/symbols`, { method: "PUT", body: JSON.stringify({ symbols }) }),
@@ -167,9 +231,10 @@ export const api = {
   listAgents: () => request("/fleet/agents"),
   createAgent: (name, environment) =>
     request("/fleet/agents", { method: "POST", body: JSON.stringify({ name, environment }) }),
-  provision: (agentId, shardCount, note = "") =>
+  provision: (agentId, shardCount, note = "", gatewayReplicas = null) =>
     request(`/fleet/agents/${agentId}/provision`,
-      { method: "POST", body: JSON.stringify({ shard_count: shardCount, note }) }),
+      { method: "POST", body: JSON.stringify({ shard_count: shardCount, note,
+                                              gateway_replicas: gatewayReplicas }) }),
   deprovision: (agentId) =>
     request(`/fleet/agents/${agentId}/deprovision`, { method: "POST" }),
   listAgentCommands: (agentId, limit = 50) =>

@@ -33,12 +33,16 @@ lets a trade through unverified, the caller is expected to audit-log it
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable, Optional
+
+from sqlmodel import Session, select
 
 from . import market as mkt
 from . import query_service as qs
 from . import topology
 from .config import Settings
+from .models import DailyPnlBaseline, Position
 
 log = logging.getLogger("risk_check")
 
@@ -193,3 +197,64 @@ def check_pretrade(symbol: str, connect: Callable[[str], object] = _connect_for_
     # CRIMS-style check is clean (or has never reported on this symbol) - now
     # also run the real, live-data volatility check alongside it.
     return check_realized_volatility(symbol, connect=connect)
+
+
+def check_portfolio_limits(tenant_id: int, symbol: str, side: str, qty: float, ref_price: float,
+                           session: Session, settings: Optional[Settings] = None) -> CheckResult:
+    """Portfolio-wide checks (daily loss, concentration) - distinct from
+    check_pretrade above, which only ever looks at the ONE symbol being
+    traded. Both opt-in (Settings.risk_max_daily_loss /
+    risk_max_symbol_concentration_pct, 0 = not enforced) and both computed
+    from Position rows already in the DB - no extra live-price round trip.
+
+    Never blocks a trade that REDUCES exposure (a sell against an existing
+    long, a buy against an existing short) - a limit breach should stop new
+    risk from being added, not trap a desk unable to flatten a position
+    that's already over the line. Only position-opening/-growing trades can
+    be blocked here."""
+    settings = settings or Settings()
+    if not settings.risk_max_daily_loss and not settings.risk_max_symbol_concentration_pct:
+        return CheckResult(block_reason=None)
+
+    positions = session.exec(select(Position).where(Position.tenant_id == tenant_id)).all()
+    existing = next((p for p in positions if p.symbol == symbol), None)
+    is_reducing = existing is not None and existing.qty != 0 and (
+        (side.lower() == "sell" and existing.qty > 0) or (side.lower() == "buy" and existing.qty < 0)
+    )
+    if is_reducing:
+        return CheckResult(block_reason=None)
+
+    if settings.risk_max_daily_loss:
+        today = datetime.utcnow().date()
+        baseline = session.exec(select(DailyPnlBaseline).where(
+            DailyPnlBaseline.tenant_id == tenant_id, DailyPnlBaseline.trading_date == today)).first()
+        total_realized = sum(p.realized_pnl for p in positions)
+        if baseline is None:
+            baseline = DailyPnlBaseline(tenant_id=tenant_id, trading_date=today,
+                                        baseline_realized_pnl=total_realized)
+            session.add(baseline)
+            session.commit()
+        today_pnl = total_realized - baseline.baseline_realized_pnl
+        if today_pnl < -abs(settings.risk_max_daily_loss):
+            return CheckResult(block_reason=(
+                f"pre-trade risk check failed: today's realized P&L ({today_pnl:.2f}) has "
+                f"already breached the configured daily loss limit "
+                f"(-{abs(settings.risk_max_daily_loss):.2f}) - only position-reducing trades "
+                f"are allowed for the rest of the day"
+            ))
+
+    if settings.risk_max_symbol_concentration_pct:
+        notional_by_symbol = {p.symbol: abs(p.qty * p.avg_price) for p in positions}
+        existing_notional = notional_by_symbol.pop(symbol, 0.0)
+        new_notional = existing_notional + abs(qty * ref_price)
+        total_notional = sum(notional_by_symbol.values()) + new_notional
+        if total_notional > 0:
+            pct = new_notional / total_notional
+            if pct > settings.risk_max_symbol_concentration_pct:
+                return CheckResult(block_reason=(
+                    f"pre-trade risk check failed: this trade would put {pct:.0%} of "
+                    f"portfolio notional in {symbol}, above the configured concentration "
+                    f"limit ({settings.risk_max_symbol_concentration_pct:.0%})"
+                ))
+
+    return CheckResult(block_reason=None)

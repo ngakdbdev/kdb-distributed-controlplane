@@ -211,24 +211,29 @@ def test_run_query_blocks_write_then_runs_readonly():
     # the query actually sent to q is capped (see test_cap_result_rows_* below) -
     # `run_query`'s payload["query"] still reports the user's original text
     assert out["kind"] == "table" and out["query"] == "select from trade"
-    assert calls == [f"{qs.DEFAULT_ROW_LIMIT + 1}#(select from trade)"]
+    assert calls == [f"{qs.DEFAULT_ROW_LIMIT + 1} sublist (select from trade)"]
 
 
 # ---- row-cap pushdown (query_service._cap_result_rows) --------------------
-# Regression coverage for a real incident: `select from trade` against a
-# live RDB that had grown to 16M+ rows hung the whole HTTP request for 30s+
-# (past every client/server timeout) because the row limit was only ever
-# applied client-side, AFTER pulling the entire result over IPC. Pushing a
-# `#` take into the query itself bounds what kdb+ computes/returns in the
-# first place.
+# Regression coverage for two real incidents on the same mechanism:
+# 1) `select from trade` against a live RDB that had grown to 16M+ rows hung
+#    the whole HTTP request for 30s+ (past every client/server timeout)
+#    because the row limit was only ever applied client-side, AFTER pulling
+#    the entire result over IPC. Pushing a take into the query itself bounds
+#    what kdb+ computes/returns in the first place.
+# 2) That take was originally `#`, not `sublist` - `#` on a table CYCLES/
+#    pads when the real result has fewer rows than the cap (plain q list
+#    semantics), so `select count i from trade` (one real row) came back
+#    with that one row repeated out to `limit` rows. See test_query_service
+#    for the dedicated regression test of that bug.
 
 def test_cap_result_rows_wraps_a_plain_select():
-    assert qs._cap_result_rows("select from trade", 50) == "50#(select from trade)"
-    assert qs._cap_result_rows("  select sym from trade  ", 10) == "10#(select sym from trade)"
+    assert qs._cap_result_rows("select from trade", 50) == "50 sublist (select from trade)"
+    assert qs._cap_result_rows("  select sym from trade  ", 10) == "10 sublist (select sym from trade)"
 
 
 def test_cap_result_rows_case_insensitive():
-    assert qs._cap_result_rows("SELECT from trade", 5) == "5#(SELECT from trade)"
+    assert qs._cap_result_rows("SELECT from trade", 5) == "5 sublist (SELECT from trade)"
 
 
 def test_cap_result_rows_leaves_an_explicit_take_alone():
@@ -251,7 +256,17 @@ def test_run_query_caps_at_limit_plus_one_so_truncation_is_still_detectable():
         calls.append(q)
         return {"x": list(range(9999))}  # fake conn ignores the cap - just proving what was asked for
     qs.run_query("select from trade", fake_conn, limit=20)
-    assert calls == ["21#(select from trade)"]
+    assert calls == ["21 sublist (select from trade)"]
+
+
+def test_cap_result_rows_does_not_pad_a_short_aggregate_result():
+    # the actual bug reported live: `select count i from trade` naturally
+    # returns exactly one row - `#` would have taken that one row and
+    # cycled/padded it out to `limit` rows, all showing the same count.
+    # sublist must never do that: fewer real rows than the cap should stay
+    # fewer rows, not get padded up to it.
+    assert qs._cap_result_rows("select count i from trade", 2000) == \
+        "2000 sublist (select count i from trade)"
 
 
 # ---- federation / combine_results ----------------------------------------
@@ -302,6 +317,86 @@ def test_targets_lists_gateway_and_shards(client, tadmin):
     assert r.status_code == 200, r.text
     ids = [t["id"] for t in r.json()["targets"]]
     assert "gateway" in ids and any(i.startswith("rdb-") for i in ids)
+
+
+def test_targets_includes_idb_and_hdb_shards(client, tadmin):
+    # historical tiers must be reachable as explicit targets, not just rdb -
+    # see query_router.route_tiers for why the gateway path also needs this
+    r = client.get("/query/targets", headers=tadmin)
+    ids = [t["id"] for t in r.json()["targets"]]
+    assert any(i.startswith("idb-") for i in ids)
+    assert any(i.startswith("hdb-") for i in ids)
+
+
+def test_gateway_path_switches_to_hdb_for_a_date_range_query(monkeypatch):
+    """A market-table query whose `date` clause needs history (not provably
+    today-only) must fan out to hdb targets - this is the fix for a query
+    like a multi-month VWAP silently only ever touching today's rdb buffer
+    (and returning nothing for the historical portion) because hdb was
+    unreachable. NOT rdb, NOT idb - confirmed live against this schema that
+    neither has a `date` column at all, so sending a date-filtered query to
+    either fails outright rather than just wasting a round trip - see
+    query_router.route_tiers' docstring."""
+    from app.routers import query as query_module
+
+    captured = {}
+
+    def fake_run_many(target_ids, query, limit, allow_write, max_allowed=None):
+        captured["target_ids"] = target_ids
+        return [{"target": t, "ok": False, "error": "no live q in this test",
+                 "elapsed_ms": 0.0} for t in target_ids]
+
+    monkeypatch.setattr(query_module, "_run_many", fake_run_many)
+    query_module._run_one("gateway", "select vwap:size wavg price by sym from trade "
+                                     "where date within (2024.01.01;2024.03.31)", 100, False)
+    assert captured["target_ids"], "expected a fan-out to be attempted"
+    prefixes = {t.split("-")[0] for t in captured["target_ids"]}
+    assert prefixes == {"hdb"}
+
+
+def test_gateway_path_stays_rdb_only_without_a_historical_date_clause(monkeypatch):
+    """Unchanged behavior for the common case: no `date` clause at all keeps
+    the exact same rdb-only cost profile it had before idb/hdb were
+    reachable - no surprise perf regression for existing queries."""
+    from app.routers import query as query_module
+
+    captured = {}
+
+    def fake_run_many(target_ids, query, limit, allow_write, max_allowed=None):
+        captured["target_ids"] = target_ids
+        return [{"target": t, "ok": False, "error": "no live q in this test",
+                 "elapsed_ms": 0.0} for t in target_ids]
+
+    monkeypatch.setattr(query_module, "_run_many", fake_run_many)
+    query_module._run_one("gateway", "select from trade where sym=`AAPL", 100, False)
+    prefixes = {t.split("-")[0] for t in captured["target_ids"]}
+    assert prefixes == {"rdb"}
+
+
+def test_run_many_dispatches_targets_concurrently(monkeypatch):
+    """_run_many must actually overlap the work, not just serially wrap
+    _run_one - the whole point of parallelizing shard/tier fan-out for a
+    wide historical scan is that N targets take roughly as long as the
+    slowest one, not the sum of all of them."""
+    import time as time_mod
+    from app.routers import query as query_module
+
+    def slow_run_one(target_id, query, limit, allow_write, max_allowed=None):
+        time_mod.sleep(0.2)
+        return {"target": target_id, "ok": True,
+                "grid": {"columns": [], "rows": [], "row_count": 0},
+                "elapsed_ms": 200.0}
+
+    monkeypatch.setattr(query_module, "_run_one", slow_run_one)
+    targets = [f"hdb-s{i}" for i in range(6)]
+    t0 = time_mod.perf_counter()
+    results = query_module._run_many(targets, "select from trade", 100, False)
+    elapsed = time_mod.perf_counter() - t0
+    assert len(results) == len(targets)
+    assert all(r["ok"] for r in results)
+    # 6 targets x 0.2s each: serial would be >=1.2s; concurrent should be
+    # well under that even accounting for thread-pool/CI scheduling slack
+    assert elapsed < 0.8, f"expected concurrent dispatch, took {elapsed:.2f}s"
 
 
 def test_run_rejects_dangerous_query_before_connecting(client, tadmin):

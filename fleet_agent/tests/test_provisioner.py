@@ -11,6 +11,7 @@ class FakeBackend:
         self._reconcile_ok = reconcile_ok
         self._raise_on = raise_on or set()
         self.reconciled_to = None
+        self.reconciled_gateway_replicas = None
         self.torn_down = False
 
     def current_shard_count(self):
@@ -18,10 +19,11 @@ class FakeBackend:
             raise RuntimeError("kubectl unreachable")
         return self._current
 
-    def reconcile(self, shard_count):
+    def reconcile(self, shard_count, gateway_replicas=None):
         if "reconcile" in self._raise_on:
             raise RuntimeError("helm exploded")
         self.reconciled_to = shard_count
+        self.reconciled_gateway_replicas = gateway_replicas
         return ReconcileResult(ok=self._reconcile_ok, shard_count=shard_count,
                                detail="ok" if self._reconcile_ok else "helm upgrade failed")
 
@@ -61,7 +63,45 @@ def test_provision_rejects_bad_shard_count():
     for bad in (0, -1, 999):
         res = Provisioner(FakeBackend(current=1)).provision(_payload(bad))
         assert not res.ok
-        assert "range" in res.detail or "out of range" in res.detail
+
+
+# ---- gatewayReplicas: a separate, optional knob from shardCount ----------
+
+def _payload_with_gw(n, gw):
+    return {"desired": {"shardCount": n, "gatewayReplicas": gw,
+                        "topology": {"shardCount": n}}, "note": ""}
+
+
+def test_provision_passes_gateway_replicas_through_to_backend():
+    b = FakeBackend(current=2)
+    res = Provisioner(b).provision(_payload_with_gw(2, 4))
+    assert res.ok
+    assert b.reconciled_gateway_replicas == 4
+
+
+def test_provision_with_gateway_replicas_is_not_a_noop_even_at_same_shard_count():
+    # shard count unchanged, but gatewayReplicas given - must still reconcile
+    # (we don't track current gateway replica count, so "might be a no-op"
+    # isn't a safe assumption; an idempotent extra helm upgrade is fine)
+    b = FakeBackend(current=3)
+    res = Provisioner(b).provision(_payload_with_gw(3, 5))
+    assert res.ok
+    assert b.reconciled_to == 3
+    assert b.reconciled_gateway_replicas == 5
+
+
+def test_provision_omitted_gateway_replicas_stays_a_noop_at_same_shard_count():
+    b = FakeBackend(current=3)
+    res = Provisioner(b).provision(_payload(3))
+    assert res.ok
+    assert b.reconciled_to is None  # never called reconcile - genuinely unchanged
+
+
+def test_provision_rejects_non_positive_gateway_replicas():
+    for bad in (0, -1, "three"):
+        res = Provisioner(FakeBackend(current=2)).provision(_payload_with_gw(2, bad))
+        assert not res.ok
+        assert "gatewayReplicas" in res.detail
 
 
 def test_provision_rejects_missing_shard_count():

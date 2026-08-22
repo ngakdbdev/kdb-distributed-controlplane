@@ -237,7 +237,7 @@ export default function Query() {
   }
 
   return (
-    <div className="page">
+    <div className="page query-page">
       <h2>Query workspace</h2>
       <p className="muted">
         Choose one or more targets — a gateway, a <strong>tickerplant</strong>'s live buffer, or an RDB — write q (with

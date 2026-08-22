@@ -32,7 +32,7 @@ ingress:
   enabled: true
   # Requires the AWS Load Balancer Controller installed in-cluster.
   className: "alb"
-  host: "tickforge.yourcompany.com"
+  host: "vantik.yourcompany.com"
   # Terminate TLS at the ALB with an ACM certificate (annotate the Ingress
   # with alb.ingress.kubernetes.io/certificate-arn in a follow-up
   # kubectl patch, or via a chart fork), or run cert-manager + Let's Encrypt

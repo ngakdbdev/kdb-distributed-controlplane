@@ -52,6 +52,14 @@ spec:
               value: {{ .Values.nl2q.llmModel | quote }}
             - name: NL2Q_LLM_BASE_URL
               value: {{ .Values.nl2q.llmBaseUrl | quote }}
+            # Helm is the pilot/production path (see docs/README.md's "which
+            # path" table) - a licence key is mandatory here by default. See
+            # control-api/app/licensing.py's enforcement_active(); LICENSE_KEY
+            # itself comes from the Secret above (secrets.licenseKey).
+            - name: DEPLOYMENT_ENV
+              value: {{ .Values.licensing.deploymentEnv | default "customer" | quote }}
+            - name: LICENSE_ENFORCE
+              value: {{ .Values.licensing.enforce | default "" | quote }}
           volumeMounts:
             - name: data
               mountPath: /app/data
@@ -89,7 +97,8 @@ metadata:
 spec:
   selector: { app: control-api }
   ports:
-    - port: {{ .Values.controlApi.port }}
+    - name: http # named so templates/servicemonitor.yaml can target it by name, not just port number
+      port: {{ .Values.controlApi.port }}
       targetPort: {{ .Values.controlApi.port }}
 {{- if .Values.controlApi.autoscaling.enabled }}
 ---

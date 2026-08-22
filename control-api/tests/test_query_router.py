@@ -38,3 +38,44 @@ def test_route_shards_narrows_to_owning_shards():
 
 def test_route_shards_none_when_unrecognized():
     assert query_router.route_shards("select from trade", 2) is None
+
+
+def test_route_tiers_no_date_clause_is_rdb_only():
+    assert query_router.route_tiers("select from trade where sym=`AAPL") == ["rdb"]
+
+
+def test_route_tiers_exact_today_is_rdb_only():
+    assert query_router.route_tiers("select from trade where date=.z.d") == ["rdb"]
+    assert query_router.route_tiers("select from trade where date = .z.D") == ["rdb"]
+
+
+def test_route_tiers_explicit_date_literal_routes_to_hdb_only():
+    # NOT rdb, NOT idb - confirmed live that neither has a `date` column at
+    # all (flat undated buffers); only hdb is really date-partitioned.
+    q = "select from trade where date=2024.01.15"
+    assert query_router.route_tiers(q) == ["hdb"]
+
+
+def test_route_tiers_within_range_routes_to_hdb_only():
+    q = "select from trade where date within (2024.01.01;2024.03.31)"
+    assert query_router.route_tiers(q) == ["hdb"]
+
+
+def test_route_tiers_before_today_routes_to_hdb_even_though_z_d_appears():
+    # "date < .z.d" means "everything but today" - pure history, rdb
+    # structurally cannot have it (and has no date column to even try). Must
+    # NOT be treated as rdb-only just because .z.d appears in the clause.
+    q = "select from trade where date<.z.d"
+    assert query_router.route_tiers(q) == ["hdb"]
+
+
+def test_route_tiers_at_or_before_today_routes_to_hdb():
+    q = "select from trade where date<=.z.d"
+    assert query_router.route_tiers(q) == ["hdb"]
+
+
+def test_route_tiers_multiple_date_clauses_routes_to_hdb():
+    # two separate `date` clauses (e.g. joined query) - can't confidently
+    # prove today-only from the "exactly one clause" fast path
+    q = "select from trade where date=.z.d, date=.z.d"
+    assert query_router.route_tiers(q) == ["hdb"]

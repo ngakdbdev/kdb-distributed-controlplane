@@ -66,6 +66,34 @@ def test_preview_reports_bad_shard_ranges(client, tadmin):
     assert r.status_code == 400
 
 
+def test_suggest_returns_a_profile_and_shard_count_for_review(client, tadmin):
+    r = client.post("/tickhouses/suggest",
+                    json={"tick_to_trade_target_ms": 100, "peak_msgs_per_sec": 8000},
+                    headers=tadmin)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["profile"] in ("low-latency", "balanced", "high-throughput")
+    assert body["shard_count"] >= 1
+    assert body["caveats"]  # never silent about these being estimates
+
+
+def test_suggest_with_no_body_fields_still_returns_a_default(client, tadmin):
+    r = client.post("/tickhouses/suggest", json={}, headers=tadmin)
+    assert r.status_code == 200, r.text
+    assert r.json()["profile"] == "balanced"
+
+
+def test_suggest_output_feeds_straight_into_preview(client, tadmin):
+    # the intended flow: suggest -> operator reviews/edits -> preview -> create
+    # -> provision. Confirm the suggested profile is one preview actually accepts.
+    suggestion = client.post("/tickhouses/suggest",
+                             json={"tick_to_trade_target_ms": 50}, headers=tadmin).json()
+    r = client.post("/tickhouses/preview",
+                    json=_hi(profile=suggestion["profile"]), headers=tadmin)
+    assert r.status_code == 200, r.text
+    assert r.json()["problems"] == []
+
+
 def test_create_list_get_delete(client, tadmin):
     created = client.post("/tickhouses", json=_hi(name="acme-apac"), headers=tadmin)
     assert created.status_code == 200, created.text
@@ -103,6 +131,40 @@ def test_provision_queues_spec_to_matching_agent(client, tadmin):
     assert payload["desired"]["tickhouse"] == "acme-aws"
     assert payload["desired"]["shardCount"] == 2
     assert payload["desired"]["components"][0]["hardware"] is not None
+
+
+def test_create_with_feed_handler_attaches_it_to_the_new_tickhouse(client, tadmin):
+    body = _hi(name="acme-coinbase")
+    body["feed_handler"] = {"provider": "COINBASE", "feed": "MATCHES", "enabled": True}
+    r = client.post("/tickhouses", json=body, headers=tadmin)
+    assert r.status_code == 200, r.text
+    result = r.json()
+    th_id = result["id"]
+    assert result["feed_handler"]["provider"] == "COINBASE"
+    assert result["feed_handler"]["has_secrets"] is False
+    fh_id = result["feed_handler"]["id"]
+
+    # the created FeedHandlerInstance really is linked, both directions
+    fh = client.get("/feedhandlers", headers=tadmin).json()
+    linked = next(f for f in fh if f["id"] == fh_id)
+    assert linked["tickhouse_id"] == th_id
+
+    scoped = client.get(f"/feedhandlers?tickhouse_id={th_id}", headers=tadmin).json()
+    assert [f["id"] for f in scoped] == [fh_id]
+
+
+def test_create_with_feed_handler_missing_credentials_fails(client, tadmin):
+    body = _hi(name="acme-fix")
+    body["feed_handler"] = {"provider": "GENERIC_FIX", "feed": "MARKET_DATA"}  # no secrets supplied
+    r = client.post("/tickhouses", json=body, headers=tadmin)
+    assert r.status_code == 400
+    assert "credential" in r.json()["detail"]
+
+
+def test_create_without_feed_handler_omits_the_field(client, tadmin):
+    r = client.post("/tickhouses", json=_hi(name="acme-no-feed"), headers=tadmin)
+    assert r.status_code == 200, r.text
+    assert "feed_handler" not in r.json()
 
 
 def test_provision_rejects_agent_in_wrong_cloud(client, tadmin):

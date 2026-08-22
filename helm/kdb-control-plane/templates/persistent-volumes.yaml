@@ -3,7 +3,15 @@ One db PVC, one hdb PVC, and one tp-log PVC per shard, generated from the
 shard count. db-s{i} is shared between shard i's wdb (writer) and idb
 (reader). hdb-s{i} is shared between the same wdb (which seals end-of-day
 partitions into it) and that shard's hdb (which serves them read-only).
+
+Each PVC type's StorageClass: dataPlane.storageClassNames.{db,hdb,tpLog}
+if set, else global.storageClassName, else the cluster default - see
+values.yaml's own comment on dataPlane.storageClassNames for why hdb is
+the one worth pointing at a high-performance filesystem StorageClass.
 */}}
+{{- $dbSC := or .Values.dataPlane.storageClassNames.db .Values.global.storageClassName }}
+{{- $hdbSC := or .Values.dataPlane.storageClassNames.hdb .Values.global.storageClassName }}
+{{- $tpLogSC := or .Values.dataPlane.storageClassNames.tpLog .Values.global.storageClassName }}
 {{- range $i := until (int .Values.shardCount) }}
 {{- $sid := printf "s%d" $i }}
 ---
@@ -15,8 +23,8 @@ metadata:
   labels: { app: db-{{ $sid }}, shard: {{ $sid | quote }} }
 spec:
   accessModes: ["ReadWriteOnce"]
-  {{- if $.Values.global.storageClassName }}
-  storageClassName: {{ $.Values.global.storageClassName }}
+  {{- if $dbSC }}
+  storageClassName: {{ $dbSC }}
   {{- end }}
   resources:
     requests:
@@ -30,8 +38,8 @@ metadata:
   labels: { app: hdb-{{ $sid }}, shard: {{ $sid | quote }} }
 spec:
   accessModes: ["ReadWriteOnce"]
-  {{- if $.Values.global.storageClassName }}
-  storageClassName: {{ $.Values.global.storageClassName }}
+  {{- if $hdbSC }}
+  storageClassName: {{ $hdbSC }}
   {{- end }}
   resources:
     requests:
@@ -45,8 +53,8 @@ metadata:
   labels: { app: tp-log-{{ $sid }}, shard: {{ $sid | quote }} }
 spec:
   accessModes: ["ReadWriteOnce"]
-  {{- if $.Values.global.storageClassName }}
-  storageClassName: {{ $.Values.global.storageClassName }}
+  {{- if $tpLogSC }}
+  storageClassName: {{ $tpLogSC }}
   {{- end }}
   resources:
     requests:

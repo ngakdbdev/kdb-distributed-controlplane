@@ -64,6 +64,19 @@ def render_helm_sets(desired: dict) -> list:
         t = comp["type"]
         if hw.get("vcpus"):
             sets.append(f"resources.{t}.requests.cpu={hw['vcpus']}")
+            # "cpu-pinning" (the low-latency profile's default tuning tag -
+            # see tickhouse.py's _PROFILE_TUNING) becomes a REAL kdb-services.yaml
+            # effect here: setting limits.cpu equal to requests.cpu is what
+            # makes this pod eligible for Kubernetes' Guaranteed QoS class,
+            # the prerequisite for the kubelet's static CPUManager policy to
+            # grant it exclusive whole-core pinning. This is the one part of
+            # "cpu-pinning" that's automatic - it needs no real core numbers,
+            # unlike hw.cpuset/numa_node below (which an operator sets
+            # explicitly once they know their actual hardware/node-pool
+            # layout; there's no generic way to derive real core numbers
+            # from a profile name alone).
+            if "cpu-pinning" in (hw.get("tuning") or []):
+                sets.append(f"resources.{t}.limits.cpu={hw['vcpus']}")
         if hw.get("memory_gb"):
             sets.append(f"resources.{t}.requests.memory={_mem(hw['memory_gb'])}")
         if hw.get("disk_gb"):
@@ -74,18 +87,52 @@ def render_helm_sets(desired: dict) -> list:
             sets.append(f"nodePools.{t}.instanceType={hw['instance_type']}")
         if hw.get("nic"):
             sets.append(f"nodePools.{t}.nic={hw['nic']}")
+        # NUMA-labeled node targeting (operator-set - see HardwareSpec.numa_node's
+        # own docstring for why this can't be auto-derived). Maps onto the
+        # chart's nodeSelectors.<type> value (kdb-services.yaml).
+        if hw.get("numa_node"):
+            sets.append(f"nodeSelectors.{t}.numa-node={hw['numa_node']}")
     return sets
+
+
+#  TickHouseSpec component type -> gen_topology.py compose env-var prefix.
+# Only rdb/hdb/tickerplant have a clean 1:1 match to a real compose service
+# today: idb/gateway don't peach (pinning them buys nothing - see
+# kdb-entrypoint.sh's KDB_THREADS comment) and wdb isn't a TickHouseSpec
+# component at all (tickhouse.py's COMPONENT_TYPES has no "wdb" entry -
+# a real gap in that model, not something faked around here), while
+# "feedhandler"/"logger" don't correspond to any service gen_topology.py's
+# compose path actually generates (that path uses bpipe-sim/crims-sim/
+# provider feeds instead, sized independently of the TickHouse hardware
+# model). Extending coverage to those needs a change to gen_topology.py and
+# the TickHouseSpec component model, not just this renderer.
+_COMPOSE_PIN_PREFIX = {"rdb": "RDB", "hdb": "HDB", "tickerplant": "TP"}
 
 
 def render_compose_env(desired: dict) -> dict:
     """Environment overrides for the on-prem compose path (gen_topology reads
-    SHARD_COUNT; the rest are advisory labels the compose template can consume)."""
+    SHARD_COUNT; the rest are advisory labels the compose template can consume).
+    Also carries per-component KDB_CPUSET/KDB_NUMA_NODE overrides (see
+    kdb-entrypoint.sh's numactl support and HardwareSpec.cpuset/numa_node's
+    own docstring for why these are operator-set, not auto-derived) - for
+    whichever components gen_topology.py's compose path actually generates a
+    matching {PREFIX}_CPUSET/{PREFIX}_NUMA_NODE env var for (see
+    _COMPOSE_PIN_PREFIX above)."""
     env = {"SHARD_COUNT": str(desired.get("shardCount", 1)),
            "TH_PROFILE": desired.get("profile", ""),
            "TH_OS": desired.get("os", "")}
     shards = desired.get("shards", [])
     if shards:
         env["TH_SHARD_RANGES"] = ";".join(f"{s['lo']}-{s['hi']}" for s in shards)
+    for comp in desired.get("components", []):
+        prefix = _COMPOSE_PIN_PREFIX.get(comp["type"])
+        if not prefix:
+            continue
+        hw = comp.get("hardware") or {}
+        if hw.get("cpuset"):
+            env[f"{prefix}_CPUSET"] = hw["cpuset"]
+        if hw.get("numa_node"):
+            env[f"{prefix}_NUMA_NODE"] = hw["numa_node"]
     return env
 
 

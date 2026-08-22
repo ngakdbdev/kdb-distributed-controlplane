@@ -3,8 +3,10 @@ fetch_all_symbols() (a real REST call to the venue's own instrument list,
 here driven with canned JSON matching each venue's actual response shape -
 no network) and the base.chunked() helper that splits a symbol list to
 respect a venue's per-connection/per-message subscription limit."""
+import pytest
+
 from providers import get_provider
-from providers.base import chunked
+from providers.base import ProviderError, chunked
 
 
 def test_chunked_splits_preserving_order():
@@ -75,6 +77,43 @@ def test_coinbase_fetch_all_symbols_filters_online_only():
     ]
     syms = get_provider("coinbase").fetch_all_symbols(fetch=lambda url: canned)
     assert syms == ["BTC-USD", "ETH-USD"]
+
+
+def test_alpaca_fetch_all_symbols_filters_tradable_only():
+    canned = [
+        {"symbol": "AAPL", "tradable": True},
+        {"symbol": "MSFT", "tradable": True},
+        {"symbol": "HALTEDCO", "tradable": False},
+        {"notasymbol": "missing the symbol field entirely"},
+    ]
+    syms = get_provider("alpaca").fetch_all_symbols(fetch=lambda url: canned)
+    assert syms == ["AAPL", "MSFT"]
+
+
+def test_alpaca_fetch_all_symbols_requires_credentials_when_hitting_the_real_endpoint(monkeypatch):
+    # no fetch= injected -> goes down the real (authenticated) path, which
+    # must fail clearly rather than send an unauthenticated request that
+    # Alpaca would just reject with a less helpful 401.
+    monkeypatch.delenv("ALPACA_API_KEY_ID", raising=False)
+    monkeypatch.delenv("ALPACA_API_SECRET_KEY", raising=False)
+    with pytest.raises(ProviderError, match="ALPACA_API_KEY_ID"):
+        get_provider("alpaca").fetch_all_symbols()
+
+
+def test_alpaca_fetch_all_symbols_picks_base_url_from_trading_mode(monkeypatch):
+    urls = []
+
+    def fake_fetch(url):
+        urls.append(url)
+        return []
+
+    monkeypatch.delenv("ALPACA_TRADING_MODE", raising=False)
+    get_provider("alpaca").fetch_all_symbols(fetch=fake_fetch)
+    assert urls[-1].startswith("https://paper-api.alpaca.markets")
+
+    monkeypatch.setenv("ALPACA_TRADING_MODE", "live")
+    get_provider("alpaca").fetch_all_symbols(fetch=fake_fetch)
+    assert urls[-1].startswith("https://api.alpaca.markets")
 
 
 def test_binance_run_shards_across_multiple_connections_past_the_cap(monkeypatch):

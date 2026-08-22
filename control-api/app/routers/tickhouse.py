@@ -13,9 +13,22 @@ from sqlmodel import Session, select
 from .. import tickhouse as th
 from ..db import get_session, log_event
 from ..models import Agent, Command, TickHouse
-from .auth import CurrentUser, require_tenant_scope
+from .auth import CurrentUser, require_admin, require_tenant_scope
+from .feedhandlers import build_feed_handler_row
 
 router = APIRouter(prefix="/tickhouses", tags=["tickhouses"])
+
+
+class FeedHandlerAttachment(BaseModel):
+    """Shape mirrors routers.feedhandlers.FeedHandlerIn minus tickhouse_id
+    (this TickHouse's own id, which doesn't exist yet at request time -
+    it's filled in after the TickHouse row is created below)."""
+    provider: str
+    feed: str
+    display_name: str = ""
+    enabled: bool = False
+    config: dict = {}
+    secrets: dict = {}
 
 
 class HighLevelSpec(BaseModel):
@@ -30,6 +43,7 @@ class HighLevelSpec(BaseModel):
     ldap_ref: str = ""
     gateway_config: dict | None = None
     target_config: dict | None = None  # cloud/k8s coordinates (non-secret)
+    feed_handler: FeedHandlerAttachment | None = None  # optional - activate a market-data source into this TickHouse in the same step
 
 
 def _build(body: "HighLevelSpec"):
@@ -49,6 +63,31 @@ def meta(user: CurrentUser = Depends(require_tenant_scope)):
             "config_fields": {c: th.config_fields(c) for c in th.CLOUDS}}
 
 
+class SuggestBody(BaseModel):
+    tick_to_trade_target_ms: float | None = None
+    peak_msgs_per_sec: int | None = None
+    symbol_count: int | None = None
+    cross_region: bool = False
+
+
+@router.post("/suggest")
+def suggest(body: SuggestBody, user: CurrentUser = Depends(require_tenant_scope)):
+    """SLA-driven starting point: 'my tick-to-trade target is 100ms and I
+    expect 8000 msgs/sec peak' -> a suggested profile, shard count, and an
+    estimated (explicitly caveated) latency budget breakdown. Purely
+    advisory and stateless - nothing is persisted here. The wizard pre-fills
+    /preview's profile/shard_ranges fields from this response so the operator
+    reviews and can override before /preview -> /create -> /provision, the
+    same explicit multi-step approval this wizard already requires for every
+    other path - this endpoint doesn't add a way to skip that."""
+    return th.suggest_blueprint(
+        tick_to_trade_target_ms=body.tick_to_trade_target_ms,
+        peak_msgs_per_sec=body.peak_msgs_per_sec,
+        symbol_count=body.symbol_count,
+        cross_region=body.cross_region,
+    )
+
+
 @router.post("/preview")
 def preview(body: HighLevelSpec, user: CurrentUser = Depends(require_tenant_scope)):
     """Auto-tune a full spec from the high-level choices and return it with any
@@ -61,9 +100,11 @@ def preview(body: HighLevelSpec, user: CurrentUser = Depends(require_tenant_scop
 
 
 @router.post("")
-def create(body: HighLevelSpec, user: CurrentUser = Depends(require_tenant_scope),
+def create(body: HighLevelSpec, user: CurrentUser = Depends(require_admin),
            session: Session = Depends(get_session)):
-    """Persist a tick cluster definition (auto-tuned from the high-level choices)."""
+    """Persist a tick cluster definition (auto-tuned from the high-level choices).
+    Admin-only (require_admin) - defining infrastructure is a provisioning
+    action, not something a functional_user/quant_analyst needs day-to-day."""
     try:
         spec = _build(body)
     except ValueError as exc:
@@ -81,7 +122,33 @@ def create(body: HighLevelSpec, user: CurrentUser = Depends(require_tenant_scope
     log_event(session, user.email, "tickhouse_created", spec.name,
               detail=f"{spec.location}/{spec.profile}/{len(spec.shards)} shards",
               tenant_id=user.tenant_id)
-    return _to_api(row)
+
+    result = _to_api(row)
+    if body.feed_handler is not None:
+        # Same validation (known provider/feed, required credentials,
+        # tenant ownership) POST /feedhandlers itself uses - see
+        # build_feed_handler_row's own docstring on why this is shared
+        # rather than reimplemented here. A bad feed_handler block fails
+        # the WHOLE request (the TickHouse row above isn't rolled back by
+        # this exception, matching this codebase's other multi-step
+        # creation flows where an already-committed prerequisite step
+        # stands even if a later step 400s - the operator retries just the
+        # feed handler attachment via PUT/POST /feedhandlers afterward,
+        # same as any other "create X, wire it to Y" partial-failure case).
+        fh = body.feed_handler
+        fh_row = build_feed_handler_row(session, user.tenant_id, user.email, fh.provider, fh.feed,
+                                        fh.display_name, fh.enabled, fh.config, fh.secrets, tickhouse_id=row.id)
+        session.add(fh_row)
+        session.commit()
+        session.refresh(fh_row)
+        log_event(session, user.email, "feedhandler_created", target=f"feedhandler:{fh_row.id}",
+                 detail=f"{fh_row.provider}/{fh_row.feed} -> tickhouse:{row.id}", tenant_id=user.tenant_id)
+        result["feed_handler"] = {
+            "id": fh_row.id, "provider": fh_row.provider, "feed": fh_row.feed,
+            "display_name": fh_row.display_name, "enabled": fh_row.enabled,
+            "has_secrets": bool(fh_row.secrets_json),
+        }
+    return result
 
 
 @router.get("")
@@ -99,7 +166,7 @@ def get_tickhouse(th_id: int, user: CurrentUser = Depends(require_tenant_scope),
 
 
 @router.delete("/{th_id}")
-def delete_tickhouse(th_id: int, user: CurrentUser = Depends(require_tenant_scope),
+def delete_tickhouse(th_id: int, user: CurrentUser = Depends(require_admin),
                      session: Session = Depends(get_session)):
     row = _load(th_id, user, session)
     session.delete(row)
@@ -114,7 +181,7 @@ class ProvisionBody(BaseModel):
 
 @router.post("/{th_id}/provision")
 def provision(th_id: int, body: ProvisionBody,
-              user: CurrentUser = Depends(require_tenant_scope),
+              user: CurrentUser = Depends(require_admin),
               session: Session = Depends(get_session)):
     """Queue the full spec to the tenant's agent for this cluster's location.
     The agent renders it into helm/compose and stands the cluster up."""

@@ -1,15 +1,21 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from sqlmodel import Session
 
 from . import bot_scheduler
+from . import metrics_history
 from . import symbol_discovery
-from .db import init_db
+from .db import get_session, init_db
 from . import licensing
-from .routers import (audit, auth, auth_ldap, auth_sso, bot, connectors, export, fleet,
-                      license as license_router, llm_config, metrics, migration, query, subscribers,
-                      symbols, tenants, tickhouse, tickerplants, topology, trading)
+from . import prometheus_metrics
+from .routers import (audit, auth, auth_ldap, auth_sso, backtest as backtest_router, bot,
+                      cloud_provision, connectors, export, feedhandlers, fleet, infra_profiles,
+                      license as license_router,
+                      llm_config, metrics, migration, platform_health, query, signals,
+                      subscribers, symbols, tenants, tickhouse, tickerplants, topology, trading,
+                      tradingview_webhook, users)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -42,13 +48,22 @@ app.include_router(subscribers.router)
 app.include_router(audit.router)
 app.include_router(license_router.router)
 app.include_router(tickhouse.router)
+app.include_router(infra_profiles.router)
+app.include_router(platform_health.router)
+app.include_router(backtest_router.router)
+app.include_router(users.router)
 app.include_router(query.router)
 app.include_router(tickerplants.router)
 app.include_router(symbols.router)
 app.include_router(trading.router)
 app.include_router(bot.router)
+app.include_router(signals.router)
 app.include_router(llm_config.router)
 app.include_router(migration.router)
+app.include_router(feedhandlers.router)
+app.include_router(tradingview_webhook.router)
+app.include_router(tradingview_webhook.webhook_router)
+app.include_router(cloud_provision.router)
 
 
 @app.on_event("startup")
@@ -57,23 +72,39 @@ def on_startup():
     _check_license()
     bot_scheduler.start()
     symbol_discovery.start()
+    metrics_history.start()
 
 
 @app.on_event("shutdown")
 def on_shutdown():
     bot_scheduler.stop()
     symbol_discovery.stop()
+    metrics_history.stop()
 
 
 def _check_license():
     import os
     info = licensing.validate(os.environ.get("LICENSE_KEY", ""))
     logging.getLogger("license").info(licensing.status_line(info))
-    if not info.valid and os.environ.get("LICENSE_ENFORCE", "").lower() in ("1", "true", "yes"):
-        raise RuntimeError(f"product licence invalid: {info.reason} "
-                           "(set a valid LICENSE_KEY or unset LICENSE_ENFORCE)")
+    if not info.valid and licensing.enforcement_active():
+        deployment_env = os.environ.get("DEPLOYMENT_ENV", "local")
+        raise RuntimeError(
+            f"product licence invalid: {info.reason} - a licence key is mandatory for this "
+            f"deployment (DEPLOYMENT_ENV={deployment_env!r}). Set a valid LICENSE_KEY, or if "
+            f"this really is local/dev use, set DEPLOYMENT_ENV=local. LICENSE_ENFORCE overrides "
+            f"either way if set explicitly.")
 
 
 @app.get("/health")
 def health():
     return {"status": "up"}
+
+
+@app.get("/metrics")
+def prometheus(session: Session = Depends(get_session)):
+    """Prometheus exposition format - see app/prometheus_metrics.py's own
+    docstring for exactly what's real here (every value is read live from
+    the same data JSON /metrics/snapshot and the Orders/Audit tables
+    already serve) and why it's unauthenticated like that endpoint."""
+    body, content_type = prometheus_metrics.render_metrics(session)
+    return Response(content=body, media_type=content_type)

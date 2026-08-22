@@ -1,6 +1,17 @@
 # Documentation
 
+## New to this? Start here.
+
+[getting-started.md](getting-started.md) — the zero-to-running walkthrough.
+Assumes nothing: explains what kdb+/a tickerplant/a shard even are in plain
+English, then gets the whole system running on your own laptop step by
+step, with expected output shown at each command. If this is your first
+time in this codebase, read that one first, not the reference docs below.
+
 ## Building, running, and operating the platform
+
+Reference material, not a tutorial — for once you're past the getting-started
+guide and need the detail on a specific piece.
 
 - [developer-guide.md](developer-guide.md) — codebase layout, where to make a
   given kind of change, local dev workflow, testing conventions
@@ -27,7 +38,7 @@ in [deployment-process.md](deployment-process.md) above.
 - [predeploy-aws.md](predeploy-aws.md) — single-VM demo on EC2
 - [predeploy-gcp.md](predeploy-gcp.md) — single-VM demo on Compute Engine
 - [predeploy-azure.md](predeploy-azure.md) — single-VM demo on an Azure VM
-- [predeploy-kubernetes.md](predeploy-kubernetes.md) — EKS / AKS / GKE / on-prem via the Helm chart (the path to take once "demo" turns into "pilot")
+- [predeploy-kubernetes.md](predeploy-kubernetes.md) — EKS / AKS / GKE / on-prem via the Helm chart (the path to take once "demo" turns into "pilot" or a real, at-scale deployment) — see that guide's own section 0 if you don't have a cluster yet (`terraform/{aws,azure,gcp}/`)
 
 ## Which path
 
@@ -35,18 +46,21 @@ The single-VM `deploy/<cloud>/` scripts and the Kubernetes Helm chart are **not*
 same thing — they're two different maturity stages of the same product, and the repo is honest about
 that split (see the root `README.md`'s "what's built" section):
 
-| | Single VM (`deploy/aws\|gcp\|azure/`) | Kubernetes (`helm/`) |
+| | Single VM (`deploy/aws\|gcp\|azure/`) | Kubernetes (`helm/`), optionally cluster-provisioned by `terraform/` |
 |---|---|---|
-| Intended use | Sales demo, one prospect, throwaway | Pilot / longer-lived single-tenant deployment |
+| Intended use | Sales demo, one prospect, throwaway | Pilot, longer-lived single-tenant deployment, or a real production/enterprise-scale environment |
+| Cluster provisioning | N/A — one VM, no orchestrator | `terraform/{aws,azure,gcp}/` (VPC, managed Kubernetes, KMS-backed secrets encryption, standard + high-performance-filesystem storage tiers) if you don't already have a cluster — run manually per each module's own README.md, or via the TickHouses page's "Quick cloud deploy" tab (credentials-only, runs the same modules + helm install server-side — see platform-usage.md) |
 | Topology control | `/topology` router talks to the Docker socket directly | Same router talks to the Kubernetes API instead — same UI, different orchestrator backend |
 | Multi-tenant hosted SaaS path | Not this — that's the `/fleet` + `fleet_agent` path, out of scope for both guides above | Out of scope here too — `fleet_agent` runs *inside a tenant's own cluster*, invoked separately |
 | Blast radius if it falls over | One VM, one prospect's demo | Depends on what else shares the cluster |
 | Config drift risk | Low — one box, one `.env` | Higher — `values.yaml` vs. `existingSecret` vs. `--set` at install time; pick one pattern and stick to it |
+| Monitoring | Ad hoc (`docker compose logs`, the app's own live UI) | Real GET /metrics + optional Prometheus/Grafana wiring — see predeploy-kubernetes.md's monitoring section |
 
 If you're not sure which you're doing: if the next step after this is a sales call, use the VM path.
-If the next step is "the client wants this running for their own team to poke at for a few weeks,"
-use Kubernetes and a real (non-SQLite) database from day one — retrofitting a database migration
-under a live pilot is exactly the kind of unforced error these guides exist to prevent.
+If the next step is "the client wants this running for their own team to poke at for a few weeks" (or
+longer, at real scale), use Kubernetes and a real (non-SQLite) database from day one — retrofitting a
+database migration under a live pilot is exactly the kind of unforced error these guides exist to
+prevent.
 
 ## Shared checklist — do this before any of the four guides
 
@@ -77,16 +91,20 @@ environment and reached a git history, regardless of whether it's still active:
 
 ### 2. Decide your KX-X licensing path
 
-The `q` binary and license are proprietary and never bundled in this repo (see root `README.md`).
-Every path below needs one of:
-- **Community Edition** (free, commercial use allowed) — download from the KX Developer Center, stage
-  the binary + `k4.lic` yourself (`data-plane/docker/kdbx/` for the VM path, a Kubernetes `Secret` for
-  the Helm path).
-- **Portal pull at deploy time** — set `KX_INSTALL_SOURCE=kx-portal` and a rotated `KX_BEARER_TOKEN`;
-  the containers fetch the binary from the KX portal on first start. Requires outbound internet from
-  the box/cluster.
-- **Air-gapped** — stage the binary via `KX_INSTALL_SOURCE=local` and `KX_BINARIES_DIR`; no portal
-  call needed at all.
+The `q` binary and license are proprietary and never bundled in this repo (see root `README.md`), and
+never staged as a local file either — every kdb+ container (VM path or Helm path, same
+`kdb-entrypoint.sh`) pulls its own binary from the KX portal at start, authenticated with a rotated
+`KX_BEARER_TOKEN` (free from the KX Developer Center for KDB-X Community Edition). Set that plus
+`KDB_LICENSE_B64` (your license, base64-encoded) or `KX_LICENSE_PATH` (a license file mounted some
+other way) in `.env` (VM path) or the `kdbx-license` Secret (Helm path — see
+[predeploy-kubernetes.md](predeploy-kubernetes.md) §4).
+
+**Requires outbound internet from the box/cluster to the KX portal** — there is currently no
+air-gapped path (a prior version supported staging a pre-downloaded binary locally for exactly this
+case; removed, since that model only ever worked on the one machine someone had staged it on by hand
+and was a real barrier to deploying anywhere else, including a real cloud target). If you need a
+genuinely air-gapped deployment, that needs new work (e.g. a private artifact mirror the entrypoint
+pulls from instead of the KX portal) - not something this repo does today.
 
 Pick one *before* provisioning — it changes whether the target needs outbound internet access to the
 KX portal, which affects the network/firewall guidance in each guide below.

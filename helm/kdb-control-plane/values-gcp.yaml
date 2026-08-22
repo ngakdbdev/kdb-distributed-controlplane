@@ -30,7 +30,7 @@ ingress:
   enabled: true
   # GKE's built-in Ingress controller.
   className: "gce"
-  host: "tickforge.yourcompany.com"
+  host: "vantik.yourcompany.com"
   # Use a Google-managed certificate (annotate the Ingress with
   # networking.gke.io/managed-certificates in a follow-up kubectl patch or a
   # chart fork), or run cert-manager + Let's Encrypt in-cluster and set

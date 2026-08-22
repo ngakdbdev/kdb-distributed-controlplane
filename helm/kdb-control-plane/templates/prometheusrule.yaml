@@ -1,0 +1,79 @@
+{{/*
+  Alert rules grounded in real signals GET /metrics exposes (see
+  app/prometheus_metrics.py) - every expression here references a metric
+  this chart's control-api pod actually renders live, not a
+  hypothetical/example rule. Thresholds come from values.yaml's
+  monitoring.prometheusRule.thresholds - see that value's own comment on
+  why subscriberLagBytes matches the UI's existing early-warning constant
+  instead of being a second, possibly-inconsistent number.
+*/}}
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vantik-alerts
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: control-api
+    {{- with .Values.monitoring.prometheusRule.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: vantik.data-fabric
+      rules:
+        - alert: VantikServiceDown
+          expr: vantik_service_up == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{`{{ $labels.service }}`}} is not running"
+            description: "Same signal Topology's process grid and Overview's Data Fabric strip show live - watchdog should be attempting a restart; if this fires for more than a few minutes, watchdog itself may need attention (see the watchdog pod's own logs)."
+
+        - alert: VantikTickerplantNotIngesting
+          expr: (max without (shard) (vantik_service_up{service=~"tp-.*"}) == 1) and (rate(vantik_tp_recv_total[5m]) == 0)
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "Tickerplant {{`{{ $labels.shard }}`}} is up but receiving no messages"
+            description: "The process is running (vantik_service_up=1) but its message-received counter hasn't moved in 5m - check whether the expected feed connectors/providers are actually enabled (Connectors page)."
+
+        - alert: VantikRdbDisconnected
+          expr: vantik_rdb_connected == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "rdb for shard {{`{{ $labels.shard }}`}} is disconnected from its tickerplant"
+            description: "Live queries against this shard's rdb tier will be serving stale/incomplete data until this reconnects."
+
+        - alert: VantikWdbDisconnected
+          expr: vantik_wdb_connected == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "wdb for shard {{`{{ $labels.shard }}`}} is disconnected from its tickerplant"
+            description: "This shard's tickerplant log is not being flushed to the hdb - a prolonged outage here risks the on-disk log growing unbounded and losing history on eventual replay."
+
+        - alert: VantikPublishLatencyHigh
+          expr: vantik_tp_publish_latency_us > {{ .Values.monitoring.prometheusRule.thresholds.publishLatencyUs }}
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "Tickerplant {{`{{ $labels.shard }}`}} publish latency is elevated"
+            description: "{{`{{ $value }}`}}us, above the {{ .Values.monitoring.prometheusRule.thresholds.publishLatencyUs }}us threshold for 5m - see the Metrics page's own tail-latency distribution for the fuller picture (p50/p90/p99)."
+
+        - alert: VantikSubscriberLagElevated
+          expr: vantik_tp_sub_lag_bytes > {{ .Values.monitoring.prometheusRule.thresholds.subscriberLagBytes }}
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "Tickerplant {{`{{ $labels.shard }}`}} has a slow subscriber"
+            description: "{{`{{ $value }}`}} bytes queued, above the early-warning threshold - the real drop threshold (tick.q's SLOW_SUB_MAX_BYTES) is 50MB; this fires well before anything is actually shed, same early-warning point Overview's own load-shedding banner uses."
+
+        - alert: VantikWatchdogHealFailure
+          expr: increase(vantik_audit_events_total{actor="watchdog", outcome="failure"}[15m]) > 0
+          labels: { severity: critical }
+          annotations:
+            summary: "Watchdog failed to heal a service"
+            description: "At least one auto-heal attempt failed in the last 15m (see the Audit log page for which service/detail) - this is the case that needs a human, not just watchdog's own retry loop."
+{{- end }}

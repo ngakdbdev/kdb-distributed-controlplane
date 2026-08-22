@@ -1,19 +1,33 @@
 # Deploying to AWS
 
-Mirrors the GCP module (`deploy/gcp/`): provision → networking → docker →
+Mirrors the GCP and Azure modules: provision → networking → docker →
 deploy → teardown. By default it uses a compute-optimized, high-clock EC2
 instance with AWS's real low-latency levers, not an FPGA instance. FPGA is an
 explicit, off-by-default opt-in — read the FPGA section before you reach for it.
 
+This is the **single-VM, throwaway, one-prospect-demo path** — not
+production-grade (no HA, blast radius is the whole box). If you're taking
+this to a real customer beyond a one-off demo, read
+[docs/getting-started.md](../../docs/getting-started.md)'s hardening
+pointers and [docs/deployment-process.md](../../docs/deployment-process.md)
+first — this README covers *provisioning*, not everything you should do
+before something is customer-facing.
+
 ## Before you start
 
-1. Install the AWS CLI v2 and run `aws configure` (or use SSO). The identity you
-   use needs EC2 create/terminate, security-group, placement-group, and EIP
-   permissions.
-2. Pick a region with `export AWS_REGION=us-east-1` (or nearer your audience).
-3. Download **KDB-X Community Edition** (free, commercial use allowed) from the
-   KX Developer Center — the Linux `q` binary and your `k4.lic`. This repo can't
-   bundle them; KX's terms require you to obtain them directly.
+1. Install the AWS CLI v2 and run `aws configure` (or use SSO). Confirm it
+   works: `aws sts get-caller-identity` should print your account/identity,
+   not an error. The identity you use needs EC2 create/terminate,
+   security-group, placement-group, and EIP permissions, plus
+   `ssm:GetParameters` and `ec2:DescribeImages` (used to resolve the AMI —
+   see the AMI troubleshooting note below).
+2. Pick a region: `export AWS_REGION=us-east-1` (or nearer your audience).
+   Not every instance type is available in every region — if step 2 below
+   fails on this, the error tells you exactly how to check and what to
+   override.
+3. Download **KDB-X Community Edition** (free, commercial use allowed) from
+   the KX Developer Center — the Linux `q` binary and your `kc.lic`. This
+   repo can't bundle them; KX's terms require you to obtain them directly.
 
 ## Steps
 
@@ -23,34 +37,110 @@ export VM_NAME=kdb-control-plane-demo
 
 # 1. Network first (creates the security group the instance attaches to)
 ./02_configure_networking.sh
+#    By default this opens SSH (22) and the control-api debug port (8000)
+#    to the whole internet (0.0.0.0/0) - fine for a five-minute throwaway
+#    demo, NOT fine for anything left running. Set ALLOWED_SSH_CIDR and
+#    ALLOWED_ADMIN_CIDR to your own IP (e.g. "$(curl -s ifconfig.me)/32")
+#    before running this for anything you'll leave up:
+#      export ALLOWED_SSH_CIDR="$(curl -s ifconfig.me)/32"
+#      export ALLOWED_ADMIN_CIDR="$(curl -s ifconfig.me)/32"
 
 # 2. Provision the instance (C7i, cluster placement group, ENA)
 ./01_provision_vm.sh
 #    -> prints the public IP and the exact ssh command
+#
+#    If this fails with an AMI or instance-type error, the script's own
+#    output tells you exactly how to check availability and gives you an
+#    override (AMI_ID=... or INSTANCE_TYPE=...) - re-run with it set. This
+#    is the single most common failure point of this whole path, almost
+#    always caused by the chosen region not (yet) offering the specific
+#    AMI/instance-type combination, not a real problem with your account.
 
-# 3. SSH in and install Docker
+# 3. Verify the instance is actually reachable before continuing
+ssh -i ${VM_NAME}-key.pem ubuntu@<public-ip> "echo connected"
+#    If this hangs or refuses: check 02's security group actually allows
+#    your current IP (ALLOWED_SSH_CIDR), and that the instance shows
+#    "running" in the EC2 console, not still "pending".
+
+# 4. On the instance: get the code and install Docker
 ssh -i ${VM_NAME}-key.pem ubuntu@<public-ip>
-#    ...on the instance:
-curl -O https://raw.githubusercontent.com/<your-repo>/main/deploy/aws/03_install_docker.sh
-bash 03_install_docker.sh
-newgrp docker
-
-# 4. Get the project onto the instance (git clone, or scp the zip), then:
+#    ...now on the instance:
+git clone <this-repository-url>
 cd kdb-distributed-controlplane
-mkdir -p data-plane/docker/kdbx
-#    copy your `q` binary and `k4.lic` into data-plane/docker/kdbx/
-cp .env.example .env
-#    edit .env: set ADMIN_PASSWORD_HASH, JWT_SECRET, WATCHDOG_SHARED_SECRET
+bash deploy/aws/03_install_docker.sh
+#    Read its final output carefully - it tells you exactly how to get a
+#    shell with docker-group access before continuing (either reconnect
+#    SSH, or run `newgrp docker`). Skipping this is the second most common
+#    failure point: step 5 below fails with a permission error that has
+#    nothing to do with anything else if you don't do this first.
 
 # 5. Deploy
 bash deploy/aws/04_deploy_stack.sh
+#    If this refuses immediately with "cannot talk to the Docker daemon",
+#    that's step 4's docker-group timing issue - see its own error message.
+#    First run also copies .env.example to .env and stops so you can edit
+#    it - see docs/getting-started.md step 2. Set KX_BEARER_TOKEN (a free
+#    KX Developer Portal token - the KDB-X binary is pulled automatically
+#    at container start, nothing to download/scp onto this box yourself)
+#    and KDB_LICENSE_B64, plus LICENSE_KEY / DEPLOYMENT_ENV as this
+#    script's own reminder says (this is a customer-facing path,
+#    DEPLOYMENT_ENV is set to "customer" automatically, which makes a
+#    valid LICENSE_KEY mandatory).
+```
+
+**Verify it's actually up** before telling anyone the URL:
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://<public-ip>:8000/health   # expect 200
+curl -s -o /dev/null -w "%{http_code}\n" http://<public-ip>/              # expect 200
 ```
 
 Open `http://<public-ip>/` for the UI, enable the `bpipe-sim` and `crims-sim`
 connectors, and watch the Metrics tab. The self-healing demo works the same as
-on GCP: kill a process on the Topology tab and watch the watchdog restore it,
+on GCP/Azure: kill a process on the Topology tab and watch the watchdog restore it,
 then check the Audit log. For a fully scripted walkthrough plus load numbers,
 run `demokit` (see `demokit/README.md` and `DEMO.md`).
+
+## Troubleshooting provisioning specifically
+
+- **"could not resolve an Ubuntu 22.04 AMI"** — `01_provision_vm.sh` already
+  tries a fallback lookup and tells you exactly what's wrong (usually an
+  IAM permission gap or the region not having it yet) and how to override
+  with `AMI_ID=ami-xxxx`. Don't hand-edit the script; set the env var.
+- **"instance type ... is not offered in region"** — same script, same
+  pattern: it tells you how to check which regions do have it, or set
+  `INSTANCE_TYPE=` to something the region does offer.
+- **SSH hangs / connection refused** — almost always the security group
+  (step 1) not actually allowing your current IP, especially if you set
+  `ALLOWED_SSH_CIDR` to a value that's since changed (e.g. you're on a
+  different network now than when you ran the script). Re-run
+  `./02_configure_networking.sh` with the current `ALLOWED_SSH_CIDR`.
+- **`04_deploy_stack.sh` fails with a Docker permission error** — step 4's
+  docker-group timing issue; see that step's note above.
+- **Containers keep restarting after `04_deploy_stack.sh`** — almost always
+  `KX_BEARER_TOKEN` missing/invalid, or `KDB_LICENSE_B64`/`KX_LICENSE_PATH`
+  not set, in `.env`. See `docs/troubleshooting.md`.
+
+## Deploying on a free-tier / brand-new AWS account
+
+`01_provision_vm.sh` checks this automatically, with a real Service Quotas
+lookup (not a guess): if no `INSTANCE_TYPE` is set and your account's
+On-Demand Standard vCPU quota is too low for the default `c7i.2xlarge`, it
+falls back on its own to `t3.micro` (AWS's actual Free Tier instance) with a
+30GB gp3 disk, and skips the cluster placement group (nothing to cluster
+with one box). You'll see a message explaining what it did and why.
+
+Already know you're on a free-tier account? Skip straight there:
+```
+FREE_TIER=1 ./01_provision_vm.sh
+```
+
+`04_deploy_stack.sh` (step 4) does the matching check on the stack side -
+it reads the box's own actual RAM (not a cloud API - works the same however
+the box was created) and, below ~3.5GB, regenerates `docker-compose.yml`
+for 1 shard instead of 2 and turns off the `ollama` service (NL2Q's
+natural-language-to-q box, ~2.4GB RAM held permanently) so the rest of the
+stack actually fits. Force it either way with `FREE_TIER=1`/`FREE_TIER=0`.
+See `deploy/lib/free_tier.sh` for exactly what it changes.
 
 ## Honest note on FPGA (the opt-in)
 
@@ -89,4 +179,7 @@ export VM_NAME=kdb-control-plane-demo
 ```
 
 Run it as soon as you're done — an idle instance keeps billing, and an idle F2
-keeps billing a lot.
+keeps billing a lot. `99_teardown.sh` deletes the instance, Elastic IP,
+placement group, and security group; it deliberately leaves the SSH key pair
+in place (delete it yourself if you're fully done: `aws ec2 delete-key-pair
+--key-name ${VM_NAME}-key`, and remove the local `.pem` file).

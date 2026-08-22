@@ -1,0 +1,19 @@
+{
+  "provider": "COINBASE",
+  "feed": "MATCHES",
+  "environment": "production",
+  "enabled": false,
+  "transport": {
+    "type": "websocket", "host": "ws-feed.exchange.coinbase.com", "port": "443", "path": "/",
+    "subscribe_message": "{\"type\":\"subscribe\",\"product_ids\":[\"BTC-USD\",\"ETH-USD\"],\"channels\":[\"matches\"]}"
+  },
+  "protocol": { "type": "wsjson" },
+  "venue_adapter": "generic_wsjson",
+  "recovery": { "enabled": false },
+  "field_mapping": {
+    "filter_field": "type", "filter_value": "match",
+    "field_symbol": "product_id", "field_price": "price", "field_qty": "size",
+    "field_side": "side", "side_buy_value": "buy"
+  },
+  "credentials": { "required": [] }
+}

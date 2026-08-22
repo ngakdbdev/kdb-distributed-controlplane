@@ -1,7 +1,7 @@
 # HTTPS edge overlay — puts Caddy in front of the stack as the only public entry.
 #
-# Prereqs: a DNS A record for $TICKFORGE_DOMAIN pointing at this host's public IP,
-# ports 80 + 443 open, and TICKFORGE_DOMAIN (+ optional ACME_EMAIL) set in .env.
+# Prereqs: a DNS A record for $TLS_DOMAIN pointing at this host's public IP,
+# ports 80 + 443 open, and TLS_DOMAIN (+ optional ACME_EMAIL) set in .env.
 #
 # Run:
 #   docker compose -f docker-compose.yml -f deploy/tls/docker-compose.tls.yml up -d --build
@@ -16,7 +16,7 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      TICKFORGE_DOMAIN: "${TICKFORGE_DOMAIN:?set TICKFORGE_DOMAIN in .env, e.g. tickforge.qbytecomputing.com}"
+      TLS_DOMAIN: "${TLS_DOMAIN:?set TLS_DOMAIN in .env, e.g. vantik.yourcompany.com}"
       ACME_EMAIL: "${ACME_EMAIL:-}"
     volumes:
       - ./deploy/tls/Caddyfile:/etc/caddy/Caddyfile:ro

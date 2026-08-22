@@ -3,9 +3,24 @@ trading.py (router) - the subscriber trading terminal backend.
 
 Viewing (market metrics, portfolio, greeks, forecast) is open to any tenant
 user. PLACING ORDERS is gated behind the can_trade permission ("if permitted").
-Orders run through the paper OMS by default (route='paper'); a real broker route
-is a configured seam that refuses (see app/oms.py). Forecasts are illustrative
-statistical projections, not advice (see app/market.py).
+Orders run through the internal paper OMS by default (route='paper') -
+unconfigured, this is unchanged from before real broker routing existed.
+Set ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY + ALPACA_TRADING_MODE=paper to
+route marketable fills through a real Alpaca account's paper-trading
+simulation instead (see app/alpaca_broker.py); ALPACA_TRADING_MODE=live
+additionally needs ALPACA_LIVE_TRADING_ACK set to an exact confirmation
+phrase before real money can move - see that module's docstring for why
+this is deliberately awkward to turn on. IBKR_TRADING_MODE (see
+app/ibkr_broker.py) is the same pattern for Interactive Brokers, with its
+own extra safety check since IBKR's paper/live distinction depends on which
+account a locally-running gateway happens to be logged into, not just a
+config flag - see that module. Configuring BOTH Alpaca and IBKR with a
+non-off mode at once is treated as a misconfiguration and refuses every
+order rather than silently picking one - see _router() below. A resting
+(non-marketable) limit order always stays on the internal matcher
+regardless of mode - see place_order's own comment on that boundary.
+Forecasts are illustrative statistical projections, not advice (see
+app/market.py).
 """
 from datetime import datetime
 from typing import Optional
@@ -14,7 +29,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from .. import alpaca_broker
 from .. import greeks as gk
+from .. import ibkr_broker
 from .. import market as mkt
 from .. import oms
 from .. import portfolio as pf
@@ -26,6 +43,35 @@ from .auth import CurrentUser, get_current_user, require_tenant_scope
 router = APIRouter(prefix="/trading", tags=["trading"])
 
 _PAPER = oms.PaperRouter()
+
+
+def _router() -> oms.PaperRouter | oms.AlpacaRouter | oms.IBKRRouter:
+    """Which router an order actually goes through - checked fresh on every
+    call (not cached at import time) so *_TRADING_MODE/credentials can be
+    verified live rather than baked in at process start. Falls back to the
+    internal PaperRouter whenever neither broker is configured (mode
+    'off') - each broker module's own client_from_env() already encodes
+    that decision (including the live-mode double-confirmation check), so
+    this function trusts it rather than re-deciding anything here.
+
+    Configuring BOTH Alpaca and IBKR with a non-off mode simultaneously
+    raises rather than picking one silently - there's no sane default
+    priority between "the bot's orders go to Alpaca" and "...go to IBKR"
+    when an operator has (almost certainly by accident) configured both;
+    guessing wrong here means real orders going to the wrong broker
+    entirely, so this fails loud and immediate instead."""
+    alpaca_client = alpaca_broker.client_from_env()
+    ibkr_client = ibkr_broker.client_from_env()
+    if alpaca_client is not None and ibkr_client is not None:
+        raise oms.OrderError(
+            "both Alpaca and IBKR are configured with a non-off trading mode at the same time - "
+            "this is refused rather than guessed at; set exactly one of ALPACA_TRADING_MODE / "
+            "IBKR_TRADING_MODE to 'off' before placing orders")
+    if alpaca_client is not None:
+        return oms.AlpacaRouter(alpaca_client, live=alpaca_client.live)
+    if ibkr_client is not None:
+        return oms.IBKRRouter(ibkr_client, mode=ibkr_broker.trading_mode())
+    return _PAPER
 
 
 def require_trading(user: CurrentUser = Depends(get_current_user),
@@ -43,7 +89,9 @@ def require_trading(user: CurrentUser = Depends(get_current_user),
 
 
 def _check_pretrade_audited(symbol: str, actor: str, tenant_id: Optional[int],
-                            session: Session) -> Optional[str]:
+                            session: Session, side: Optional[str] = None,
+                            qty: Optional[float] = None,
+                            ref_price: Optional[float] = None) -> Optional[str]:
     """risk_check.check_pretrade, plus: whenever the risk feed was unreachable
     (degraded=True - the decision used the fail-open/fail-closed policy
     rather than a verified read, either way), audit it. That's a materially
@@ -51,7 +99,13 @@ def _check_pretrade_audited(symbol: str, actor: str, tenant_id: Optional[int],
     regardless of which way the policy resolved it. Takes a plain actor/
     tenant_id pair (not a CurrentUser) so the server-side signal engine
     (app/signal_engine.py), which has no HTTP request/JWT, can go through the
-    exact same gate a human order does."""
+    exact same gate a human order does.
+
+    side/qty/ref_price are optional and feed risk_check.check_portfolio_
+    limits (daily loss / concentration) ALONGSIDE the per-symbol check
+    above - skipped gracefully (not blocked) if not supplied or if
+    tenant_id/ref_price is unavailable, same "don't block on missing
+    optional data" posture as check_realized_volatility."""
     result = risk_check.check_pretrade(symbol)
     if result.degraded:
         log_event(
@@ -60,7 +114,16 @@ def _check_pretrade_audited(symbol: str, actor: str, tenant_id: Optional[int],
             outcome="blocked" if result.block_reason else "fail_open",
             tenant_id=tenant_id,
         )
-    return result.block_reason
+    if result.block_reason:
+        return result.block_reason
+    if side is not None and qty is not None and ref_price is not None and tenant_id is not None:
+        portfolio_result = risk_check.check_portfolio_limits(
+            tenant_id, symbol, side, qty, ref_price, session)
+        if portfolio_result.block_reason:
+            log_event(session, actor=actor, action="portfolio_risk_blocked", target=symbol,
+                      detail=portfolio_result.block_reason, outcome="blocked", tenant_id=tenant_id)
+        return portfolio_result.block_reason
+    return None
 
 
 def place_market_order_internal(session: Session, tenant_id: int, actor: str, symbol: str,
@@ -77,10 +140,11 @@ def place_market_order_internal(session: Session, tenant_id: int, actor: str, sy
     it avoids double-querying the risk feed and double-logging a degraded
     check, not a way to skip the gate itself."""
     if check_risk:
-        block_reason = _check_pretrade_audited(symbol, actor, tenant_id, session)
+        block_reason = _check_pretrade_audited(symbol, actor, tenant_id, session,
+                                               side=side, qty=qty, ref_price=ref_price)
         if block_reason:
             raise oms.OrderError(block_reason)
-    fill = _PAPER.fill(side, qty, "market", ref_price, None)
+    fill = _router().fill(side, qty, "market", ref_price, None, symbol=symbol)
     order = Order(tenant_id=tenant_id, user_email=actor, symbol=symbol, side=side.lower(),
                   qty=qty, order_type="market", status="filled", route=fill.route,
                   fill_price=fill.price)
@@ -100,7 +164,31 @@ def my_permission(user: CurrentUser = Depends(get_current_user),
                   session: Session = Depends(get_session)):
     row = session.get(User, user.user_id)
     can = user.role in ("platform_admin", "tenant_admin") or bool(row and row.can_trade)
-    return {"can_trade": can, "live_routing": False, "mode": "paper"}
+    try:
+        r = _router()
+    except oms.OrderError as exc:
+        # both Alpaca and IBKR configured at once (see _router()'s own
+        # docstring) - a read-only permission check shouldn't 500 for this,
+        # it should say so clearly so the misconfiguration is obvious
+        # without having to first attempt a real order and hit a 400.
+        return {"can_trade": can, "live_routing": False, "mode": "misconfigured", "error": str(exc)}
+    return {"can_trade": can, "live_routing": r.route_name in ("alpaca-live", "ibkr-live"),
+            "mode": r.route_name}
+
+
+@router.get("/market-clock")
+def market_clock(user: CurrentUser = Depends(get_current_user)):
+    """Real Alpaca equities-session status (NYSE calendar via /v2/clock) -
+    {'configured': False} if no Alpaca broker is set up (ALPACA_TRADING_MODE
+    unset/off, or no credentials), regardless of role/permission - this is
+    read-only status, same visibility as /permission above. Doesn't apply to
+    crypto (Alpaca crypto trades 24/7) or to a deployment routing through
+    IBKR instead - equities-only, Alpaca-only, by design of what /v2/clock
+    itself reports."""
+    try:
+        return alpaca_broker.market_status()
+    except alpaca_broker.AlpacaError as exc:
+        raise HTTPException(status_code=502, detail=f"Alpaca clock unreachable: {exc}")
 
 
 class GrantBody(BaseModel):
@@ -157,7 +245,9 @@ def place_order(body: OrderBody, user: CurrentUser = Depends(require_trading),
         raise HTTPException(status_code=400, detail="qty must be positive")
     symbol = body.symbol.upper()
 
-    block_reason = _check_pretrade_audited(symbol, user.email, user.tenant_id, session)
+    block_reason = _check_pretrade_audited(symbol, user.email, user.tenant_id, session,
+                                           side=body.side, qty=body.qty,
+                                           ref_price=body.ref_price or body.limit_price)
     if block_reason:
         raise HTTPException(status_code=400, detail=block_reason)
 
@@ -174,6 +264,16 @@ def place_order(body: OrderBody, user: CurrentUser = Depends(require_trading),
     if not marketable:
         if body.limit_price is None:
             raise HTTPException(status_code=400, detail="limit order needs a limit price")
+        # A resting (non-marketable) limit order stays on the internal paper
+        # matcher regardless of Alpaca configuration - see /orders/match.
+        # Handing a genuinely-resting order to Alpaca would mean tracking ITS
+        # order book lifecycle (partial fills, external cancellation, status
+        # webhooks) instead of this codebase's own, which is real additional
+        # scope this pass doesn't build; only orders that fill IMMEDIATELY
+        # (market orders, and limit orders that cross on arrival, both
+        # below) go through _router(). Tagging this with _PAPER.route_name
+        # rather than _router().route_name keeps that boundary honest in the
+        # audit trail - it never claims to have reached Alpaca.
         order = Order(tenant_id=user.tenant_id, user_email=user.email, symbol=symbol,
                       side=body.side.lower(), qty=body.qty, order_type=body.order_type,
                       limit_price=body.limit_price, status="new", route=_PAPER.route_name)
@@ -200,7 +300,8 @@ def place_order(body: OrderBody, user: CurrentUser = Depends(require_trading),
         return _order_api(order)
 
     try:
-        fill = _PAPER.fill(body.side, body.qty, body.order_type, body.ref_price, body.limit_price)
+        fill = _router().fill(body.side, body.qty, body.order_type, body.ref_price, body.limit_price,
+                              symbol=symbol)
     except oms.OrderError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

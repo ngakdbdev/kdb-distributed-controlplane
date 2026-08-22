@@ -5,6 +5,11 @@ how to run the pieces locally while you work on them. For "what do I need to
 prepare before deploying," see `docs/README.md`'s pre-deployment guides
 instead — this is about developing the platform itself.
 
+**New to this codebase?** This is reference material, not a tutorial - it
+assumes you already have the stack running and know what a tickerplant/
+shard/RDB is. If either of those isn't true yet, read
+[getting-started.md](getting-started.md) first.
+
 ## Repository layout
 
 ```
@@ -19,9 +24,13 @@ watchdog/           auto-heal daemon - polls container health, runs runbooks
 fleet_agent/        remote provisioning agent (runs in a tenant's own cluster)
 vscode-extension/   VS Code extension for the query workspace
 helm/               Kubernetes chart (pilot/production path)
+terraform/          per-cloud IaC (aws/azure/gcp) that provisions the cluster
+                    the Helm chart above installs onto - VPC, managed
+                    Kubernetes, KMS-backed secrets encryption, optional
+                    high-performance filesystem storage tier
 deploy/             single-VM cloud scripts (AWS/GCP/Azure) + TLS overlays
 scripts/            gen_topology.py (generates docker-compose.yml/shards.json),
-                    check_topology_sync.py, stage-kdbx.sh
+                    check_topology_sync.py
 docs/               this guide + the pre-deployment checklists
 ```
 
@@ -60,10 +69,11 @@ this guide is about *changing* the code, not running it.
 ## Local development
 
 You don't need q/kdb+ installed locally for control-api or web-ui work —
-only the `data-plane` containers need the real binary (see
-`data-plane/docker/kdb-entrypoint.sh` — it stages from `KX_BINARIES_DIR` or
-pulls from the KX portal with `KX_BEARER_TOKEN`). For q-script changes, you
-do need a live stack to test against; there's no local q REPL story here
+only the `data-plane` containers need the real binary, and they pull it
+themselves (see `data-plane/docker/kdb-entrypoint.sh` — every container
+fetches its own binary from the KX portal at start using `KX_BEARER_TOKEN`;
+there's no local-file staging step at all). For q-script changes, you do
+need a live stack to test against; there's no local q REPL story here
 beyond running the containers.
 
 ```bash
@@ -92,7 +102,7 @@ in a throwaway container instead:
 
 ```bash
 docker run --rm -v "$(pwd)":/app -w /app python:3.12-slim \
-  sh -c "pip install -q -r requirements.txt pytest && python -m pytest tests/ -q"
+  sh -c "pip install -q -r requirements.txt pytest httpx && python -m pytest tests/ -q"
 ```
 
 **Adding an endpoint**: add it to the right router, and if it touches state

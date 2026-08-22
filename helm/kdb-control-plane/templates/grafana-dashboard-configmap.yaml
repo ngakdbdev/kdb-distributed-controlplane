@@ -1,0 +1,99 @@
+{{/*
+  A real dashboard built entirely from the metrics GET /metrics actually
+  exposes (app/prometheus_metrics.py) - every query below references a
+  vantik_* series this chart's control-api pod renders live, nothing
+  hypothetical. Labeled grafana_dashboard: "1" - the kube-prometheus-
+  stack Grafana sidecar's default auto-discovery label (see that chart's
+  own grafana.sidecar.dashboards.label value if you've changed it from
+  the default). Uses a $datasource template variable rather than a fixed
+  UID so it works regardless of what your Prometheus datasource happens
+  to be named/uid'd in Grafana.
+*/}}
+{{- if .Values.monitoring.grafanaDashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vantik-grafana-dashboard
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    grafana_dashboard: "1"
+data:
+  vantik-data-fabric.json: |
+    {
+      "title": "Vantik - Data Fabric",
+      "uid": "vantik-data-fabric",
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [
+          { "name": "datasource", "type": "datasource", "query": "prometheus", "current": {} }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1, "title": "Message throughput (recv/pub, per shard)",
+          "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "targets": [
+            { "expr": "rate(vantik_tp_recv_total[1m])", "legendFormat": "recv {{`{{shard}}`}}" },
+            { "expr": "rate(vantik_tp_pub_total[1m])", "legendFormat": "pub {{`{{shard}}`}}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "msgps" }, "overrides": [] }
+        },
+        {
+          "id": 2, "title": "Rows held (rdb, per table)",
+          "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "targets": [
+            { "expr": "vantik_row_count", "legendFormat": "{{`{{table}}`}}" }
+          ]
+        },
+        {
+          "id": 3, "title": "Tickerplant publish + log-write latency (µs)",
+          "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "targets": [
+            { "expr": "vantik_tp_publish_latency_us", "legendFormat": "publish {{`{{shard}}`}}" },
+            { "expr": "vantik_tp_log_latency_us", "legendFormat": "log write {{`{{shard}}`}}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "µs" }, "overrides": [] }
+        },
+        {
+          "id": 4, "title": "Subscriber lag (bytes, real drop threshold is 50MB)",
+          "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "targets": [
+            { "expr": "vantik_tp_sub_lag_bytes", "legendFormat": "{{`{{shard}}`}}" },
+            { "expr": "vantik_tp_queue_bytes", "legendFormat": "queue {{`{{shard}}`}}" }
+          ],
+          "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
+        },
+        {
+          "id": 5, "title": "Service health",
+          "type": "state-timeline", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "targets": [
+            { "expr": "vantik_service_up", "legendFormat": "{{`{{service}}`}}" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                { "type": "value", "options": { "0": { "text": "down", "color": "red" }, "1": { "text": "up", "color": "green" } } }
+              ]
+            }
+          }
+        },
+        {
+          "id": 6, "title": "Watchdog self-heal events (rate, by outcome)",
+          "type": "timeseries", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "targets": [
+            { "expr": "sum by (outcome) (rate(vantik_audit_events_total{actor=\"watchdog\"}[15m]))", "legendFormat": "{{`{{outcome}}`}}" }
+          ]
+        }
+      ]
+    }
+{{- end }}

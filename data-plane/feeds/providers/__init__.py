@@ -23,6 +23,8 @@ Two tiers:
 from .finnhub import FinnhubProvider
 from .twelvedata import TwelveDataProvider
 from .polygon import PolygonProvider
+from .alpaca import AlpacaProvider
+from .ibkr import IBKRProvider
 from .coinbase import CoinbaseProvider
 from .kraken import KrakenProvider
 from .binance import BinanceProvider
@@ -37,7 +39,7 @@ from .nse import NSEProvider
 from .bse import BSEProvider
 
 _ALL = [
-    FinnhubProvider, TwelveDataProvider, PolygonProvider,
+    FinnhubProvider, TwelveDataProvider, PolygonProvider, AlpacaProvider, IBKRProvider,
     CoinbaseProvider, KrakenProvider, BinanceProvider, BinanceDepthProvider, BybitProvider, OKXProvider,
     YahooFinanceProvider, AlphaVantageProvider,
     NYSEProvider, LSEGProvider, NSEProvider, BSEProvider,

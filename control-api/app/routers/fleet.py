@@ -11,7 +11,7 @@ from ..db import get_session, log_event
 from ..models import Agent, AgentEnvironment, AgentStatus, Command, CommandStatus
 from ..security import hash_password, verify_password
 from .. import topology
-from .auth import CurrentUser, require_tenant_scope
+from .auth import CurrentUser, require_admin, require_tenant_scope
 
 router = APIRouter(prefix="/fleet", tags=["fleet"])
 
@@ -43,7 +43,7 @@ def list_agents(user: CurrentUser = Depends(require_tenant_scope),
 
 
 @router.post("/agents")
-def create_agent(body: CreateAgentRequest, user: CurrentUser = Depends(require_tenant_scope),
+def create_agent(body: CreateAgentRequest, user: CurrentUser = Depends(require_admin),
                   session: Session = Depends(get_session)):
     """
     Registers a new agent slot and returns a one-time enrollment token. The
@@ -67,7 +67,7 @@ def create_agent(body: CreateAgentRequest, user: CurrentUser = Depends(require_t
 
 @router.post("/agents/{agent_id}/commands")
 def enqueue_command(agent_id: int, action: str, service: str,
-                     user: CurrentUser = Depends(require_tenant_scope),
+                     user: CurrentUser = Depends(require_admin),
                      session: Session = Depends(get_session)):
     if action not in ("start", "stop", "restart"):
         raise HTTPException(status_code=400, detail="action must be start, stop, or restart")
@@ -92,18 +92,27 @@ def enqueue_command(agent_id: int, action: str, service: str,
 # components in AWS/Azure/GCP from the UI" path.
 class ProvisionRequest(BaseModel):
     shard_count: int
+    gateway_replicas: int | None = None   # optional - None = leave gateway replicas alone
     note: str = ""
 
 
-def _desired_topology(shard_count: int) -> dict:
+def _desired_topology(shard_count: int, gateway_replicas: int | None = None) -> dict:
     """Canonical desired-state spec the agent reconciles to. Reuses the same
     topology module the whole system derives from, so the agent, the gateway,
-    and the control plane can never disagree about what N shards means."""
-    return {
+    and the control plane can never disagree about what N shards means.
+    gateway_replicas is a genuinely separate knob from shard_count - the
+    gateway is a horizontally-scalable, stateless router (see
+    helm/kdb-control-plane/values.yaml's gateway.* comment), not part of the
+    per-shard tier set - so scaling it doesn't imply or require a shard-count
+    change, and vice versa."""
+    out = {
         "shardCount": shard_count,
         "topology": topology.shards_json(shard_count),
         "services": sorted(topology.managed_services(shard_count).keys()),
     }
+    if gateway_replicas is not None:
+        out["gatewayReplicas"] = gateway_replicas
+    return out
 
 
 def _load_agent_for_tenant(agent_id: int, user: CurrentUser, session: Session) -> Agent:
@@ -115,14 +124,16 @@ def _load_agent_for_tenant(agent_id: int, user: CurrentUser, session: Session) -
 
 @router.post("/agents/{agent_id}/provision")
 def provision(agent_id: int, body: ProvisionRequest,
-              user: CurrentUser = Depends(require_tenant_scope),
+              user: CurrentUser = Depends(require_admin),
               session: Session = Depends(get_session)):
     if not (1 <= body.shard_count <= topology.MAX_SHARDS):
         raise HTTPException(status_code=400,
                             detail=f"shard_count must be between 1 and {topology.MAX_SHARDS}")
+    if body.gateway_replicas is not None and body.gateway_replicas < 1:
+        raise HTTPException(status_code=400, detail="gateway_replicas must be a positive integer")
     agent = _load_agent_for_tenant(agent_id, user, session)
 
-    payload = {"desired": _desired_topology(body.shard_count), "note": body.note}
+    payload = {"desired": _desired_topology(body.shard_count, body.gateway_replicas), "note": body.note}
     cmd = Command(tenant_id=user.tenant_id, agent_id=agent_id,
                   action="provision", service="data-plane",
                   payload=json.dumps(payload))
@@ -130,15 +141,18 @@ def provision(agent_id: int, body: ProvisionRequest,
     session.commit()
     session.refresh(cmd)
     result = cmd.model_dump()
+    detail = f"shards={body.shard_count}"
+    if body.gateway_replicas is not None:
+        detail += f", gateway_replicas={body.gateway_replicas}"
     log_event(session, user.email, "provision_requested",
               f"{agent.name} ({agent.environment.value})",
-              detail=f"shards={body.shard_count}", tenant_id=user.tenant_id)
+              detail=detail, tenant_id=user.tenant_id)
     return result
 
 
 @router.post("/agents/{agent_id}/deprovision")
 def deprovision(agent_id: int,
-                user: CurrentUser = Depends(require_tenant_scope),
+                user: CurrentUser = Depends(require_admin),
                 session: Session = Depends(get_session)):
     """Tear the data plane down in this environment (agent uninstalls the
     release / brings the compose stack down). Symmetric with provision."""

@@ -39,6 +39,15 @@ class Settings:
 
     watchdog_shared_secret: str = os.environ.get("WATCHDOG_SHARED_SECRET", "dev-watchdog-secret-change-in-deploy")
 
+    # No insecure default on purpose - see app/cloud_credentials.py's own
+    # comment. Blank means the cloud auto-provisioning endpoints
+    # (routers/cloud_provision.py) fail closed with a clear error rather
+    # than encrypting real AWS/Azure/GCP account credentials under a
+    # well-known dev key - unlike jwt_secret/watchdog_shared_secret above,
+    # a leaked value here is a direct path into a real cloud account, not
+    # a forgeable session token.
+    cloud_credentials_encryption_key: str = os.environ.get("CLOUD_CREDENTIALS_ENCRYPTION_KEY", "")
+
     database_url: str = os.environ.get("DATABASE_URL", "sqlite:///./control_plane.db")
     # Supported dialects and the driver each one needs (already pinned in
     # requirements.txt):
@@ -81,6 +90,28 @@ class Settings:
     # fraction (e.g. 5.0 = 500% annualized).
     risk_max_realized_vol_annualized: float = float(
         os.environ.get("RISK_MAX_REALIZED_VOL_ANNUALIZED", "0"))
+
+    # Portfolio-level limits (app/risk_check.py's check_portfolio_limits) -
+    # both opt-in (0 = not enforced), same reasoning as the volatility
+    # check above: a universal number doesn't fit every desk's capital base
+    # or risk appetite, so an unconfigured deployment enforces neither.
+    # Global rather than per-tenant for now - every OTHER risk knob here is
+    # global too, and a per-tenant version is a bigger, separate piece
+    # (its own config table + admin UI) not worth building until a real
+    # multi-tenant desk actually needs different limits per tenant.
+    #
+    # Only ever blocks POSITION-OPENING trades (a new buy, or a buy that
+    # grows an existing position) - a trade that reduces or closes risk is
+    # never blocked by either of these, matching risk_check.py's own
+    # "never block de-risking" principle.
+    risk_max_daily_loss: float = float(os.environ.get("RISK_MAX_DAILY_LOSS", "0"))
+    # Fraction of total portfolio notional a single symbol may reach after
+    # the trade (e.g. 0.4 = 40%). Notional = qty * avg_price per position,
+    # the same cost-basis figure Position already tracks - not a live
+    # mark-to-market valuation, which would need a live price pull per
+    # symbol on every order (a real cost/latency tradeoff, not free).
+    risk_max_symbol_concentration_pct: float = float(
+        os.environ.get("RISK_MAX_SYMBOL_CONCENTRATION_PCT", "0"))
 
     # --- Query cost governance (app/query_cost.py) ---
     # 0 (default) = no budget enforced - opt-in, like the other governance

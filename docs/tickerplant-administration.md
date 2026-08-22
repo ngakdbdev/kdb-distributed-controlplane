@@ -5,6 +5,11 @@ knobs you have. This is the deep-technical companion to
 `docs/platform-usage.md`'s Topology/Tickerplants sections. For "it's broken,
 what do I do," see `docs/troubleshooting.md`.
 
+**If you're not sure what a tickerplant, RDB, WDB, HDB, or shard actually
+is** before diving into the operational detail below, read
+[getting-started.md](getting-started.md)'s "five pieces of a tick pipeline"
+section first - one plain-English paragraph per piece, no assumed context.
+
 ## The chain, per shard
 
 ```

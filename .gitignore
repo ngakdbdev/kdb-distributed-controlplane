@@ -5,7 +5,17 @@ __pycache__/
 .venv/
 *.db
 control-api/control_plane*.db
-data-plane/docker/kdbx/q
-data-plane/docker/kdbx/k4.lic
+# The whole directory, not just q/*.lic - the platform no longer reads
+# binaries or licenses from a local folder at all (see kdb-entrypoint.sh:
+# both are pulled from the KX portal / passed as KDB_LICENSE_B64 at
+# container start), so nothing under here should ever be tracked again.
+# This directory previously had a real KX binary and license committed to
+# git (see git history) - if you're reading this after that history was
+# ever pushed to a remote, rotate the KX bearer token/license with KX.
+data-plane/docker/kdbx/
 *.log
 deploy/tls/.local-ca/
+.claude
+.venv
+.pytest_cache
+

@@ -6,6 +6,10 @@ real cause and the fix - not just "restart it," though sometimes that
 genuinely is the answer, and this says so plainly rather than pretending
 otherwise.
 
+New here? [getting-started.md](getting-started.md) explains the terms
+(tickerplant, shard, RDB/WDB/HDB) this doc uses without re-explaining them
+every time.
+
 **Before anything else**, check the actual container state - most
 "something's wrong" reports turn out to be one specific process cycling,
 not the whole platform:
@@ -20,6 +24,55 @@ one-off blip - see the OOM section below, the single most common chronic
 cause on this platform.
 
 ---
+
+## Deploying from a Windows host: deploy scripts fail with `$'\r': command not found` / `bad interpreter`, or a correctly-configured `.env` still reports "Missing KDB-X binary/license"
+
+**Both symptoms have the same root cause: CRLF line endings.** Git for
+Windows' very common `core.autocrlf=true` default rewrites every text file
+in the working tree - including every `deploy/*.sh` script and any `.env`
+you create by copying `.env.example` - from LF to CRLF on checkout. Two
+distinct failures follow from that one cause:
+
+- **The `.sh` scripts themselves fail to run at all** - `bad interpreter:
+  /bin/bash^M: no such file or directory` if invoked directly (`./script.sh`,
+  CRLF breaks the `#!/bin/bash` shebang), or `$'\r': command not found`
+  partway through if invoked as `bash script.sh` (every line still ends in a
+  literal `\r`).
+- **A genuinely correct `.env` still fails the license check.**
+  `deploy/lib/kx_license.sh` reads `.env` with `grep | cut`; if `.env`
+  itself has CRLF, `KX_BEARER_TOKEN=...` is read back with a trailing `\r`
+  baked into the value - the pre-flight check's own `[ -n "$env_token" ]`
+  still passes (any non-empty string does), but the token the *container*
+  actually sends to the KX portal carries the same `\r` and fails auth
+  there instead, further from this check and less obviously connected to
+  line endings. (This particular script strips `\r` defensively either way,
+  but nothing else that might read `.env` does.)
+
+Fix, in order:
+
+1. **This repo now ships a `.gitattributes`** forcing LF on checkout
+   regardless of the checking-out machine's `core.autocrlf` - a fresh clone
+   (or `git add --renormalize . && git commit`) after pulling this fixes it
+   permanently. If your checkout predates this file, `.gitattributes` alone
+   does **not** retroactively fix files already on disk - re-clone, or run
+   `git add --renormalize .` and commit the result.
+2. **Your own `.env`** is gitignored, so `.gitattributes` never touches it -
+   save it with LF endings explicitly (most code editors have a
+   "line ending" indicator/setting in the status bar; VS Code shows `CRLF`/
+   `LF` there and lets you click to change it), or regenerate it via WSL2's
+   `cp .env.example .env` rather than a Windows-native copy/paste.
+3. **Run the deploy scripts from WSL2** (or Git Bash), not a native
+   PowerShell/cmd prompt - they're bash scripts, there's no Windows-native
+   path that runs them at all. Keep the repo on the WSL2 Linux filesystem
+   (e.g. `~/kdb-distributed-controlplane`), not the Windows-mounted
+   `/mnt/c/...` one - besides sidestepping this whole class of bug, it's
+   also meaningfully faster for anything that does real I/O (npm/pip
+   installs, docker builds).
+
+If you're still hitting the license error after all of the above,
+double-check for real (not a line-ending artifact): `cat -A .env | grep
+KX_BEARER_TOKEN` - a trailing `^M` before the `$` means CRLF is still
+present in that file specifically.
 
 ## "select from trade by sym" (or similar) fails with a one-word error like `'sym`
 

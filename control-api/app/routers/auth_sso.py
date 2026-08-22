@@ -18,6 +18,7 @@ from sqlmodel import Session, select
 
 from .. import sso
 from ..config import settings
+from ..crypto import encrypt_secret
 from ..db import get_session, log_event
 from ..models import Tenant, TenantIdP, User, UserRole
 from ..provisioning import provision_user
@@ -179,7 +180,7 @@ def put_config(slug: str, body: IdPConfigIn, user: CurrentUser = Depends(get_cur
     idp.authority = body.authority.rstrip("/")
     idp.client_id = body.client_id
     if body.client_secret:                       # only overwrite when a new secret is supplied
-        idp.client_secret = body.client_secret
+        idp.client_secret = encrypt_secret(body.client_secret)
     idp.allowed_domains = body.allowed_domains
     idp.group_role_map = json.dumps(body.group_role_map)
     idp.default_role = UserRole(body.default_role)

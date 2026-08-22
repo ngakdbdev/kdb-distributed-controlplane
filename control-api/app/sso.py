@@ -32,6 +32,7 @@ import jwt
 import requests
 
 from .config import settings
+from .crypto import decrypt_secret
 
 DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
 _STATE_PURPOSE = "sso_state"
@@ -58,7 +59,7 @@ class OIDCConfig:
         except json.JSONDecodeError:
             gmap = {}
         role = idp.default_role.value if hasattr(idp.default_role, "value") else str(idp.default_role)
-        return cls(tenant_slug, idp.authority.rstrip("/"), idp.client_id, idp.client_secret,
+        return cls(tenant_slug, idp.authority.rstrip("/"), idp.client_id, decrypt_secret(idp.client_secret),
                    domains, gmap, role)
 
 

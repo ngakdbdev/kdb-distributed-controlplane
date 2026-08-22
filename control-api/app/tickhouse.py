@@ -16,6 +16,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field, asdict
 
+from . import topology
+
 CLOUDS = ("aws", "azure", "gcp", "onprem")
 OS_TYPES = ("ubuntu-22.04", "ubuntu-24.04", "rhel-9", "rocky-9", "amazonlinux-2023")
 PROFILES = ("high-throughput", "low-latency", "balanced")
@@ -111,6 +113,25 @@ class HardwareSpec:
     disk_tier: str              # ssd | nvme
     nic: str                    # standard | high-bandwidth | kernel-bypass
     tuning: list = field(default_factory=list)
+    # NUMA/CPU pinning - NOT auto-derived by auto_hardware() below, unlike
+    # everything else on this dataclass: there is no generic, portable way
+    # to know a cloud instance's actual core-to-NUMA-node layout from a
+    # profile/cloud/component name alone (it varies by instance size within
+    # the same family, and changes when the provider changes hardware
+    # generations under an existing type). Blank (the default) means "no
+    # pinning" - identical behavior to before these fields existed. An
+    # operator who has run `numactl --hardware` on the actual target box (or
+    # knows their node pool's labeling) fills these in on the spec
+    # explicitly; see docs/hardening.md's NUMA section. When "cpu-pinning" is
+    # in `tuning` (the low-latency profile's default), the renderer still
+    # gets you partway there automatically even with both of these left
+    # blank: it sets the Kubernetes resources.limits.cpu equal to
+    # requests.cpu (Guaranteed QoS), which is what lets the kubelet's static
+    # CPUManager policy grant exclusive whole-core pinning WITHOUT anyone
+    # needing to know real core numbers - see fleet_agent/tickhouse_render.py.
+    cpuset: str = ""             # e.g. "0-3" or "0,2,4,6" - compose/numactl path only
+    numa_node: str = ""          # e.g. "0" - numactl --membind (compose) or a
+                                  # NUMA-labeled node's selector value (k8s)
 
 
 @dataclass
@@ -265,6 +286,138 @@ def auto_hardware(profile: str, cloud: str, os: str, component: str) -> Hardware
     return HardwareSpec(cloud=cloud, os=os, instance_type=instance, vcpus=vcpus,
                         memory_gb=mem, disk_gb=disk, disk_tier=tier, nic=nic,
                         tuning=list(_PROFILE_TUNING[profile]))
+
+
+# --------------------------------------------------------------------------- #
+# SLA-driven blueprint suggestion (item 4: "I need N ms tick-to-trade, what
+# should I deploy?")
+# --------------------------------------------------------------------------- #
+# Architectural latency-budget ESTIMATES per profile, in milliseconds, for
+# each real hop a tick takes through this pipeline (feed handler decode ->
+# tickerplant publish/fan-out -> subscriber apply -> one extra IPC hop if the
+# client goes through the gateway rather than a direct shard connection ->
+# network RTT). These are NOT measurements - this codebase has never been
+# benchmarked for wire-to-application latency (see DEMO.md's own throughput
+# load-test, which explicitly measures ingest RATE on real hardware and
+# deliberately does NOT claim a latency number for the same reason: "I don't
+# quote a number I haven't measured on your target hardware"). Treat these as
+# an ordering-of-magnitude starting point for a conversation, not a promise -
+# the `caveats` field on suggest_blueprint()'s return says this explicitly,
+# and every number is a (low, high) range, never a single point value.
+_LATENCY_BUDGET_MS = {
+    "low-latency": {
+        "feed_decode": (0.2, 1.0), "tp_publish_fanout": (0.1, 0.5),
+        "subscriber_apply": (0.1, 0.5), "gateway_hop": (0.3, 1.0),
+        "network_rtt_same_az": (0.3, 2.0),
+    },
+    "balanced": {
+        "feed_decode": (0.5, 2.0), "tp_publish_fanout": (0.3, 1.5),
+        "subscriber_apply": (0.3, 1.5), "gateway_hop": (0.5, 2.0),
+        "network_rtt_same_az": (0.5, 3.0),
+    },
+    "high-throughput": {
+        "feed_decode": (1.0, 5.0), "tp_publish_fanout": (0.5, 4.0),
+        "subscriber_apply": (0.5, 4.0), "gateway_hop": (1.0, 4.0),
+        "network_rtt_same_az": (0.5, 3.0),
+    },
+}
+# a cross-region hop dwarfs everything above - callers that know the client
+# isn't in the same region/AZ as the deployment should add this instead of
+# (or on top of) network_rtt_same_az; kept as a separate, clearly-labeled
+# constant rather than silently baked into the same-AZ number above.
+_CROSS_REGION_RTT_MS = (20.0, 80.0)
+
+
+def _pick_profile(tick_to_trade_target_ms: float | None, peak_msgs_per_sec: int | None) -> str:
+    if tick_to_trade_target_ms is not None:
+        if tick_to_trade_target_ms <= 250:
+            return "low-latency"
+        if peak_msgs_per_sec and peak_msgs_per_sec > 5000:
+            return "high-throughput"
+        return "balanced"
+    if peak_msgs_per_sec is not None:
+        return "high-throughput" if peak_msgs_per_sec > 5000 else "balanced"
+    return "balanced"
+
+
+def _suggest_shard_count(peak_msgs_per_sec: int | None, symbol_count: int | None) -> int:
+    """Starting point only - see the caveat this always ships with in
+    suggest_blueprint(). Two independent, deliberately conservative
+    heuristics (symbols-per-shard for query/data locality, an UNVALIDATED
+    msgs/sec-per-shard ballpark for ingest headroom), take whichever wants
+    more shards. Neither number is derived from a real load test against
+    this specific codebase/hardware - run
+    `python -m demokit.load_test throughput` (see DEMO.md) against your
+    actual target hardware before trusting either one past a starting
+    point."""
+    n = 2  # this repo's own long-standing default (see topology.py)
+    if symbol_count:
+        n = max(n, -(-symbol_count // 500))     # ~500 symbols/shard ceiling, ceil div
+    if peak_msgs_per_sec:
+        n = max(n, -(-peak_msgs_per_sec // 2000))  # ~2000 msgs/sec/shard ceiling, ceil div
+    return max(1, min(topology.MAX_SHARDS, n))
+
+
+def suggest_blueprint(tick_to_trade_target_ms: float | None = None,
+                      peak_msgs_per_sec: int | None = None,
+                      symbol_count: int | None = None,
+                      cross_region: bool = False) -> dict:
+    """A starting-point blueprint (profile + shard count + an estimated
+    latency budget) from an SLA target, for the operator to review and
+    adjust - NOT an auto-deploy. The caller still goes through the normal
+    auto_spec()/preview/create/provision flow with whatever it picks from
+    here (possibly overridden); this function only fills in a reasonable
+    starting choice for profile and shard_count so someone who says "I need
+    100ms tick-to-trade" doesn't have to already know what a "profile" is to
+    get a sensible answer."""
+    profile = _pick_profile(tick_to_trade_target_ms, peak_msgs_per_sec)
+    shard_count = _suggest_shard_count(peak_msgs_per_sec, symbol_count)
+    budget = _LATENCY_BUDGET_MS[profile]
+    network = _CROSS_REGION_RTT_MS if cross_region else budget["network_rtt_same_az"]
+    hops = {
+        "feed_decode": budget["feed_decode"],
+        "tp_publish_fanout": budget["tp_publish_fanout"],
+        "subscriber_apply": budget["subscriber_apply"],
+        "gateway_hop": budget["gateway_hop"],
+        "network_rtt": network,
+    }
+    total_low = round(sum(lo for lo, _ in hops.values()), 2)
+    total_high = round(sum(hi for _, hi in hops.values()), 2)
+    caveats = [
+        "every number in latency_budget_ms is an ARCHITECTURAL ESTIMATE, not a "
+        "measurement - this codebase has never been latency-benchmarked end to end. "
+        "Run `python -m demokit.load_test throughput` (see DEMO.md) against your actual "
+        "target hardware before committing to a number for a customer SLA.",
+        "shard_count is a starting point from symbol count / message-rate heuristics, "
+        "not a validated capacity plan - re-check it against a real load test once you "
+        "have one, and after that, watch the Autoscale page's live recommendation.",
+        "the low-latency profile's kernel-bypass-NIC/hugepages/CPU-isolation tuning "
+        "(see the returned spec's per-component hardware.tuning) describes an intended "
+        "OS/instance configuration - some of it (Guaranteed QoS on Kubernetes, kdb+ "
+        "secondary-thread sizing) is applied automatically when you provision; some of "
+        "it (kernel-bypass drivers, actual core pinning via HardwareSpec.cpuset) "
+        "requires you to configure the target host yourself - see docs/hardening.md.",
+    ]
+    if tick_to_trade_target_ms is not None and tick_to_trade_target_ms < total_low:
+        caveats.insert(0, (
+            f"target of {tick_to_trade_target_ms}ms is BELOW even this estimate's optimistic "
+            f"floor ({total_low}ms) - a target this tight almost always needs colocation and/or "
+            f"kernel-bypass networking verified on real hardware, not just an instance-type "
+            f"choice; treat this suggestion as a starting architecture to validate, not a "
+            f"commitment that {tick_to_trade_target_ms}ms is achievable as configured."
+        ))
+    return {
+        "profile": profile,
+        "shard_count": shard_count,
+        "latency_budget_ms": {k: {"low": lo, "high": hi} for k, (lo, hi) in hops.items()},
+        "latency_budget_total_ms": {"low": total_low, "high": total_high},
+        "target_ms": tick_to_trade_target_ms,
+        "target_likely_achievable": (
+            None if tick_to_trade_target_ms is None
+            else tick_to_trade_target_ms >= total_low
+        ),
+        "caveats": caveats,
+    }
 
 
 def parse_explicit_shards(assignments: list) -> list:

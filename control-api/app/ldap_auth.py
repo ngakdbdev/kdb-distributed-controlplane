@@ -23,6 +23,7 @@ from ldap3.core.exceptions import LDAPException
 from ldap3.utils.conv import escape_filter_chars
 
 from . import sso
+from .crypto import decrypt_secret
 
 
 class LDAPAuthError(Exception):
@@ -57,7 +58,7 @@ class LDAPConfig:
         role = row.default_role.value if hasattr(row.default_role, "value") else str(row.default_role)
         return cls(
             tenant_slug, row.server_uri, row.use_start_tls, row.bind_mode, row.bind_dn,
-            row.bind_password, row.user_search_base, row.user_filter, row.bind_dn_template,
+            decrypt_secret(row.bind_password), row.user_search_base, row.user_filter, row.bind_dn_template,
             row.attr_email, row.attr_name, row.group_attr, gmap, role, domains,
         )
 

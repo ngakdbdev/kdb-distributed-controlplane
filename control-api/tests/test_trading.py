@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as m
+from app import alpaca_broker
 from app import greeks as gk
 from app import portfolio as pf
 from app import market as mkt
@@ -111,6 +112,342 @@ def test_paper_router_needs_ref_price_for_market():
 def test_broker_router_refuses():
     with pytest.raises(oms.OrderRoutingNotConfigured):
         oms.BrokerRouter().fill("buy", 10, "market", 100, None)
+
+
+class _FakeAlpacaClient:
+    """Stands in for alpaca_broker.AlpacaClient - no network, no import of
+    the real HTTP plumbing needed to test oms.AlpacaRouter's own logic."""
+    def __init__(self, filled_price=180.5, filled_qty=None, raise_on_submit=None, raise_on_wait=None,
+                buying_power=1_000_000.0, raise_on_account=None):
+        self.filled_price = filled_price
+        self.filled_qty = filled_qty
+        self.raise_on_submit = raise_on_submit
+        self.raise_on_wait = raise_on_wait
+        self.buying_power = buying_power
+        self.raise_on_account = raise_on_account
+        self.submitted = None
+
+    def submit_order(self, **kwargs):
+        if self.raise_on_submit:
+            raise self.raise_on_submit
+        self.submitted = kwargs
+        return {"id": "order-1", "status": "accepted"}
+
+    def wait_for_fill(self, order_id):
+        if self.raise_on_wait:
+            raise self.raise_on_wait
+        return {"id": order_id, "status": "filled",
+                "filled_avg_price": str(self.filled_price),
+                "filled_qty": str(self.filled_qty if self.filled_qty is not None else 10)}
+
+    def account(self):
+        if self.raise_on_account:
+            raise self.raise_on_account
+        return {"buying_power": str(self.buying_power)}
+
+
+def test_alpaca_router_needs_a_symbol():
+    with pytest.raises(oms.OrderError, match="needs a symbol"):
+        oms.AlpacaRouter(_FakeAlpacaClient()).fill("buy", 10, "market", 100, None)
+
+
+def test_alpaca_router_submits_and_waits_then_returns_the_real_fill():
+    client = _FakeAlpacaClient(filled_price=180.5, filled_qty=10)
+    router = oms.AlpacaRouter(client, live=False)
+    fill = router.fill("buy", 10, "market", 100, None, symbol="AAPL")
+    assert fill.price == 180.5
+    assert fill.qty == 10
+    assert fill.route == "alpaca-paper"
+    assert client.submitted["symbol"] == "AAPL"
+    assert client.submitted["side"] == "buy"
+
+
+def test_alpaca_router_live_flag_sets_route_name():
+    router = oms.AlpacaRouter(_FakeAlpacaClient(), live=True)
+    fill = router.fill("buy", 1, "market", 100, None, symbol="AAPL")
+    assert fill.route == "alpaca-live"
+
+
+def test_alpaca_router_wraps_submit_failures_as_order_error():
+    client = _FakeAlpacaClient(raise_on_submit=RuntimeError("network down"))
+    with pytest.raises(oms.OrderError, match="alpaca order failed"):
+        oms.AlpacaRouter(client).fill("buy", 1, "market", 100, None, symbol="AAPL")
+
+
+def test_alpaca_router_wraps_fill_wait_failures_as_order_error():
+    client = _FakeAlpacaClient(raise_on_wait=RuntimeError("order rejected"))
+    with pytest.raises(oms.OrderError, match="alpaca order failed"):
+        oms.AlpacaRouter(client).fill("buy", 1, "market", 100, None, symbol="AAPL")
+
+
+# ---- pre-flight tradability check - confirmed live: a symbol this platform's
+# own live-discovered universe includes but Alpaca doesn't list (e.g. a
+# crypto cross-rate like BTC-GBP) used to reach Alpaca's API and come back a
+# raw HTTP 422 with Alpaca's own JSON error text, surfaced verbatim to
+# whoever placed the order. fill() now rejects it BEFORE ever calling the
+# broker, with a message that actually says what's wrong.
+
+def test_alpaca_router_rejects_a_symbol_the_broker_does_not_list(monkeypatch):
+    # ZZTEST-prefixed - see test_symbols.py's own convention: the
+    # tradability cache is module-global for the whole pytest run, so a
+    # symbol another test file's assertions could also touch is worth
+    # avoiding rather than relying on test ordering to stay collision-free.
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"is_tradable": lambda self, sym: False})())
+    client = _FakeAlpacaClient()
+    with pytest.raises(oms.OrderError, match="not a tradable asset"):
+        oms.AlpacaRouter(client).fill("buy", 1, "market", 100, None, symbol="ZZTEST-GBP")
+    assert client.submitted is None  # never reached the broker at all
+
+
+def test_alpaca_router_proceeds_when_broker_confirms_tradable(monkeypatch):
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"is_tradable": lambda self, sym: True})())
+    client = _FakeAlpacaClient(filled_price=180.5)
+    fill = oms.AlpacaRouter(client).fill("buy", 1, "market", 100, None, symbol="ZZTEST-TRADABLE")
+    assert fill.price == 180.5
+    assert client.submitted is not None
+
+
+def test_alpaca_router_skips_the_check_when_no_broker_is_configured():
+    # the common case in every existing test in this file: no ALPACA_* env
+    # vars set -> client_from_env() is None -> nothing to check against,
+    # so the pre-flight check must never block an otherwise-fine order.
+    client = _FakeAlpacaClient(filled_price=99.0)
+    fill = oms.AlpacaRouter(client).fill("buy", 1, "market", 100, None, symbol="ZZTEST-NOBROKER")
+    assert fill.price == 99.0
+
+
+# ---- pre-flight buying-power check - confirmed live: signal_engine.py's own
+# risk-budget sizing has no notion of real dollar notional (it sizes off
+# risk-per-share, qty * stop distance), so it can grow a position until a real
+# Alpaca account is fully margined, then every subsequent buy dies with a raw
+# 403 "insufficient buying power" only after already reaching Alpaca. This
+# check turns that into one clear OrderError before the broker is ever called.
+
+def test_alpaca_router_blocks_a_buy_that_exceeds_buying_power(monkeypatch):
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"is_tradable": lambda self, sym: True})())
+    client = _FakeAlpacaClient(buying_power=100.0)
+    with pytest.raises(oms.OrderError, match="insufficient Alpaca buying power"):
+        oms.AlpacaRouter(client).fill("buy", 10, "market", 50, None, symbol="MSFT")
+    assert client.submitted is None  # never reached the broker at all
+
+
+def test_alpaca_router_allows_a_buy_within_buying_power(monkeypatch):
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"is_tradable": lambda self, sym: True})())
+    client = _FakeAlpacaClient(buying_power=1000.0, filled_price=50.0)
+    fill = oms.AlpacaRouter(client).fill("buy", 10, "market", 50, None, symbol="MSFT")
+    assert fill.price == 50.0
+    assert client.submitted is not None
+
+
+def test_alpaca_router_never_checks_buying_power_for_a_sell(monkeypatch):
+    # selling reduces exposure and needs no buying power - must never be
+    # blocked by this check, same "never block a de-risking trade" rule
+    # risk_check.check_portfolio_limits already follows.
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"is_tradable": lambda self, sym: True})())
+    client = _FakeAlpacaClient(buying_power=0.0, filled_price=50.0)
+    fill = oms.AlpacaRouter(client).fill("sell", 10, "market", 50, None, symbol="MSFT")
+    assert fill.price == 50.0
+
+
+def test_alpaca_router_fails_open_if_the_buying_power_check_itself_breaks(monkeypatch):
+    # a broken/unreachable account() call shouldn't block an otherwise-fine
+    # order - the check is a safety improvement, not a new single point of
+    # failure for every buy.
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"is_tradable": lambda self, sym: True})())
+    client = _FakeAlpacaClient(raise_on_account=RuntimeError("account endpoint down"), filled_price=50.0)
+    fill = oms.AlpacaRouter(client).fill("buy", 10, "market", 50, None, symbol="MSFT")
+    assert fill.price == 50.0
+
+
+# ---- trading.py's router selection (_router()) - the safe-by-default seam -
+
+def test_router_selection_defaults_to_internal_paper_router_when_unconfigured():
+    # no Alpaca env vars set anywhere in this test run (see conftest/env) -
+    # must be the exact same PaperRouter instance the module always used,
+    # not a new/different one, so nothing about existing behavior changes.
+    assert trading_router._router() is trading_router._PAPER
+
+
+def test_router_selection_switches_to_alpaca_when_configured(monkeypatch):
+    monkeypatch.setenv("ALPACA_TRADING_MODE", "paper")
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    router = trading_router._router()
+    assert isinstance(router, oms.AlpacaRouter)
+    assert router.route_name == "alpaca-paper"
+
+
+def test_router_selection_switches_to_ibkr_when_configured(monkeypatch):
+    monkeypatch.setenv("IBKR_TRADING_MODE", "paper")
+    router = trading_router._router()
+    assert isinstance(router, oms.IBKRRouter)
+    assert router.route_name == "ibkr-paper"
+
+
+def test_router_selection_refuses_when_both_brokers_configured(monkeypatch):
+    monkeypatch.setenv("ALPACA_TRADING_MODE", "paper")
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    monkeypatch.setenv("IBKR_TRADING_MODE", "paper")
+    with pytest.raises(oms.OrderError, match="both Alpaca and IBKR"):
+        trading_router._router()
+
+
+def test_permission_endpoint_reports_misconfigured_instead_of_500ing(client, tadmin, monkeypatch):
+    monkeypatch.setenv("ALPACA_TRADING_MODE", "paper")
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    monkeypatch.setenv("IBKR_TRADING_MODE", "paper")
+    r = client.get("/trading/permission", headers=tadmin)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mode"] == "misconfigured"
+    assert body["live_routing"] is False
+    assert "both Alpaca and IBKR" in body["error"]
+
+
+# ---- alpaca_broker.market_status() / GET /trading/market-clock -------------
+
+def test_market_status_unconfigured_when_no_alpaca_client():
+    # no ALPACA_* env vars set - client_from_env() is None, same "nothing
+    # configured" case every other alpaca_broker test in this file defaults
+    # to when no monkeypatch touches the env.
+    assert alpaca_broker.market_status() == {"configured": False}
+
+
+def test_market_status_reports_real_clock_fields(monkeypatch):
+    fake_clock = {"is_open": True, "next_open": "2026-08-17T13:30:00Z",
+                  "next_close": "2026-08-17T20:00:00Z", "timestamp": "2026-08-17T15:00:00Z"}
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"market_clock": lambda self: fake_clock})())
+    monkeypatch.setattr(alpaca_broker, "_clock_cache", None)
+    status = alpaca_broker.market_status()
+    assert status == {"configured": True, "is_open": True,
+                      "next_open": "2026-08-17T13:30:00Z", "next_close": "2026-08-17T20:00:00Z",
+                      "timestamp": "2026-08-17T15:00:00Z"}
+
+
+def test_market_status_caches_within_ttl(monkeypatch):
+    calls = []
+
+    def fake_market_clock(self):
+        calls.append(1)
+        return {"is_open": False, "next_open": None, "next_close": None, "timestamp": None}
+
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"market_clock": fake_market_clock})())
+    monkeypatch.setattr(alpaca_broker, "_clock_cache", None)
+    alpaca_broker.market_status()
+    alpaca_broker.market_status()
+    assert len(calls) == 1  # second call served from cache, not a second real request
+
+
+def test_market_clock_endpoint_unconfigured(client, tadmin):
+    # no ALPACA_* env vars set anywhere in this test run's default state
+    r = client.get("/trading/market-clock", headers=tadmin)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"configured": False}
+
+
+def test_market_clock_endpoint_reports_open_status(client, tadmin, monkeypatch):
+    fake_clock = {"is_open": True, "next_open": "2026-08-17T13:30:00Z",
+                  "next_close": "2026-08-17T20:00:00Z", "timestamp": "2026-08-17T15:00:00Z"}
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"market_clock": lambda self: fake_clock})())
+    monkeypatch.setattr(alpaca_broker, "_clock_cache", None)
+    r = client.get("/trading/market-clock", headers=tadmin)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["configured"] is True
+    assert body["is_open"] is True
+
+
+def test_market_clock_endpoint_returns_502_on_alpaca_error(client, tadmin, monkeypatch):
+    def raise_error(self):
+        raise alpaca_broker.AlpacaError("Alpaca GET /v2/clock unreachable: timed out")
+
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"market_clock": raise_error})())
+    monkeypatch.setattr(alpaca_broker, "_clock_cache", None)
+    r = client.get("/trading/market-clock", headers=tadmin)
+    assert r.status_code == 502
+    assert "unreachable" in r.json()["detail"]
+
+
+# ---- oms.IBKRRouter ---------------------------------------------------------
+
+class _FakeIBKRClient:
+    def __init__(self, filled_price=180.5, account_id="DU1234567", raise_on_submit=None):
+        self.filled_price = filled_price
+        self._account_id = account_id
+        self.raise_on_submit = raise_on_submit
+        self.submitted = None
+
+    def primary_account_id(self):
+        return self._account_id
+
+    def resolve_conid(self, symbol):
+        return 265598 if symbol == "AAPL" else None
+
+    def submit_order(self, account_id, conid, side, qty, **kwargs):
+        if self.raise_on_submit:
+            raise self.raise_on_submit
+        self.submitted = {"account_id": account_id, "conid": conid, "side": side, "qty": qty, **kwargs}
+        return {"order_id": "abc123", "order_status": "Submitted"}
+
+    def wait_for_fill(self, order_id):
+        return {"order_id": order_id, "order_status": "Filled", "avg_price": str(self.filled_price)}
+
+
+def test_ibkr_router_needs_a_symbol():
+    with pytest.raises(oms.OrderError, match="needs a symbol"):
+        oms.IBKRRouter(_FakeIBKRClient(), mode="paper").fill("buy", 10, "market", 100, None)
+
+
+def test_ibkr_router_places_and_returns_real_fill():
+    client = _FakeIBKRClient(filled_price=180.5)
+    router = oms.IBKRRouter(client, mode="paper")
+    fill = router.fill("buy", 10, "market", 100, None, symbol="AAPL")
+    assert fill.price == 180.5
+    assert fill.qty == 10
+    assert fill.route == "ibkr-paper"
+    assert client.submitted["conid"] == 265598
+    assert client.submitted["account_id"] == "DU1234567"
+
+
+def test_ibkr_router_refuses_on_account_mode_mismatch():
+    # paper mode configured, but the connected account looks like a live one
+    client = _FakeIBKRClient(account_id="U1234567")
+    router = oms.IBKRRouter(client, mode="paper")
+    with pytest.raises(oms.OrderError, match="doesn't look like a paper account"):
+        router.fill("buy", 10, "market", 100, None, symbol="AAPL")
+
+
+def test_ibkr_router_refuses_when_conid_cannot_be_resolved():
+    client = _FakeIBKRClient()
+    router = oms.IBKRRouter(client, mode="paper")
+    with pytest.raises(oms.OrderError, match="ibkr order failed"):
+        router.fill("buy", 10, "market", 100, None, symbol="UNKNOWN")
+
+
+def test_ibkr_router_wraps_submit_failures_as_order_error():
+    client = _FakeIBKRClient(raise_on_submit=RuntimeError("gateway down"))
+    router = oms.IBKRRouter(client, mode="paper")
+    with pytest.raises(oms.OrderError, match="ibkr order failed"):
+        router.fill("buy", 10, "market", 100, None, symbol="AAPL")
+
+
+def test_ibkr_router_live_mode_route_name():
+    client = _FakeIBKRClient(account_id="U1234567")
+    router = oms.IBKRRouter(client, mode="live")
+    fill = router.fill("buy", 1, "market", 100, None, symbol="AAPL")
+    assert fill.route == "ibkr-live"
 
 def test_crosses_buy_limit():
     assert oms.crosses("buy", limit_price=100, market_price=99)    # market at/below -> crosses

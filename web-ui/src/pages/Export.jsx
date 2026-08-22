@@ -10,7 +10,7 @@ export default function Export() {
   }, []);
 
   return (
-    <div className="page">
+    <div className="page export-page">
       <h2>Data export</h2>
       <p className="muted">
         Pull data out of the kdb+ side &mdash; HDB history or a live shard&rsquo;s RDB/IDB &mdash; and land

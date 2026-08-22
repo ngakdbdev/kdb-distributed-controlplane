@@ -4,6 +4,11 @@ What the web UI actually does, page by page. For how the underlying tick
 chain works, see `docs/tickerplant-administration.md`. For what to do when
 something's broken, see `docs/troubleshooting.md`.
 
+**First time here?** This assumes the stack is already running and you've
+logged in once. If you haven't gotten that far yet, or terms like
+"tickerplant" or "shard" are unfamiliar, start with
+[getting-started.md](getting-started.md) instead - it walks through both.
+
 ## Logging in
 
 `/login` — tenant users authenticate against the platform's own credential
@@ -110,27 +115,104 @@ target.
 
 ## Markets / Orders / Portfolio / Bot / Execution
 
-The trading terminal. **Paper-only, by design and by hard technical
-line** - orders fill against a caller-supplied reference price with no real
-order book or matching engine; there's a coded seam for a real broker route
-(`BrokerRouter`) that unconditionally refuses until one's actually wired
-in. A real pre-trade risk gate runs before every fill, reading the same
-live risk feed the Alerts page does - it fails **closed** by default (an
-unreachable risk feed blocks the order rather than letting it through
-unverified; `RISK_GATE_FAIL_OPEN` opts back into the old fail-open
-behavior for desks that have consciously decided that tradeoff). Trading
-permission is a separate, explicit grant (`can_trade`) from tenant admin -
-viewing market data needs no special permission, placing orders does.
+The trading terminal. **Paper by default, unconditionally**, until you
+deliberately configure otherwise - orders fill against a caller-supplied
+reference price with no real order book or matching engine. Two real broker
+seams exist:
+
+- `BrokerRouter` (generic FIX/broker adapter) - still unconditionally
+  refuses; nothing is wired to it.
+- `IBKRRouter` (`app/ibkr_broker.py`) - order execution against a real
+  Interactive Brokers account via its Client Portal Web API (CPAPI), same
+  paper/live two-signal safety pattern as Alpaca below (`IBKR_TRADING_MODE`).
+  Requires a locally-running, already-authenticated Client Portal Gateway -
+  see that module's own docstring. IBKR is ALSO a market-data provider
+  (`data-plane/feeds/providers/ibkr.py`, Level 1 quotes via the same
+  gateway) - a separate concern from order execution, catalogued
+  independently on the Connectors page.
+- `AlpacaRouter` (`app/alpaca_broker.py`) - a real, working integration.
+  Unconfigured (no `ALPACA_API_KEY_ID`/`ALPACA_API_SECRET_KEY`, or
+  `ALPACA_TRADING_MODE=off`, the default), behavior is identical to before
+  this existed. `ALPACA_TRADING_MODE=paper` routes marketable fills (market
+  orders, and limit orders that cross on arrival) through Alpaca's own
+  paper-trading simulation instead - a real broker's order mechanics against
+  live prices, still zero real money. `ALPACA_TRADING_MODE=live` moves real
+  money and additionally requires `ALPACA_LIVE_TRADING_ACK` to exactly match
+  a confirmation phrase (`alpaca_broker.LIVE_ACK_PHRASE`) - a bare
+  `ALPACA_TRADING_MODE=live` cannot enable it by accident, and a
+  missing/wrong ack silently downgrades to paper rather than either erroring
+  or (worse) going live anyway. A resting (non-marketable) limit order
+  always stays on the internal matcher regardless of mode - Alpaca's own
+  order-book lifecycle isn't wired in for that case. The Orders and Bot
+  pages both show the real active mode as a badge (PAPER / ALPACA PAPER / a
+  loud red ALPACA LIVE), never a hardcoded label.
+
+Going live on a product shipped to customers is a business/legal decision
+needing real compliance review (broker connectivity + entitlements +
+sign-off), not just a config change - see `alpaca_broker.py`'s own
+docstring before ever setting `ALPACA_TRADING_MODE=live`.
+
+A real pre-trade risk gate runs before every fill regardless of route,
+reading the same live risk feed the Alerts page does - it fails **closed**
+by default (an unreachable risk feed blocks the order rather than letting
+it through unverified; `RISK_GATE_FAIL_OPEN` opts back into the old
+fail-open behavior for desks that have consciously decided that tradeoff).
+Trading permission is a separate, explicit grant (`can_trade`) from tenant
+admin - viewing market data needs no special permission, placing orders
+does.
+
+**TradingView chart tab** (Markets page, "TradingView" tab) - an embedded
+TradingView Advanced Chart widget (their own free, documented `tv.js`
+embed). This is TradingView's own market data, not this platform's internal
+tick feed - it's for cross-checking and TradingView's own indicator
+library, alongside (not instead of) the real internal Chart tab. Ticker ->
+`EXCHANGE:SYMBOL` mapping is a best-effort guess
+(`components/TradingViewChart.jsx`'s `guessTradingViewSymbol`); there's a
+manual override input for whatever it guesses wrong.
+
+**TradingView alert webhooks** (`app/routers/tradingview_webhook.py`,
+configured from a card on the Bot page) - a second, independent automated
+order-placing surface: a TradingView alert (Pine Script strategy or manual)
+can `POST` to a per-tenant URL
+(`/webhooks/tradingview/{token}`) and place a real order through the exact
+same `place_market_order_internal` path and pre-trade risk gate as every
+other order in this codebase - no webhook-specific shortcut. Because
+TradingView's alert webhooks cannot send a custom header or a signed body
+on non-Enterprise plans, the `token` in the URL path is the *entire* auth
+mechanism - treat it as a bearer credential, rotate it if it ever leaks
+(the Bot page has a Rotate button). Two hard, server-enforced defenses
+against a leaked token: an explicit per-tenant symbol allowlist (a webhook
+can only ever trade symbols the tenant added, same "add a symbol before
+enabling" guard as the signal bot's basket) and a hard `max_qty` cap
+re-clamped server-side regardless of what the alert payload claims.
 
 ## Connectors
 
 Turn real market-data providers on/off per tenant, scoped to a symbol
 group. Two tiers, shown honestly: **live** (Finnhub, Twelve Data,
-Polygon.io, Coinbase, Kraken, Yahoo Finance, Alpha Vantage - usable today,
-several needing no API key at all) and **licensed** (NYSE, LSEG/Refinitiv,
-NSE, BSE - coded to the real protocol/SDK shape but refusing with a clear
-message until real credentials/entitlements are plugged in; never fake a
-connection).
+Polygon.io, Alpaca, Coinbase, Kraken, Yahoo Finance, Alpha Vantage - usable
+today, several needing no API key at all) and **licensed** (NYSE,
+LSEG/Refinitiv, NSE, BSE - coded to the real protocol/SDK shape but
+refusing with a clear message until real credentials/entitlements are
+plugged in; never fake a connection). Alpaca's market-data feed and its
+order-routing seam (above) share credentials but are otherwise
+independent - enabling one doesn't enable the other.
+
+Each live provider's `docker-compose.yml` service takes `--symbols` (a
+plain comma list, e.g. `ALPACA_SYMBOLS=AAPL,MSFT`) or `--symbols all` for
+the providers whose venue exposes a real "give me every currently-tradable
+instrument" endpoint (`fetch_all_symbols()` in that provider's own module -
+the crypto venues, whose feeds have no meaningful per-connection symbol
+cap). **Alpaca is the one exception - do not use `all` for it.** Its
+`fetch_all_symbols()` (`/v2/assets`) genuinely works and returns Alpaca's
+full several-thousand-symbol universe, but the free/IEX *stream* itself
+rejects a subscribe request anywhere near that size with a real (if
+undocumented) `{"T":"error","code":405,"msg":"symbol limit exceeded"}` -
+confirmed live at 68 symbols; 30 was accepted. Keep `ALPACA_SYMBOLS` a
+small curated list. For any provider, a curated large-but-smaller subset
+instead of literally everything: put it in a file under
+`data-plane/feeds/symbols/` and set `PROVIDER_SYMBOLS_FILE` (see that
+folder's own README).
 
 ## Autoscaling
 
@@ -152,6 +234,33 @@ just name/cloud/OS/profile/shard-ranges - the "reduce admin overhead" path.
 Provisioning a spec routes through Fleet to whichever backend the target
 environment uses (local docker-compose, or a remote agent in the tenant's
 own cluster).
+
+**Quick cloud deploy** (same page, second tab) is the credentials-only
+alternative: give it an AWS/Azure/GCP access key and it builds the entire
+cluster end to end - network, managed Kubernetes, storage, then Vantik
+itself - via `terraform apply` against `terraform/{aws,azure,gcp}/`
+followed by `helm install`, both run server-side
+(`app/cloud_provisioner.py`). No existing cluster or enrolled agent
+required first, unlike the wizard above, which assumes both. Requires
+`CLOUD_CREDENTIALS_ENCRYPTION_KEY` set (see `.env.example`'s own comment) -
+the endpoints refuse to start without it rather than falling back to an
+insecure default, since a leaked value would be a direct path into a real
+cloud account. Genuinely creates real, billed infrastructure and typically
+takes 10-20+ minutes (mostly the managed Kubernetes control plane itself) -
+the UI polls status/logs, it doesn't block on it. `POST
+/cloud-provision/{aws,azure,gcp}` requires the exact confirmation phrase
+`cloud_provisioner.CONFIRM_PHRASE`, same deliberate-friction pattern as live
+trading's `ALPACA_LIVE_TRADING_ACK` - there is no safe default to silently
+fall back to the way live trading has "paper."
+
+Credentials are Fernet-encrypted at rest, decrypted only in-process and
+just-in-time for a single terraform/helm invocation, injected via
+subprocess environment variables (never a tfvars file, never a logged
+command line), and never returned by any API response. This is
+deliberately a DIFFERENT trust model from Fleet/InfraProfile below (which
+hold no credentials at all) - see `CloudProvisionRun`'s own model docstring
+for why bootstrapping brand-new infrastructure genuinely can't use ambient
+identity the way managing existing infrastructure can.
 
 ## Fleet
 

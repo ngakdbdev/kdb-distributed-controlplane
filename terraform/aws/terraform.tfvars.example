@@ -1,0 +1,36 @@
+# Copy to terraform.tfvars and fill in the two required values below (no
+# defaults on purpose - see variables.tf's own comment on why). Everything
+# else here is shown at its actual default; uncomment + change only what
+# you need to override.
+
+environment = "prod1"
+
+# REQUIRED - no default. Your office/VPN egress IP(s), NOT 0.0.0.0/0.
+bastion_access_cidr = "203.0.113.4/32"
+
+# REQUIRED - no default. Who's allowed to run kubectl/helm against the
+# cluster's public API endpoint. Can be the same as bastion_access_cidr,
+# or your CI runner's egress range, or both:
+#   eks_api_access_cidrs = ["203.0.113.4/32", "198.51.100.0/24"]
+eks_api_access_cidrs = ["203.0.113.4/32"]
+
+# region          = "us-east-1"
+# cluster_profile = "ha"              # "ha" | "performance" | "cost_optimized"
+# kubernetes_version = "1.30"
+
+# --- storage ---
+# storage_tier = "standard"           # "standard" (gp3) | "performance" (io2)
+# enable_secrets_encryption = true
+
+# --- high-performance filesystem (AWS FSx for Lustre) - opt-in, see
+# storage.tf's own comment on the post-apply CSI driver install step. ---
+# enable_high_performance_storage = false
+# lustre_storage_capacity_gib     = 1200
+# lustre_throughput_per_tib       = 0    # 0 = use cluster_profile's own default (125/500/1000)
+
+# --- bring-your-own VPC instead of letting this module create one ---
+# vpc_id                      = "vpc-0123456789abcdef0"
+# existing_private_subnet_ids = ["subnet-aaa", "subnet-bbb", "subnet-ccc"]
+# existing_public_subnet_ids  = ["subnet-ddd", "subnet-eee", "subnet-fff"]
+
+# tags = { CostCenter = "trading-tech", Owner = "platform-team" }

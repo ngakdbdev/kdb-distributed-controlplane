@@ -22,6 +22,17 @@ sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plug
 echo "== allowing the current user to run docker without sudo =="
 sudo usermod -aG docker "$USER"
 
-echo "== done - log out and back in (or run 'newgrp docker') for group membership to take effect =="
+echo
+echo "======================================================================"
+echo "IMPORTANT: your shell session does NOT have docker-group membership yet."
+echo "Running docker commands (including the next script, 04_deploy_stack.sh)"
+echo "in THIS SAME session will fail with a permission error - that is"
+echo "expected, not a bug. Fix it one of two ways before continuing:"
+echo "  1. Disconnect and reconnect this SSH session, then continue, OR"
+echo "  2. Run: newgrp docker    (starts a subshell with the new group active"
+echo "     in THIS window - the shell you get afterward is what has it, not"
+echo "     any other terminal tab)"
+echo "======================================================================"
+echo
 docker --version
 docker compose version

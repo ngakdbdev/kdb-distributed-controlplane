@@ -14,8 +14,10 @@ history in a notebook and got a CSV export that took all afternoon.
 
 ## Before they arrive (10 min)
 
-1. Stack up on the demo box: KDB-X binary + `k4.lic` in
-   `data-plane/docker/kdbx/`, then `docker compose up -d` (see root README).
+1. Stack up on the demo box: set `KX_BEARER_TOKEN` (from the KX Developer
+   Portal) and `KDB_LICENSE_B64` (your license, base64-encoded) in `.env`,
+   then `docker compose up -d` — the binary is pulled automatically at
+   container start, nothing to download or stage by hand (see root README).
 2. `pip install -r demokit/requirements.txt`.
 3. Dry-run the whole thing once so nothing surprises you live:
    ```bash

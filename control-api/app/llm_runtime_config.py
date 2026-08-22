@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from sqlmodel import Session, select
 
 from .config import settings
+from .crypto import decrypt_secret, encrypt_secret
 from .db import engine
 from .models import LLMConfig
 
@@ -37,7 +38,7 @@ def get() -> EffectiveLLMConfig:
         row = session.exec(select(LLMConfig).where(LLMConfig.id == 1)).first()
     if row is not None:
         return EffectiveLLMConfig(
-            provider=row.provider, model=row.model, api_key=row.api_key,
+            provider=row.provider, model=row.model, api_key=decrypt_secret(row.api_key),
             base_url=row.base_url, timeout_sec=row.timeout_sec, source="admin",
         )
     return EffectiveLLMConfig(
@@ -66,7 +67,7 @@ def save(*, provider: str, model: str, api_key: str | None, base_url: str,
         row.provider = provider
         row.model = model
         if api_key:
-            row.api_key = api_key
+            row.api_key = encrypt_secret(api_key)
         elif provider_changed:
             row.api_key = ""
         row.base_url = base_url
@@ -77,6 +78,6 @@ def save(*, provider: str, model: str, api_key: str | None, base_url: str,
         session.commit()
         session.refresh(row)
         return EffectiveLLMConfig(
-            provider=row.provider, model=row.model, api_key=row.api_key,
+            provider=row.provider, model=row.model, api_key=decrypt_secret(row.api_key),
             base_url=row.base_url, timeout_sec=row.timeout_sec, source="admin",
         )

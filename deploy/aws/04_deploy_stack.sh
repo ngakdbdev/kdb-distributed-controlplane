@@ -1,22 +1,53 @@
 #!/usr/bin/env bash
 # 04_deploy_stack.sh - run this ON the instance, from inside the project
-# directory, after 03_install_docker.sh and after placing your KDB-X
-# binary/license at data-plane/docker/kdbx/ (see deploy/aws/README.md).
+# directory, after 03_install_docker.sh. KX_BEARER_TOKEN and
+# KDB_LICENSE_B64 (or KX_LICENSE_PATH) must be set in .env before this
+# runs - the KDB-X binary is pulled from the KX portal automatically at
+# container start, nothing to stage on this box yourself (see
+# deploy/aws/README.md).
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/free_tier.sh
+source "$SCRIPT_DIR/../lib/free_tier.sh"
+# shellcheck source=../lib/kx_license.sh
+source "$SCRIPT_DIR/../lib/kx_license.sh"
+detect_lean_mode
+
+# 03_install_docker.sh grants docker-group membership, but that only takes
+# effect in a FRESH shell session - if you ran 03 then 04 back-to-back in
+# the same SSH session, this fails with a permission error that has
+# nothing to do with anything below. Check for it explicitly instead of
+# letting it surface as a confusing docker error three steps in.
+if ! docker info >/dev/null 2>&1; then
+  echo "ERROR: cannot talk to the Docker daemon as $(whoami)." >&2
+  echo "If you just ran 03_install_docker.sh in THIS SAME shell session," >&2
+  echo "your docker-group membership hasn't taken effect yet - expected," >&2
+  echo "not a bug. Fix: run 'newgrp docker' (or disconnect/reconnect SSH)," >&2
+  echo "then re-run this script." >&2
+  exit 1
+fi
 
 if [ ! -f .env ]; then
   echo "No .env found - copying .env.example. EDIT IT before continuing:"
   cp .env.example .env
-  echo "  -> set ADMIN_PASSWORD_HASH, JWT_SECRET, WATCHDOG_SHARED_SECRET"
+  # This is a customer-facing deployment path (not your own laptop) - a
+  # product licence key is mandatory here (see control-api/app/licensing.py).
+  # DEPLOYMENT_ENV=customer turns that enforcement on by default; set
+  # DEPLOYMENT_ENV=local instead only if you deliberately want this box
+  # unenforced (e.g. a throwaway sales-team test box, not a real customer).
+  if grep -q '^DEPLOYMENT_ENV=' .env; then
+    sed -i.bak 's/^DEPLOYMENT_ENV=.*/DEPLOYMENT_ENV=customer/' .env && rm -f .env.bak
+  else
+    echo "DEPLOYMENT_ENV=customer" >> .env
+  fi
+  echo "  -> set ADMIN_PASSWORD_HASH, JWT_SECRET, WATCHDOG_SHARED_SECRET, LICENSE_KEY"
   exit 1
 fi
 
-if [ ! -f data-plane/docker/kdbx/q ] || [ ! -f data-plane/docker/kdbx/k4.lic ]; then
-  echo "Missing KDB-X binary/license at data-plane/docker/kdbx/"
-  echo "Download KDB-X Community Edition from the KX Developer Center and place"
-  echo "the linux 'q' binary and 'k4.lic' license file there, then re-run."
-  exit 1
-fi
+apply_lean_mode
+
+check_kx_binary_and_license || exit 1
 
 echo "== building all images (slow the first time) =="
 docker compose build

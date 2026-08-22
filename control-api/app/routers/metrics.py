@@ -1,8 +1,12 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from sqlmodel import Session, select
 
+from ..db import get_session
+from ..models import MetricsSnapshot
 from ..orchestrator import orchestrator
 from ..kdb_client import gateway_client
 
@@ -32,6 +36,21 @@ def _snapshot() -> dict:
 def snapshot():
     """One-shot metrics pull, used by the dashboard on initial page load."""
     return _snapshot()
+
+
+@router.get("/history")
+def history(hours: float = Query(default=6, le=24 * 7, description="lookback window, hours"),
+           session: Session = Depends(get_session)):
+    """Trend data behind the live snapshot above - periodic captures from
+    app/metrics_history.py, not derived from the live snapshot itself.
+    Unauthenticated, same as /snapshot (see that endpoint's own history:
+    no tenant filtering exists on this data today either)."""
+    since = datetime.utcnow() - timedelta(hours=hours)
+    rows = session.exec(
+        select(MetricsSnapshot).where(MetricsSnapshot.timestamp >= since)
+        .order_by(MetricsSnapshot.timestamp)
+    ).all()
+    return [r.model_dump() for r in rows]
 
 
 @router.websocket("/stream")

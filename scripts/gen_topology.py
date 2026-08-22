@@ -31,25 +31,29 @@ WDB = topology.TIER_PORTS["wdb"]
 GW = topology.TIER_PORTS["gateway"]
 HDB = topology.TIER_PORTS["hdb"]
 
-# The data folder of KX binaries, mounted read-only into every kdb service. The
-# container's entrypoint picks the right <arch>/q at start (docker/kdb-entrypoint.sh),
-# so one image runs on amd64 or arm64. Override the host path with KX_BINARIES_DIR.
-# The kx-cache volume is writable scratch for the portal-pull fallback.
-KX_BIN_MOUNT = "${KX_BINARIES_DIR:-./data-plane/docker/kdbx}:/kdbx:ro"
+# Every kdb service pulls its own binary from the KX portal at container
+# start (docker/kdb-entrypoint.sh) using KX_BEARER_TOKEN - no local binary
+# folder is mounted anymore (that model only worked on whichever one machine
+# a human had manually unzipped a binary onto). KX_CACHE_MOUNT is a
+# container-local writable cache of a binary THIS container already pulled
+# itself, purely so a restart doesn't re-download - not something anyone is
+# expected to populate by hand.
 KX_CACHE_MOUNT = "kx-cache:/kdbx-cache"
 
-# KX binary source for the kdb containers: 'local' uses the staged data folder;
-# 'kx-portal' pulls <arch>.zip with the bearer token when it isn't staged. All
-# non-secret defaults; the token is empty unless set in the environment.
+# KX credentials for the kdb containers - all non-secret DEFAULTS; the real
+# values are empty unless set in the environment. KX_BEARER_TOKEN is
+# mandatory (see kdb-entrypoint.sh); license is either KDB_LICENSE_B64
+# (inline) or KX_LICENSE_PATH (a file mounted some other way - a Kubernetes
+# Secret, a secrets-manager sidecar). Neither license form has a local-file
+# default anymore, for the same reason there's no local binary folder.
 KX_ENV_ANCHOR = """\
 x-kdb-env: &kdb-env
-  KX_INSTALL_SOURCE: "${KX_INSTALL_SOURCE:-local}"
   KX_BEARER_TOKEN: "${KX_BEARER_TOKEN:-}"
   KDB_LICENSE_B64: "${KDB_LICENSE_B64:-}"
   KX_VERSION: "${KX_VERSION:-4.1}"
   KX_CHANNEL: "${KX_CHANNEL:-~latest~}"
   KX_ARCH: "${KX_ARCH:-}"
-  KX_LICENSE_PATH: "${KX_LICENSE_PATH:-/kdbx/kc.lic}"
+  KX_LICENSE_PATH: "${KX_LICENSE_PATH:-}"
 """
 
 
@@ -69,9 +73,14 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
     command: ["tick.q", "{sid}", "-p", "{TP}", "-eodhour", "{eod_hour}"]
     environment:
       <<: *kdb-env
+      # optional NUMA/CPU pinning via kdb-entrypoint.sh's numactl support -
+      # blank (default) = no pinning, unchanged behavior. Operator-set, not
+      # auto-derived - see control-api/app/tickhouse.py's HardwareSpec.cpuset
+      # docstring for why. TP_CPUSET="0-1" / TP_NUMA_NODE="0" to enable.
+      KDB_CPUSET: "${{TP_CPUSET:-}}"
+      KDB_NUMA_NODE: "${{TP_NUMA_NODE:-}}"
     restart: unless-stopped
     volumes:
-      - {KX_BIN_MOUNT}
       - {KX_CACHE_MOUNT}
       - tp-log-{sid}:/app/log
 
@@ -85,7 +94,8 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
               "-flushmin", "2", "-retentionmin", "{rdb_retention_min}",
               "-dbdir", "/data/db", "-hdbdir", "/data/hdb",
               "-idbhost", "idb-{sid}", "-idbport", "{IDB}",
-              "-hdbhost", "hdb-{sid}", "-hdbport", "{HDB}", "-p", "{WDB}"]
+              "-hdbhost", "hdb-{sid}", "-hdbport", "{HDB}", "-p", "{WDB}",
+              "-eodhour", "{eod_hour}"]
     environment:
       <<: *kdb-env
       # secondary threads (-s), injected by kdb-entrypoint.sh - see KDB_THREADS
@@ -98,7 +108,6 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
     restart: unless-stopped
     depends_on: [tp-{sid}]
     volumes:
-      - {KX_BIN_MOUNT}
       - {KX_CACHE_MOUNT}
       - db-{sid}:/data/db
       - hdb-{sid}:/data/hdb
@@ -114,10 +123,12 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
       # parallel warm-start recovery read) finishes, so the full ceiling is
       # only held for the recovery window, not the process's whole life.
       KDB_THREADS: "${{RDB_THREADS:-{kdb_threads}}}"
+      # optional NUMA/CPU pinning - see tp-{sid}'s KDB_CPUSET comment above.
+      KDB_CPUSET: "${{RDB_CPUSET:-}}"
+      KDB_NUMA_NODE: "${{RDB_NUMA_NODE:-}}"
     restart: unless-stopped
     depends_on: [tp-{sid}]
     volumes:
-      - {KX_BIN_MOUNT}
       - {KX_CACHE_MOUNT}
       - db-{sid}:/data/db
 
@@ -130,7 +141,6 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
     restart: unless-stopped
     depends_on: [wdb-{sid}]
     volumes:
-      - {KX_BIN_MOUNT}
       - {KX_CACHE_MOUNT}
       - db-{sid}:/data/db
 
@@ -144,13 +154,18 @@ def _data_plane_services(n: int, eod_hour: int, idb_retention_days: int, kdb_thr
     environment:
       <<: *kdb-env
       # see rdb-{sid}'s KDB_THREADS comment above. hdb's periodic reload
-      # (system"l dir") is a single built-in mmap call, not peach-driven, so
-      # like wdb this just reserves CPU-sized capacity for future use.
+      # (system"l dir") is a single built-in mmap call, not peach-driven, but
+      # a client SELECT that actually reaches hdb (see control-api's
+      # query_router.route_tiers) DOES use these threads automatically - kdb+
+      # parallelizes a partitioned-table select across date partitions on its
+      # own whenever -s>0, no extra q code needed.
       KDB_THREADS: "${{HDB_THREADS:-{kdb_threads}}}"
+      # optional NUMA/CPU pinning - see tp-{sid}'s KDB_CPUSET comment above.
+      KDB_CPUSET: "${{HDB_CPUSET:-}}"
+      KDB_NUMA_NODE: "${{HDB_NUMA_NODE:-}}"
     restart: unless-stopped
     depends_on: [wdb-{sid}]
     volumes:
-      - {KX_BIN_MOUNT}
       - {KX_CACHE_MOUNT}
       - hdb-{sid}:/data/hdb
 """)
@@ -172,7 +187,6 @@ def _gateway_service(n: int) -> str:
       <<: *kdb-env
       SHARDS_JSON: /app/shards.json
     volumes:
-      - {KX_BIN_MOUNT}
       - {KX_CACHE_MOUNT}
       - ./data-plane/shards.json:/app/shards.json:ro
     restart: unless-stopped
@@ -230,6 +244,55 @@ def _feeds_service(n: int) -> str:
       TP_HOST_PATTERN: "tp-{{shard}}"
       TP_PORT: "{TP}"
       FINNHUB_API_KEY: "${{FINNHUB_API_KEY:-}}"
+      PROVIDER_SYMBOLS_FILE: "${{PROVIDER_SYMBOLS_FILE:-}}"
+    volumes:
+      - ./data-plane/feeds/symbols:/symbols:ro
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
+
+  # Alpaca live provider (opt-in) - US equities/ETFs, real-time IEX trades
+  # free. Same credentials the Bot page's Alpaca paper-trading route uses
+  # (ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY) - this container only reads
+  # market data with them, never places an order.
+  #   docker compose --profile providers up -d alpaca-feed
+  alpaca-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "alpaca", "--symbols", "${{ALPACA_SYMBOLS:-AAPL,MSFT,GOOGL,AMZN,TSLA}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+      ALPACA_API_KEY_ID: "${{ALPACA_API_KEY_ID:-}}"
+      ALPACA_API_SECRET_KEY: "${{ALPACA_API_SECRET_KEY:-}}"
+      ALPACA_DATA_FEED: "${{ALPACA_DATA_FEED:-iex}}"
+      PROVIDER_SYMBOLS_FILE: "${{PROVIDER_SYMBOLS_FILE:-}}"
+    volumes:
+      - ./data-plane/feeds/symbols:/symbols:ro
+    depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
+    restart: on-failure
+
+  # Interactive Brokers live provider (opt-in) - Level 1 quotes via a
+  # LOCALLY-RUNNING, already-authenticated Client Portal Gateway (see
+  # data-plane/feeds/providers/ibkr.py's docstring - this is NOT a simple
+  # API-key integration). IBKR_GATEWAY_BASE_URL's default
+  # (https://localhost:5000/v1/api) means "the gateway is reachable from
+  # THIS container's own localhost", which is essentially never true in
+  # compose - point it at the gateway's real address (e.g.
+  # host.docker.internal on Docker Desktop if the gateway runs on the host,
+  # or a service name if it's another container on this network, e.g. an
+  # IBeam service you add yourself).
+  #   docker compose --profile providers up -d ibkr-feed
+  ibkr-feed:
+    build: *feed-build
+    profiles: ["providers"]
+    command: ["-m", "providers.runner", "--provider", "ibkr", "--symbols", "${{IBKR_SYMBOLS:-AAPL,MSFT,GOOGL,AMZN,TSLA}}"]
+    environment:
+      SHARD_COUNT: "{n}"
+      TP_HOST_PATTERN: "tp-{{shard}}"
+      TP_PORT: "{TP}"
+      IBKR_GATEWAY_BASE_URL: "${{IBKR_GATEWAY_BASE_URL:-https://localhost:5000/v1/api}}"
+      IBKR_GATEWAY_VERIFY_SSL: "${{IBKR_GATEWAY_VERIFY_SSL:-false}}"
       PROVIDER_SYMBOLS_FILE: "${{PROVIDER_SYMBOLS_FILE:-}}"
     volumes:
       - ./data-plane/feeds/symbols:/symbols:ro
@@ -360,6 +423,36 @@ def _feeds_service(n: int) -> str:
       - ./data-plane/feeds/symbols:/symbols:ro
     depends_on: [{", ".join(f"tp-{s.id}" for s in topology.shards(n))}]
     restart: on-failure
+
+  # C++ feed-handler engine (opt-in) - protocol/venue adapter platform
+  # (data-plane/feedhandler-cpp/), distinct from the Python provider
+  # simulators above: real binary-protocol decoders (MoldUDP64/ITCH, SBE,
+  # FIX, SoupBinTCP) plus the same WebSocket+JSON crypto-provider shape,
+  # activated/configured per FeedHandlerInstance via the admin portal
+  # (control-api's app/routers/feedhandlers.py) rather than a CLI flag.
+  # FH_MODE=sim (default) publishes synthetic NASDAQ-ITCH-shaped and
+  # Coinbase-shaped trades on a repeating interval - no real exchange/
+  # vendor connectivity involved - see that directory's own README for
+  # FH_MODE=live (a real config JSON + credentials) once you have real
+  # entitlements to point it at.
+  #   docker compose --profile providers up -d feedhandler-cpp
+  feedhandler-cpp:
+    build:
+      context: ./data-plane/feedhandler-cpp
+      dockerfile: docker/Dockerfile
+    profiles: ["providers"]
+    environment:
+      FH_MODE: "${{FEEDHANDLER_MODE:-sim}}"
+      FH_KDB_HOST: "tp-s0"
+      FH_KDB_PORT: "{TP}"
+      FH_SHARD: "s0"
+      FH_SIM_INTERVAL_SEC: "${{FEEDHANDLER_SIM_INTERVAL_SEC:-5}}"
+      FH_STATUS_PORT: "9200"
+      FH_CONFIG_JSON: "${{FEEDHANDLER_CONFIG_JSON:-}}"
+    ports:
+      - "${{FEEDHANDLER_STATUS_PORT:-9200}}:9200"
+    depends_on: [tp-s0]
+    restart: on-failure
 """
 
 
@@ -390,6 +483,13 @@ def _control_plane_services(n: int) -> str:
       PLATFORM_ADMIN_PASSWORD_HASH: "${{PLATFORM_ADMIN_PASSWORD_HASH:-}}"
       JWT_SECRET: "${{JWT_SECRET:-dev-secret-change-in-deploy}}"
       WATCHDOG_SHARED_SECRET: "${{WATCHDOG_SHARED_SECRET:-dev-watchdog-secret-change-in-deploy}}"
+      CLOUD_CREDENTIALS_ENCRYPTION_KEY: "${{CLOUD_CREDENTIALS_ENCRYPTION_KEY:-}}"
+      # Reused by app/cloud_provisioner.py to seed the kdbx-license Secret
+      # on a newly-terraform-created cluster - the same credentials this
+      # control plane's own kdb+ containers already use (see KX_ENV_ANCHOR
+      # above), not a separate value to configure twice.
+      KX_BEARER_TOKEN: "${{KX_BEARER_TOKEN:-}}"
+      KDB_LICENSE_B64: "${{KDB_LICENSE_B64:-}}"
       DATABASE_URL: "${{DATABASE_URL:-sqlite:///./data/control_plane.db}}"
       COMPOSE_PROJECT_NAME: "kdb-control-plane"
       GATEWAY_HOST: gateway
@@ -410,12 +510,55 @@ def _control_plane_services(n: int) -> str:
       RISK_GATE_FAIL_OPEN: "${{RISK_GATE_FAIL_OPEN:-false}}"
       QUERY_BUDGET_MS_PER_WINDOW: "${{QUERY_BUDGET_MS_PER_WINDOW:-0}}"
       QUERY_BUDGET_WINDOW_HOURS: "${{QUERY_BUDGET_WINDOW_HOURS:-1}}"
+      # A product licence key is mandatory for any DEPLOYMENT_ENV other than
+      # local/dev - see control-api/app/licensing.py's enforcement_active().
+      # Defaults to "local" (unenforced) so a bare `docker compose up` keeps
+      # working with zero configuration; the cloud VM deploy scripts set
+      # this to "customer" in the .env they generate.
+      DEPLOYMENT_ENV: "${{DEPLOYMENT_ENV:-local}}"
+      LICENSE_KEY: "${{LICENSE_KEY:-}}"
+      LICENSE_ENFORCE: "${{LICENSE_ENFORCE:-}}"
+      # Order routing through a real Alpaca account (app/alpaca_broker.py) -
+      # blank/off (default) leaves the bot/order ticket on the internal
+      # simulated paper fill, unchanged from before this existed. See
+      # .env.example's Alpaca block for the full explanation, especially
+      # before ever setting ALPACA_TRADING_MODE to anything but "off"/"paper".
+      ALPACA_API_KEY_ID: "${{ALPACA_API_KEY_ID:-}}"
+      ALPACA_API_SECRET_KEY: "${{ALPACA_API_SECRET_KEY:-}}"
+      ALPACA_TRADING_MODE: "${{ALPACA_TRADING_MODE:-off}}"
+      ALPACA_LIVE_TRADING_ACK: "${{ALPACA_LIVE_TRADING_ACK:-}}"
+      # Order routing through a real Interactive Brokers account
+      # (app/ibkr_broker.py) - same off-by-default pattern as Alpaca above.
+      # control-api reaches the Gateway itself (order placement), separate
+      # from the ibkr-feed container above (market data) - both point at
+      # the same gateway but are otherwise independent processes.
+      IBKR_GATEWAY_BASE_URL: "${{IBKR_GATEWAY_BASE_URL:-https://localhost:5000/v1/api}}"
+      IBKR_GATEWAY_VERIFY_SSL: "${{IBKR_GATEWAY_VERIFY_SSL:-false}}"
+      IBKR_TRADING_MODE: "${{IBKR_TRADING_MODE:-off}}"
+      IBKR_LIVE_TRADING_ACK: "${{IBKR_LIVE_TRADING_ACK:-}}"
+      # Predictive Signals page's news feed (app/news_feed.py) - reuses the
+      # SAME Finnhub key the finnhub-feed market-data provider uses (a
+      # separate call budget: Finnhub's free tier is a per-minute rate
+      # limit, not a shared quota). Alpha Vantage is optional/supplementary
+      # (real per-article sentiment scores when configured) - its free tier
+      # is heavily request-limited, so blank here just means the news feed
+      # runs on Finnhub's own keyword-based sentiment instead, not that it
+      # stops working.
+      FINNHUB_API_KEY: "${{FINNHUB_API_KEY:-}}"
+      ALPHAVANTAGE_API_KEY: "${{ALPHAVANTAGE_API_KEY:-}}"
     volumes:
       - control-api-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8000:8000"
-    depends_on: [gateway, ollama]
+    # ollama is intentionally NOT in depends_on even though NL2Q_LLM_BASE_URL
+    # points at it by default - control-api never calls it at startup (only
+    # lazily, per NL2Q request - see app/main.py's on_startup, which touches
+    # neither nl2q nor ollama), so there's no real boot-order requirement,
+    # and a hard depends_on would break `docker compose up -d` on a box
+    # that's excluded ollama's ["llm"] profile (see below) since Compose
+    # refuses to start a service depending on one that's profile-excluded.
+    depends_on: [gateway]
 
   # Open-weights model server for the query workspace's natural-language-to-q
   # box (control-api/app/nl2q.py) - the default NL2Q_LLM_* above point here.
@@ -427,9 +570,20 @@ def _control_plane_services(n: int) -> str:
   #   docker exec kdb-control-plane-ollama-1 ollama pull qwen2.5-coder:3b
   # On a beefier / GPU host, bump NL2Q_LLM_MODEL to qwen2.5-coder:7b or
   # :32b for materially better query generation (pull that tag instead).
+  #
+  # profiles: ["llm"] - opt-in like postgres/providers below, NOT because
+  # it's unwanted by default (.env.example ships COMPOSE_PROFILES=llm so a
+  # documented `cp .env.example .env` deploy still gets it automatically -
+  # same "on by default via .env, opt-out by clearing COMPOSE_PROFILES" as
+  # DEPLOYMENT_ENV) but because it costs ~2.4GB RAM held permanently
+  # (OLLAMA_KEEP_ALIVE=-1 below) that a free-tier-class cloud VM (~1GB RAM)
+  # cannot spare - the deploy/*/04_deploy_stack.sh scripts clear
+  # COMPOSE_PROFILES on a detected free-tier box (deploy/lib/free_tier.sh)
+  # specifically to exclude this.
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
+    profiles: ["llm"]
     environment:
       # Default keep_alive is 5 minutes of inactivity before Ollama unloads
       # the model - confirmed empirically to cost ~9s to reload from disk on

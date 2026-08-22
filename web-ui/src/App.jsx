@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import Nav from "./components/Nav.jsx";
+import Nav, { allPagesForRole } from "./components/Nav.jsx";
+import CommandBar from "./components/CommandBar.jsx";
 import { COPYRIGHT } from "./brand.js";
 import { roleFromToken } from "./jwt.js";
 import AuditLog from "./pages/AuditLog.jsx";
@@ -13,6 +14,8 @@ import Execution from "./pages/Execution.jsx";
 import Export from "./pages/Export.jsx";
 import Fleet from "./pages/Fleet.jsx";
 import TickHouses from "./pages/TickHouses.jsx";
+import InfraSettings from "./pages/InfraSettings.jsx";
+import FeedHandlers from "./pages/FeedHandlers.jsx";
 import Login from "./pages/Login.jsx";
 import Markets from "./pages/Markets.jsx";
 import Metrics from "./pages/Metrics.jsx";
@@ -20,11 +23,13 @@ import Migration from "./pages/Migration.jsx";
 import ModelSettings from "./pages/ModelSettings.jsx";
 import Orders from "./pages/Orders.jsx";
 import Portfolio from "./pages/Portfolio.jsx";
+import PredictiveSignals from "./pages/PredictiveSignals.jsx";
 import Query from "./pages/Query.jsx";
 import QueryAnalysis from "./pages/QueryAnalysis.jsx";
 import RecoveryWatch from "./components/RecoveryWatch.jsx";
 import Subscribers from "./pages/Subscribers.jsx";
 import Topology from "./pages/Topology.jsx";
+import Users from "./pages/Users.jsx";
 
 const PAGES = {
   overview: Overview,
@@ -35,9 +40,12 @@ const PAGES = {
   query: Query,
   "query-analysis": QueryAnalysis,
   "model-settings": ModelSettings,
+  "infra-settings": InfraSettings,
+  "feed-handlers": FeedHandlers,
   markets: Markets,
   orders: Orders,
   portfolio: Portfolio,
+  signals: PredictiveSignals,
   bot: Bot,
   execution: Execution,
   connectors: Connectors,
@@ -48,6 +56,7 @@ const PAGES = {
   export: Export,
   audit: AuditLog,
   migration: Migration,
+  users: Users,
 };
 
 // The SSO callback redirects to <ui>/#access_token=...&token_type=bearer.
@@ -95,13 +104,26 @@ export default function App() {
     return <Login onLoggedIn={() => setLoggedIn(true)} />;
   }
 
-  const isPlatformAdmin = role === "platform_admin";
-  const Page = (active === "model-settings" && !isPlatformAdmin) ? Overview : (PAGES[active] || Overview);
+  // Page-level gating mirrors Nav.jsx's own per-item `roles` tags -
+  // platform-wide settings (LLMConfig) vs. per-tenant infra/admin pages
+  // (require_admin server-side; see routers/auth.py). Direct URL/state
+  // manipulation to an ungated id still hits the backend's own role
+  // check, so this is a UX courtesy, not the enforcement boundary.
+  const platformAdminOnlyPages = ["model-settings"];
+  const tenantAdminOnlyPages = ["tickhouses", "autoscale", "fleet", "infra-settings", "feed-handlers", "users", "audit"];
+  const blocked =
+    (platformAdminOnlyPages.includes(active) && role !== "platform_admin") ||
+    (tenantAdminOnlyPages.includes(active) && role !== "tenant_admin");
+  const Page = blocked ? Overview : (PAGES[active] || Overview);
 
   return (
     <div className="app-shell">
-      <Nav active={active} onChange={navigate} onLogout={logout} isPlatformAdmin={isPlatformAdmin} />
+      <Nav active={active} onChange={navigate} onLogout={logout} role={role} />
       <div className="app-content-col">
+        <header className="app-topbar">
+          <CommandBar pages={allPagesForRole(role)} onNavigate={navigate} />
+          <Clock />
+        </header>
         <main className="app-main">
           <Page onNavigate={navigate} initial={navParams} />
         </main>
@@ -112,4 +134,18 @@ export default function App() {
       <RecoveryWatch />
     </div>
   );
+}
+
+// Just the clock, deliberately - a "● LIVE" badge here would be a claim
+// this component can't actually back up (each page owns its own
+// websocket/connection state independently - see Overview/Markets/
+// Metrics' own `connected` state - there's no single global connection
+// to report on truthfully at this level).
+function Clock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <div className="app-topbar-clock">{now.toLocaleTimeString()}</div>;
 }

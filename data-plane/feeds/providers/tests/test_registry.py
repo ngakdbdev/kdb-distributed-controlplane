@@ -25,11 +25,11 @@ class FakePublisher:
 
 def test_catalog_lists_all_providers_with_correct_tiers():
     cat = {p["name"]: p for p in catalog()}
-    assert set(cat) == {"finnhub", "twelvedata", "polygon", "coinbase", "kraken",
+    assert set(cat) == {"finnhub", "twelvedata", "polygon", "alpaca", "ibkr", "coinbase", "kraken",
                         "binance", "binance-depth", "bybit", "okx",
                         "yahoo", "alphavantage", "nyse", "lseg", "nse", "bse"}
     live = {n for n, p in cat.items() if p["live"]}
-    assert live == {"finnhub", "twelvedata", "polygon", "coinbase", "kraken",
+    assert live == {"finnhub", "twelvedata", "polygon", "alpaca", "ibkr", "coinbase", "kraken",
                     "binance", "binance-depth", "bybit", "okx", "yahoo", "alphavantage"}
     # every provider advertises what it needs
     assert all(cat[n]["requires"] for n in cat)
@@ -55,6 +55,26 @@ def test_finnhub_frame_publishes_sharded_trade_row():
     assert row[5] == "finnhub"
     assert row[6] == "s0"          # AAPL routes to shard s0 at N=2
     assert len(row) == 7
+
+
+def test_alpaca_frame_publishes_sharded_trade_row():
+    pub = FakePublisher()
+    prov = get_provider("alpaca")(["AAPL"], pub, shard_count=2, api_secret="sekret")
+    n = prov._handle_raw('[{"T":"t","S":"AAPL","p":178.1,"s":100,"t":"2026-08-11T14:30:00Z","x":"V"}]')
+
+    assert n == 1
+    assert pub.table == "trade"
+    row = pub.rows[0]
+    assert row[1] == "AAPL" and row[2] == 178.1 and row[3] == 100
+    assert row[5] == "alpaca:V"
+    assert row[6] == "s0"          # AAPL routes to shard s0 at N=2
+    assert len(row) == 7
+
+
+def test_alpaca_run_refuses_without_secret_key():
+    prov = get_provider("alpaca")(["AAPL"], FakePublisher(), shard_count=2, api_key="key-id-only")
+    with pytest.raises(ProviderError, match="secret key"):
+        prov.run()
 
 
 def test_polygon_batch_routes_each_symbol_to_its_shard():

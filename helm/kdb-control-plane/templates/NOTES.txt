@@ -14,7 +14,7 @@ No ingress configured. Port-forward to reach the UI locally:
 If this is a first install, remember to:
   1. Create the KDB-X license secret (required - pods will crash-loop without it):
        kubectl create secret generic {{ .Values.kdbx.licenseSecretName }} -n {{ .Values.global.namespace }} \
-         --from-file=q=./q --from-file=k4.lic=./k4.lic
+         --from-file=q=./q --from-file=kc.lic=./kc.lic
   2. Set real secrets instead of the chart's dev defaults:
        helm upgrade kdb-control-plane . -n {{ .Values.global.namespace }} \
          --set secrets.jwtSecret=$(openssl rand -hex 32) \

@@ -1,7 +1,7 @@
 import logging
 from urllib.parse import urlparse
 
-from sqlmodel import Session, SQLModel, create_engine, select
+from sqlmodel import Session, create_engine, select
 
 from .config import settings
 from .models import (AuditEvent, Connector, Subscriber, Tenant, TenantIdP,
@@ -52,7 +52,17 @@ engine = build_engine(settings.database_url)
 
 
 def init_db():
-    SQLModel.metadata.create_all(engine)
+    # Schema creation/evolution is Alembic's job now (see the Dockerfile's
+    # CMD, which runs `alembic upgrade head` before uvicorn starts - the
+    # same "migrate before serving" discipline the Helm chart's
+    # migrate-job.yaml already enforced for k8s deploys, now applied to the
+    # docker-compose path too). create_all() is deliberately NOT called
+    # here any more: it happily creates a NEW table for a NEW model class
+    # but never ALTERs an EXISTING one - confirmed live, more than once,
+    # as a real production incident this session (a column added to an
+    # existing table needed a manual ALTER TABLE because nothing was
+    # applying the corresponding migration). Seeding still runs here since
+    # it's data, not schema.
     with Session(engine) as session:
         _seed_platform_admin(session)
         if settings.seed_demo_tenant:

@@ -45,7 +45,7 @@ export default function Fleet() {
   }, []);
 
   return (
-    <div className="page">
+    <div className="page fleet-page">
       <h2>Fleet &amp; environments</h2>
       <p className="muted">
         Each environment is an agent running <strong>in your own</strong> AWS, Azure, GCP, or on-prem cluster

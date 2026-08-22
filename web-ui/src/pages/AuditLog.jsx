@@ -51,7 +51,7 @@ export default function AuditLog() {
   });
 
   return (
-    <div className="page">
+    <div className="page audit-page">
       <h2>Audit log</h2>
       <p className="muted">
         Every admin action and every watchdog detection/auto-heal outcome, newest first.

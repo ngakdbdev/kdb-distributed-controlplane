@@ -226,9 +226,16 @@ def _cap_result_rows(query: str, cap: int) -> str:
     limit was only ever applied client-side, after the entire table had
     already been fetched.
 
-    `N#(select ...)` is the standard q idiom - takes the first N rows of a
-    plain result, or the first N keys of a `by`-grouped one (a different but
-    still bounded, still useful meaning of "limit" for a grouped query).
+    `N sublist (select ...)` takes the first N rows of a plain result, or the
+    first N keys of a `by`-grouped one (a different but still bounded, still
+    useful meaning of "limit" for a grouped query). Deliberately `sublist`,
+    not `#` (take) - confirmed live: `#` on a table CYCLES/pads when the
+    real result has fewer rows than N (plain q list semantics: `5#1 2` is
+    `1 2 1 2 1`), so any query returning fewer rows than the limit - a bare
+    aggregate like `select count i from trade` most visibly, but really any
+    narrow/filtered select - came back with its one real row repeated out to
+    `limit` rows instead of just the one row it actually had. `sublist`
+    takes at most N and never pads short input.
     Skipped when the caller already prefixed their own take (respect that
     explicit choice, don't double-wrap) or the query isn't a plain textual
     `select` - exec/update/delete/insert/functional-form (`?[...]`) queries
@@ -237,7 +244,7 @@ def _cap_result_rows(query: str, cap: int) -> str:
     q = query.strip()
     if _ALREADY_TAKEN_RE.match(q) or not _SELECT_RE.match(q):
         return query
-    return f"{cap}#({q})"
+    return f"{cap} sublist ({q})"
 
 
 def run_query(query: str, conn, limit: int = DEFAULT_ROW_LIMIT,
