@@ -17,6 +17,13 @@ pyarrow==17.0.0
 boto3==1.35.36
 azure-storage-blob==12.23.1
 azure-identity==1.19.0
+# app/sso.py (Entra OIDC token exchange + JWKS fetch) imports this directly,
+# unconditionally, and app/main.py always loads that router - this app will
+# not start without it. Previously undeclared here and only working because
+# docker==7.1.0/kubernetes==30.1.0 happen to pull it in transitively - fragile
+# (a future bump to either dropping requests would break app startup with no
+# warning) so pinned explicitly like every other direct import in this file.
+requests==2.34.2
 pyjwt==2.9.0
 bcrypt==4.2.0
 cryptography==43.0.1

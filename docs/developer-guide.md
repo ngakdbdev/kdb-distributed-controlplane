@@ -102,7 +102,7 @@ in a throwaway container instead:
 
 ```bash
 docker run --rm -v "$(pwd)":/app -w /app python:3.12-slim \
-  sh -c "pip install -q -r requirements.txt pytest && python -m pytest tests/ -q"
+  sh -c "pip install -q -r requirements.txt pytest httpx && python -m pytest tests/ -q"
 ```
 
 **Adding an endpoint**: add it to the right router, and if it touches state
