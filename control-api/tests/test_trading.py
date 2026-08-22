@@ -117,11 +117,14 @@ def test_broker_router_refuses():
 class _FakeAlpacaClient:
     """Stands in for alpaca_broker.AlpacaClient - no network, no import of
     the real HTTP plumbing needed to test oms.AlpacaRouter's own logic."""
-    def __init__(self, filled_price=180.5, filled_qty=None, raise_on_submit=None, raise_on_wait=None):
+    def __init__(self, filled_price=180.5, filled_qty=None, raise_on_submit=None, raise_on_wait=None,
+                buying_power=1_000_000.0, raise_on_account=None):
         self.filled_price = filled_price
         self.filled_qty = filled_qty
         self.raise_on_submit = raise_on_submit
         self.raise_on_wait = raise_on_wait
+        self.buying_power = buying_power
+        self.raise_on_account = raise_on_account
         self.submitted = None
 
     def submit_order(self, **kwargs):
@@ -136,6 +139,11 @@ class _FakeAlpacaClient:
         return {"id": order_id, "status": "filled",
                 "filled_avg_price": str(self.filled_price),
                 "filled_qty": str(self.filled_qty if self.filled_qty is not None else 10)}
+
+    def account(self):
+        if self.raise_on_account:
+            raise self.raise_on_account
+        return {"buying_power": str(self.buying_power)}
 
 
 def test_alpaca_router_needs_a_symbol():
@@ -208,6 +216,53 @@ def test_alpaca_router_skips_the_check_when_no_broker_is_configured():
     client = _FakeAlpacaClient(filled_price=99.0)
     fill = oms.AlpacaRouter(client).fill("buy", 1, "market", 100, None, symbol="ZZTEST-NOBROKER")
     assert fill.price == 99.0
+
+
+# ---- pre-flight buying-power check - confirmed live: signal_engine.py's own
+# risk-budget sizing has no notion of real dollar notional (it sizes off
+# risk-per-share, qty * stop distance), so it can grow a position until a real
+# Alpaca account is fully margined, then every subsequent buy dies with a raw
+# 403 "insufficient buying power" only after already reaching Alpaca. This
+# check turns that into one clear OrderError before the broker is ever called.
+
+def test_alpaca_router_blocks_a_buy_that_exceeds_buying_power(monkeypatch):
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"is_tradable": lambda self, sym: True})())
+    client = _FakeAlpacaClient(buying_power=100.0)
+    with pytest.raises(oms.OrderError, match="insufficient Alpaca buying power"):
+        oms.AlpacaRouter(client).fill("buy", 10, "market", 50, None, symbol="MSFT")
+    assert client.submitted is None  # never reached the broker at all
+
+
+def test_alpaca_router_allows_a_buy_within_buying_power(monkeypatch):
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"is_tradable": lambda self, sym: True})())
+    client = _FakeAlpacaClient(buying_power=1000.0, filled_price=50.0)
+    fill = oms.AlpacaRouter(client).fill("buy", 10, "market", 50, None, symbol="MSFT")
+    assert fill.price == 50.0
+    assert client.submitted is not None
+
+
+def test_alpaca_router_never_checks_buying_power_for_a_sell(monkeypatch):
+    # selling reduces exposure and needs no buying power - must never be
+    # blocked by this check, same "never block a de-risking trade" rule
+    # risk_check.check_portfolio_limits already follows.
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"is_tradable": lambda self, sym: True})())
+    client = _FakeAlpacaClient(buying_power=0.0, filled_price=50.0)
+    fill = oms.AlpacaRouter(client).fill("sell", 10, "market", 50, None, symbol="MSFT")
+    assert fill.price == 50.0
+
+
+def test_alpaca_router_fails_open_if_the_buying_power_check_itself_breaks(monkeypatch):
+    # a broken/unreachable account() call shouldn't block an otherwise-fine
+    # order - the check is a safety improvement, not a new single point of
+    # failure for every buy.
+    monkeypatch.setattr(alpaca_broker, "client_from_env",
+                        lambda: type("C", (), {"is_tradable": lambda self, sym: True})())
+    client = _FakeAlpacaClient(raise_on_account=RuntimeError("account endpoint down"), filled_price=50.0)
+    fill = oms.AlpacaRouter(client).fill("buy", 10, "market", 50, None, symbol="MSFT")
+    assert fill.price == 50.0
 
 
 # ---- trading.py's router selection (_router()) - the safe-by-default seam -

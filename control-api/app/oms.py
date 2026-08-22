@@ -118,6 +118,33 @@ class AlpacaRouter:
                 f"{symbol} is not a tradable asset on your configured Alpaca account - "
                 "check the symbol format (Alpaca's own naming, e.g. BTC/USD not BTC-GBP) "
                 "or that this instrument is listed there at all")
+        # Pre-flight buying-power check, buys only - a sell never needs
+        # buying power and risk_check.py's own philosophy (never block a
+        # trade that REDUCES exposure) applies here too. Confirmed live:
+        # this platform's own risk-budget sizing (signal_engine.py) sizes
+        # off risk-per-share (qty * stop distance), which has no relation
+        # to real dollar notional - it happily grew a position to where
+        # Alpaca's real account was fully margined, then every subsequent
+        # buy (on ANY symbol, not just the one that grew large) died with a
+        # raw 403 "insufficient buying power" only after already reaching
+        # Alpaca. Checking real buying_power here, before submit_order,
+        # turns that into one clear OrderError callers already know how to
+        # log/surface, at the cost of one extra GET per buy order - no
+        # caching, since buying power can change every fill.
+        price = limit_price if limit_price is not None else ref_price
+        if side.lower() == "buy" and price is not None:
+            try:
+                account = self.client.account()
+                buying_power = float(account.get("buying_power", 0) or 0)
+            except Exception as exc:  # noqa: BLE001 - don't let a broken check block a real order
+                buying_power = None
+            if buying_power is not None:
+                estimated_cost = qty * price
+                if estimated_cost > buying_power:
+                    raise OrderError(
+                        f"insufficient Alpaca buying power for {symbol}: this order needs "
+                        f"~${estimated_cost:,.2f} but only ${buying_power:,.2f} is available - "
+                        "reduce quantity or free up buying power by trimming an existing position")
         try:
             placed = self.client.submit_order(
                 symbol=symbol, side=side, qty=qty, order_type=order_type,
